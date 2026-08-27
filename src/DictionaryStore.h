@@ -120,7 +120,7 @@ class DictionaryStore {
   static constexpr int CHECKPOINT_INTERVAL = 1024;
   static constexpr size_t MAX_CHECKPOINT_COUNT = 4096;
   static constexpr size_t MAX_SCAN_ENTRIES = 64;
-  static constexpr size_t MAX_DEFINITION_BYTES = 8192;
+  static constexpr size_t MAX_DEFINITION_BYTES = 16384;
   static constexpr size_t MIN_DEFINITION_BYTES = 1024;
   static constexpr size_t MAX_HISTORY_ITEMS = 15;
 

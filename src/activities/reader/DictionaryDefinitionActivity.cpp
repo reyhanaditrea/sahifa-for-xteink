@@ -15,7 +15,7 @@
 #include "fontIds.h"
 
 namespace {
-constexpr size_t MAX_WRAPPED_DEFINITION_LINES = 180;
+constexpr size_t MAX_WRAPPED_DEFINITION_LINES = 384;
 }
 
 void DictionaryDefinitionActivity::onEnter() {
