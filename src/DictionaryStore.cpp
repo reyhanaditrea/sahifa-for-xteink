@@ -2005,15 +2005,21 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
       return base.size() >= n + MIN_ARABIC_STEM_BYTES && base.ends_with(affix);
     };
 
-    // Attached pronouns, then the plural/dual endings. Longest first for the same
-    // reason: "-huma" must win over "-ha".
+    // Attached pronouns, the perfect-tense person markers, then the plural/dual
+    // endings. Longest first for the same reason: "-huma" must win over "-ha".
+    // The perfect markers conjugate a past-tense verb for its subject ("dhahaba"
+    // -> "dhahabtu", I went); for a sound triliteral Form I verb the bare past is
+    // already the headword, so peeling one lands on it.
     static constexpr const char* ENCLITICS[] = {
         "\xD9\x87\xD9\x85\xD8\xA7",  // -huma
         "\xD9\x83\xD9\x85\xD8\xA7",  // -kuma
+        "\xD8\xAA\xD9\x85\xD8\xA7",  // -tuma
         "\xD9\x87\xD9\x85",          // -hum
         "\xD9\x87\xD9\x86",          // -hunna
         "\xD9\x83\xD9\x85",          // -kum
         "\xD9\x83\xD9\x86",          // -kunna
+        "\xD8\xAA\xD9\x85",          // -tum
+        "\xD8\xAA\xD9\x86",          // -tunna
         "\xD9\x87\xD8\xA7",          // -ha
         "\xD9\x86\xD8\xA7",          // -na
         "\xD9\x86\xD9\x8A",          // -ni
@@ -2025,6 +2031,8 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
         "\xD9\x87",                  // -hu
         "\xD9\x83",                  // -ka
         "\xD9\x8A",                  // -i
+        "\xD8\xAA",                  // -tu / -ta / -ti
+        "\xD9\x86",                  // -na (3fp)
     };
     // Imperfect verb prefixes. The last of these is alef because normalizeArabicHamza()
     // has already folded the first-person hamza onto it.
