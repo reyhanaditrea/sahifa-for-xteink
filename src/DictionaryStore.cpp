@@ -1340,7 +1340,7 @@ bool DictionaryStore::setDefinitionTextSize(const uint8_t size) {
   return saveConfig();
 }
 
-int DictionaryStore::getDefinitionFontId(const int) const {
+int DictionaryStore::getDefinitionFontId(const int readerFontId) const {
   if (!configLoaded) {
     const_cast<DictionaryStore*>(this)->loadConfig();
   }
@@ -1351,6 +1351,14 @@ int DictionaryStore::getDefinitionFontId(const int) const {
       return UI_10_FONT_ID;
     case DEF_TEXT_LARGE:
       return UI_12_FONT_ID;
+    case DEF_TEXT_READER:
+      // Handing back the reader's own font id makes the definition match the page
+      // behind it in BOTH scripts at once. Latin text draws in the reading face
+      // directly; Arabic text resolves through ArabicFontSystem, where any font id
+      // outside the three UI tiers (SMALL/UI_10/UI_12, pinned to Tajawal) falls
+      // through to the Arabic reading font -- so the reading face is picked up
+      // without this needing to know which script the definition is in.
+      return readerFontId;
   }
 }
 
