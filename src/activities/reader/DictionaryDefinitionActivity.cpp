@@ -59,6 +59,32 @@ int DictionaryDefinitionActivity::measureDefinitionText(const char* text) const 
   return renderer.getTextAdvanceX(definitionFontId, text, EpdFontFamily::REGULAR);
 }
 
+int DictionaryDefinitionActivity::definitionLineHeight() const {
+  int pitch = renderer.getLineHeight(definitionFontId);
+
+  if (ScriptDetector::containsArabic(definition.c_str())) {
+    // Arabic is drawn from its own resolved face, not the Latin one the overlay
+    // takes its pitch from. With the Reading-font definition size those differ
+    // sharply -- Noto Naskh advances 43 where the Latin font it resolves from
+    // advances 30 -- so rows drawn at the Latin pitch collided.
+    pitch = std::max(pitch, renderer.getLineHeight(renderer.getResolvedArabicFontId(definitionFontId)));
+
+    // advanceY reserves room for the ascender and descender, and tashkeel sit
+    // outside both, so an Arabic face set solid still reads cramped. This is the
+    // whole story at the UI tiers, where the Arabic face is chosen precisely to
+    // match Latin line height (Tajawal and Inter both advance 25 at 10pt) and the
+    // max() above therefore changes nothing.
+    // ponytail: flat fraction, not a per-font tashkeel extent -- the font data
+    // carries no mark-height metric to compute one from.
+    pitch += pitch / 6;
+  }
+
+  // Definition text is body text, so it follows the reader's own line-spacing
+  // setting rather than the raw font advance. Nothing outside the book layout
+  // consulted this before.
+  return std::max(1, static_cast<int>(pitch * SETTINGS.getReaderLineCompression() + 0.5f));
+}
+
 void DictionaryDefinitionActivity::prewarmVisibleDefinitionText() const {
   auto* fcm = renderer.getFontCacheManager();
   if (!fcm) return;
@@ -82,7 +108,7 @@ void DictionaryDefinitionActivity::wrapText() {
   const Rect rect = overlayRect();
   const int padding = 10;
   const int maxWidth = std::max(80, rect.width - padding * 2);
-  const int lineHeight = std::max(1, renderer.getLineHeight(definitionFontId));
+  const int lineHeight = definitionLineHeight();
   const int headerHeight = renderer.getLineHeight(UI_10_FONT_ID) + 20;
   const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 8;
   linesPerPage = std::max(1, (rect.height - headerHeight - footerHeight - padding) / lineHeight);
@@ -337,7 +363,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - padding - pageWidth, titleY + 2, pageText.c_str());
   }
 
-  const int lineHeight = renderer.getLineHeight(definitionFontId);
+  const int lineHeight = definitionLineHeight();
   const int separatorY = titleY + renderer.getLineHeight(UI_10_FONT_ID) + 12;
   renderer.drawLine(rect.x + padding, separatorY, rect.x + rect.width - padding - 1, separatorY, true);
 
