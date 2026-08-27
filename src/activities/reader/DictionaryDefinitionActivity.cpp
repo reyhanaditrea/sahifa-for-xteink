@@ -3,6 +3,7 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <ScriptDetector.h>
 
 #include <algorithm>
 #include <cctype>
@@ -58,6 +59,32 @@ int DictionaryDefinitionActivity::measureDefinitionText(const char* text) const 
   return renderer.getTextAdvanceX(definitionFontId, text, EpdFontFamily::REGULAR);
 }
 
+int DictionaryDefinitionActivity::definitionLineHeight() const {
+  int pitch = renderer.getLineHeight(definitionFontId);
+
+  if (ScriptDetector::containsArabic(definition.c_str())) {
+    // Arabic is drawn from its own resolved face, not the Latin one the overlay
+    // takes its pitch from. With the Reading-font definition size those differ
+    // sharply -- Noto Naskh advances 43 where the Latin font it resolves from
+    // advances 30 -- so rows drawn at the Latin pitch collided.
+    pitch = std::max(pitch, renderer.getLineHeight(renderer.getResolvedArabicFontId(definitionFontId)));
+
+    // advanceY reserves room for the ascender and descender, and tashkeel sit
+    // outside both, so an Arabic face set solid still reads cramped. This is the
+    // whole story at the UI tiers, where the Arabic face is chosen precisely to
+    // match Latin line height (Tajawal and Inter both advance 25 at 10pt) and the
+    // max() above therefore changes nothing.
+    // ponytail: flat fraction, not a per-font tashkeel extent -- the font data
+    // carries no mark-height metric to compute one from.
+    pitch += pitch / 6;
+  }
+
+  // Definition text is body text, so it follows the reader's own line-spacing
+  // setting rather than the raw font advance. Nothing outside the book layout
+  // consulted this before.
+  return std::max(1, static_cast<int>(pitch * SETTINGS.getReaderLineCompression() + 0.5f));
+}
+
 void DictionaryDefinitionActivity::prewarmVisibleDefinitionText() const {
   auto* fcm = renderer.getFontCacheManager();
   if (!fcm) return;
@@ -81,7 +108,7 @@ void DictionaryDefinitionActivity::wrapText() {
   const Rect rect = overlayRect();
   const int padding = 10;
   const int maxWidth = std::max(80, rect.width - padding * 2);
-  const int lineHeight = std::max(1, renderer.getLineHeight(definitionFontId));
+  const int lineHeight = definitionLineHeight();
   const int headerHeight = renderer.getLineHeight(UI_10_FONT_ID) + 20;
   const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 8;
   linesPerPage = std::max(1, (rect.height - headerHeight - footerHeight - padding) / lineHeight);
@@ -154,6 +181,27 @@ void DictionaryDefinitionActivity::wrapText() {
     }
   };
 
+  // A definition line that mixes scripts cannot be rendered correctly: drawText
+  // routes the WHOLE string to the Arabic path as soon as it holds one Arabic
+  // codepoint, and that path draws every glyph from the Arabic face and assumes
+  // an RTL base direction for the entire line. So an English sentence quoting an
+  // Arabic word came out in the Arabic face with its runs in reverse order.
+  // Rather than teach the renderer real bidi, keep each wrapped line to a single
+  // script and let the existing per-line dispatch stay correct: an Arabic line
+  // shapes and right-aligns, a Latin line draws left-aligned in the Latin font.
+  //
+  // NEUTRAL tokens -- bare punctuation, digits, reference numbers -- carry no
+  // direction of their own and join whichever run is already open, so
+  // "ذهب, he went" breaks once rather than three times.
+  enum class TokenScript { NEUTRAL, ARABIC, LATIN };
+  auto tokenScript = [](const std::string& token) {
+    if (ScriptDetector::containsArabic(token.c_str())) return TokenScript::ARABIC;
+    for (const unsigned char c : token) {
+      if (std::isalpha(c) || c >= 0x80) return TokenScript::LATIN;
+    }
+    return TokenScript::NEUTRAL;
+  };
+
   auto wrapSourceLine = [&](std::string sourceLine) {
     if (wrapLimitReached) return;
     sourceLine = expandTabs(sourceLine);
@@ -170,6 +218,7 @@ void DictionaryDefinitionActivity::wrapText() {
 
     std::string currentLine = firstPrefix;
     bool hasContent = false;
+    TokenScript lineScript = TokenScript::NEUTRAL;
     size_t pos = firstText;
     while (pos < sourceLine.size()) {
       size_t spaces = 0;
@@ -182,11 +231,25 @@ void DictionaryDefinitionActivity::wrapText() {
       const size_t tokenStart = pos;
       while (pos < sourceLine.size() && sourceLine[pos] != ' ') ++pos;
       const std::string token = sourceLine.substr(tokenStart, pos - tokenStart);
+
+      // Script change on a line that already has directional content: break here
+      // even though the token would still fit, so neither run has to share a line
+      // with the other.
+      const TokenScript script = tokenScript(token);
+      if (hasContent && script != TokenScript::NEUTRAL && lineScript != TokenScript::NEUTRAL && script != lineScript) {
+        trimTrailingSpaces(currentLine);
+        if (!appendWrappedLine(currentLine)) return;
+        currentLine = continuationPrefix;
+        hasContent = false;
+        lineScript = TokenScript::NEUTRAL;
+      }
+
       const std::string separator = hasContent ? (spaces > 1 ? "  " : " ") : "";
       const std::string test = currentLine + separator + token;
       if (measureDefinitionText(test.c_str()) <= maxWidth) {
         currentLine = test;
         hasContent = true;
+        if (script != TokenScript::NEUTRAL) lineScript = script;
         continue;
       }
 
@@ -195,6 +258,7 @@ void DictionaryDefinitionActivity::wrapText() {
         if (!appendWrappedLine(currentLine)) return;
         currentLine = continuationPrefix;
         hasContent = false;
+        lineScript = TokenScript::NEUTRAL;
       }
 
       const std::string prefixedToken = currentLine + token;
@@ -202,8 +266,11 @@ void DictionaryDefinitionActivity::wrapText() {
         currentLine = prefixedToken;
         hasContent = true;
       } else {
+        // Every continuation line appendLongToken emits carries the same token,
+        // so the line script is unchanged by where it chose to split.
         appendLongToken(token, currentLine, currentLine, continuationPrefix, hasContent);
       }
+      if (script != TokenScript::NEUTRAL) lineScript = script;
     }
 
     trimTrailingSpaces(currentLine);
@@ -301,7 +368,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - padding - pageWidth, titleY + 2, pageText.c_str());
   }
 
-  const int lineHeight = renderer.getLineHeight(definitionFontId);
+  const int lineHeight = definitionLineHeight();
   const int separatorY = titleY + renderer.getLineHeight(UI_10_FONT_ID) + 12;
   renderer.drawLine(rect.x + padding, separatorY, rect.x + rect.width - padding - 1, separatorY, true);
 

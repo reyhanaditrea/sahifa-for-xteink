@@ -51,5 +51,9 @@ class DictionaryDefinitionActivity final : public Activity {
   void wrapText();
   void prepareDefinitionFontMetrics();
   int measureDefinitionText(const char* text) const;
+  // Row pitch for the definition body. Both the wrap pass (which divides the
+  // overlay by it) and the render pass (which steps rows by it) must use this
+  // one value or the page they agree on stops matching the page drawn.
+  int definitionLineHeight() const;
   void prewarmVisibleDefinitionText() const;
 };
