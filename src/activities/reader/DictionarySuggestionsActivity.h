@@ -9,6 +9,8 @@
 #include "../Activity.h"
 #include "util/ButtonNavigator.h"
 
+struct Rect;
+
 class DictionarySuggestionsActivity final : public Activity {
  public:
   DictionarySuggestionsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::shared_ptr<Page> page,
@@ -38,4 +40,5 @@ class DictionarySuggestionsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
 
   void lookupSelected();
+  void drawSuggestionList(const Rect& rect) const;
 };
