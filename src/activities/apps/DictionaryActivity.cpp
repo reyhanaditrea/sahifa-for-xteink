@@ -230,6 +230,8 @@ void DictionaryActivity::render(RenderLock&&) {
         return tr(STR_SMALL);
       case DictionaryStore::DEF_TEXT_LARGE:
         return tr(STR_LARGE);
+      case DictionaryStore::DEF_TEXT_READER:
+        return tr(STR_DEFINITION_READING_FONT);
       default:
         return tr(STR_SMALL);
     }

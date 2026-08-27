@@ -57,7 +57,18 @@ class DictionaryStore {
  public:
   // Public: the download store (DictionaryDownloadActivity) installs sets here.
   static constexpr const char* DICTIONARY_ROOT = "/dictionaries";
-  enum DefinitionTextSize : uint8_t { DEF_TEXT_SMALL = 0, DEF_TEXT_LARGE = 1, DEF_TEXT_SIZE_COUNT };
+  // DEF_TEXT_READER is a font *family* choice rather than a third size: it renders
+  // definitions in the book's own reading font instead of the fixed UI tiers, so an
+  // Arabic definition stops arriving in the Tajawal UI face while the page behind it
+  // is set in Noto Naskh (or whichever Arabic reading font is selected). No config
+  // version bump is needed -- the accepted range only widens, and no value written by
+  // an older build can land on it. See getDefinitionFontId().
+  enum DefinitionTextSize : uint8_t {
+    DEF_TEXT_SMALL = 0,
+    DEF_TEXT_LARGE = 1,
+    DEF_TEXT_READER = 2,
+    DEF_TEXT_SIZE_COUNT
+  };
 
   static DictionaryStore& getInstance();
 
