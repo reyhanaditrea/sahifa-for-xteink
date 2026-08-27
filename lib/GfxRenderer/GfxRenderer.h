@@ -409,7 +409,9 @@ class GfxRenderer {
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
-  void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
+  // black=false plots the icon's ink in white, for an icon sitting on a filled black
+  // field -- the Apps screen's selected tile. Same convention as drawText's flag.
+  void drawIcon(const uint8_t bitmap[], int x, int y, int size, bool black = true) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;

@@ -5,6 +5,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 
 #include "MappedInputManager.h"
@@ -17,21 +18,36 @@
 #include "activities/apps/TasbihActivity.h"
 #include "activities/games/GamesMenuActivity.h"
 #include "activities/network/BluetoothActivity.h"
-#include "components/TileCover.h"
 #include "components/UITheme.h"
+#include "components/icons/appble72.h"
+#include "components/icons/appfiles72.h"
+#include "components/icons/appgames72.h"
+#include "components/icons/appgym72.h"
+#include "components/icons/apppomodoro72.h"
+#include "components/icons/appquran72.h"
+#include "components/icons/appstopwatch72.h"
+#include "components/icons/apptasbih72.h"
 #include "fontIds.h"
 #include "util/GridNav.h"
 
 namespace {
 constexpr int BOTTOM_MARGIN = 40;  // reserved for the button hints
 constexpr int GUTTER = 12;
-// Deliberately wide: two columns, not the three a book grid gets. The tile IS the
-// label here rather than cover art, so a cell has to hold a whole app name -- at
-// three across, "The Holy Quran" truncated to "The Holy Qur...".
-constexpr int MIN_CELL_WIDTH = 200;
-// Short and wide, like a button. Nothing pictorial goes inside these, so book-cover
-// proportions would only add empty space.
-constexpr float TILE_ASPECT = 0.55f;
+// Three across now that each tile carries an icon above its name: the icon does the
+// identifying, so the label no longer has to hold the full width on its own. 160
+// yields 3 columns on the X3 (528) and 2 on the X4 (480).
+constexpr int MIN_CELL_WIDTH = 160;
+// Square: an icon stacked over a label wants equal sides, unlike the old label-only
+// tile which was short and wide because nothing pictorial went inside it.
+constexpr float TILE_ASPECT = 1.0f;
+// Four features on the Games piece stop resolving below about 72px at 1bpp -- see
+// scripts/gen_app_icons.py, which generates these at exactly this size.
+constexpr int ICON_SIZE = 72;
+constexpr int ICON_LABEL_GAP = 14;
+// Selection inverts the whole tile rather than adding an outline: on e-ink a filled
+// field is findable at a glance across a multi-column grid, where a frame reads as
+// just one more border among the unselected tiles' own.
+constexpr int TILE_BORDER = 2;
 }  // namespace
 
 const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
@@ -88,6 +104,26 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
       {AppId::MidadBle, StrId::STR_MIDAD_BLE, nullptr, nullptr},
   };
   return kEntries;
+}
+
+const uint8_t* AppsActivity::iconFor(const AppId id) {
+  // Indexed by AppId, which is a plain contiguous enum, so this stays a load rather
+  // than a nine-way branch. News holds the slot it still occupies in the enum after
+  // its tile was removed (see entries()); nullptr there means "label only" to the
+  // tile renderer, which is also what any AppId added without an icon would get.
+  static const uint8_t* const ICONS[] = {
+      AppFiles72Icon,      // Files
+      AppQuran72Icon,      // Quran
+      AppGames72Icon,      // Games
+      AppTasbih72Icon,     // Tasbih
+      nullptr,             // News -- no tile
+      AppStopwatch72Icon,  // Stopwatch
+      AppPomodoro72Icon,   // Pomodoro
+      AppGym72Icon,        // Gym
+      AppBle72Icon,        // MidadBle
+  };
+  const size_t index = static_cast<size_t>(id);
+  return index < std::size(ICONS) ? ICONS[index] : nullptr;
 }
 
 std::vector<const AppsActivity::AppEntry*> AppsActivity::visibleEntries() {
@@ -262,20 +298,45 @@ void AppsActivity::render(RenderLock&&) {
     const int cellX = gridStartX + col * (tileWidth + GUTTER);
     const int cellY = contentTop + row * rowHeight;
 
-    // Same designed name-tile the news feeds and collection tiles use, rather
-    // than eight new icons: the label IS the thing being identified here. Midad BLE
-    // no longer shows an On/Off suffix (correction 2, screen-scoped BLE): with no
+    // Icon over name, in a card -- the launcher shape, replacing the label-only
+    // name-tile this screen borrowed from the news feed and collection grids. The
+    // icon carries the identifying now, which is what let the grid go to three up.
+    // Midad BLE shows no On/Off suffix (correction 2, screen-scoped BLE): with no
     // persisted setting left, "On" would be misleading almost all the time -- BLE
     // only actually runs while the pairing screen itself is open.
-    const std::string tileLabel = I18N.get(entry.label);
-    drawTileCover(renderer, cellX, cellY, tileWidth, tileHeight, tileLabel.c_str());
-    if (idx == selectorIndex) {
-      // Matches the OPDS grid's selection frame -- a 1px outline is hard to find
-      // at a glance on e-ink across a multi-column grid.
-      renderer.drawRect(cellX - 4, cellY - 4, tileWidth + 8, tileHeight + 8, 4, true);
+    const bool selected = idx == selectorIndex;
+    if (selected) {
+      renderer.fillRect(cellX, cellY, tileWidth, tileHeight, true);
+    } else {
+      renderer.drawRect(cellX, cellY, tileWidth, tileHeight, TILE_BORDER, true);
     }
-    // No caption underneath: drawTileCover already sets the name inside the tile, so
-    // one was printed twice.
+
+    const std::string tileLabel = I18N.get(entry.label);
+    // UI_10 (10pt) where it fits, then SMALL (8pt), then clipped. Started one rung
+    // higher at UI_12 -- the ladder drawTileCover walked -- but a name set as large
+    // as a book title competes with the icon that is now doing the identifying, and
+    // read oversized on the device. The 8pt rung is still needed for a long
+    // translation ("Chronomètre") in a tile narrower than the two-up one it replaced.
+    const int maxTextWidth = tileWidth - 2 * TILE_BORDER - 12;
+    int fontId = UI_10_FONT_ID;
+    if (renderer.getTextWidth(fontId, tileLabel.c_str(), EpdFontFamily::BOLD) > maxTextWidth) {
+      fontId = SMALL_FONT_ID;
+    }
+    const std::string shown = renderer.truncatedText(fontId, tileLabel.c_str(), maxTextWidth, EpdFontFamily::BOLD);
+    const int textWidth = renderer.getTextWidth(fontId, shown.c_str(), EpdFontFamily::BOLD);
+    const int lineHeight = renderer.getLineHeight(fontId);
+
+    const uint8_t* icon = iconFor(entry.id);
+    // Centre the icon and label as one block, so a tile without an icon still has its
+    // label on the tile's centre line rather than sitting low.
+    const int blockHeight = (icon ? ICON_SIZE + ICON_LABEL_GAP : 0) + lineHeight;
+    int drawY = cellY + (tileHeight - blockHeight) / 2;
+    if (icon) {
+      renderer.drawIcon(icon, cellX + (tileWidth - ICON_SIZE) / 2, drawY, ICON_SIZE, !selected);
+      drawY += ICON_SIZE + ICON_LABEL_GAP;
+    }
+    renderer.drawText(fontId, cellX + (tileWidth - textWidth) / 2, drawY, shown.c_str(), !selected,
+                      EpdFontFamily::BOLD);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT), true);
