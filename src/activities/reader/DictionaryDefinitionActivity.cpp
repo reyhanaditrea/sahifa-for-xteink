@@ -3,6 +3,7 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <ScriptDetector.h>
 
 #include <algorithm>
 #include <cctype>
@@ -154,6 +155,27 @@ void DictionaryDefinitionActivity::wrapText() {
     }
   };
 
+  // A definition line that mixes scripts cannot be rendered correctly: drawText
+  // routes the WHOLE string to the Arabic path as soon as it holds one Arabic
+  // codepoint, and that path draws every glyph from the Arabic face and assumes
+  // an RTL base direction for the entire line. So an English sentence quoting an
+  // Arabic word came out in the Arabic face with its runs in reverse order.
+  // Rather than teach the renderer real bidi, keep each wrapped line to a single
+  // script and let the existing per-line dispatch stay correct: an Arabic line
+  // shapes and right-aligns, a Latin line draws left-aligned in the Latin font.
+  //
+  // NEUTRAL tokens -- bare punctuation, digits, reference numbers -- carry no
+  // direction of their own and join whichever run is already open, so
+  // "ذهب, he went" breaks once rather than three times.
+  enum class TokenScript { NEUTRAL, ARABIC, LATIN };
+  auto tokenScript = [](const std::string& token) {
+    if (ScriptDetector::containsArabic(token.c_str())) return TokenScript::ARABIC;
+    for (const unsigned char c : token) {
+      if (std::isalpha(c) || c >= 0x80) return TokenScript::LATIN;
+    }
+    return TokenScript::NEUTRAL;
+  };
+
   auto wrapSourceLine = [&](std::string sourceLine) {
     if (wrapLimitReached) return;
     sourceLine = expandTabs(sourceLine);
@@ -170,6 +192,7 @@ void DictionaryDefinitionActivity::wrapText() {
 
     std::string currentLine = firstPrefix;
     bool hasContent = false;
+    TokenScript lineScript = TokenScript::NEUTRAL;
     size_t pos = firstText;
     while (pos < sourceLine.size()) {
       size_t spaces = 0;
@@ -182,11 +205,25 @@ void DictionaryDefinitionActivity::wrapText() {
       const size_t tokenStart = pos;
       while (pos < sourceLine.size() && sourceLine[pos] != ' ') ++pos;
       const std::string token = sourceLine.substr(tokenStart, pos - tokenStart);
+
+      // Script change on a line that already has directional content: break here
+      // even though the token would still fit, so neither run has to share a line
+      // with the other.
+      const TokenScript script = tokenScript(token);
+      if (hasContent && script != TokenScript::NEUTRAL && lineScript != TokenScript::NEUTRAL && script != lineScript) {
+        trimTrailingSpaces(currentLine);
+        if (!appendWrappedLine(currentLine)) return;
+        currentLine = continuationPrefix;
+        hasContent = false;
+        lineScript = TokenScript::NEUTRAL;
+      }
+
       const std::string separator = hasContent ? (spaces > 1 ? "  " : " ") : "";
       const std::string test = currentLine + separator + token;
       if (measureDefinitionText(test.c_str()) <= maxWidth) {
         currentLine = test;
         hasContent = true;
+        if (script != TokenScript::NEUTRAL) lineScript = script;
         continue;
       }
 
@@ -195,6 +232,7 @@ void DictionaryDefinitionActivity::wrapText() {
         if (!appendWrappedLine(currentLine)) return;
         currentLine = continuationPrefix;
         hasContent = false;
+        lineScript = TokenScript::NEUTRAL;
       }
 
       const std::string prefixedToken = currentLine + token;
@@ -202,8 +240,11 @@ void DictionaryDefinitionActivity::wrapText() {
         currentLine = prefixedToken;
         hasContent = true;
       } else {
+        // Every continuation line appendLongToken emits carries the same token,
+        // so the line script is unchanged by where it chose to split.
         appendLongToken(token, currentLine, currentLine, continuationPrefix, hasContent);
       }
+      if (script != TokenScript::NEUTRAL) lineScript = script;
     }
 
     trimTrailingSpaces(currentLine);
