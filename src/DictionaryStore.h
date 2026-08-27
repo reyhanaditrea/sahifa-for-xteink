@@ -69,6 +69,12 @@ class DictionaryStore {
     DEF_TEXT_READER = 2,
     DEF_TEXT_SIZE_COUNT
   };
+  // Kept next to the enum because these two drift silently otherwise: an option
+  // added to the enum but missing from a caller's own label list simply cannot be
+  // picked, and the value column reports the wrong one for it -- which is exactly
+  // what happened to DEF_TEXT_READER in the reader drawer. Any list of these labels
+  // should come from here rather than be spelled out again.
+  static const char* definitionTextSizeLabel(uint8_t size);
 
   static DictionaryStore& getInstance();
 

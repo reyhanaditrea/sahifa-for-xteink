@@ -1370,6 +1370,18 @@ bool DictionaryStore::setDefinitionTextSize(const uint8_t size) {
   return saveConfig();
 }
 
+const char* DictionaryStore::definitionTextSizeLabel(const uint8_t size) {
+  switch (size) {
+    case DEF_TEXT_LARGE:
+      return tr(STR_LARGE);
+    case DEF_TEXT_READER:
+      return tr(STR_DEFINITION_READING_FONT);
+    case DEF_TEXT_SMALL:
+    default:
+      return tr(STR_SMALL);
+  }
+}
+
 int DictionaryStore::getDefinitionFontId(const int readerFontId) const {
   if (!configLoaded) {
     const_cast<DictionaryStore*>(this)->loadConfig();

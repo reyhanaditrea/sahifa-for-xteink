@@ -224,18 +224,7 @@ void DictionaryActivity::render(RenderLock&&) {
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
   const int activeIndex = DICTIONARIES.getActiveIndex();
 
-  auto textSizeLabel = []() -> const char* {
-    switch (DICTIONARIES.getDefinitionTextSize()) {
-      case DictionaryStore::DEF_TEXT_SMALL:
-        return tr(STR_SMALL);
-      case DictionaryStore::DEF_TEXT_LARGE:
-        return tr(STR_LARGE);
-      case DictionaryStore::DEF_TEXT_READER:
-        return tr(STR_DEFINITION_READING_FONT);
-      default:
-        return tr(STR_SMALL);
-    }
-  };
+  auto textSizeLabel = [] { return DictionaryStore::definitionTextSizeLabel(DICTIONARIES.getDefinitionTextSize()); };
 
   if (entries.empty()) {
     GUI.drawList(
