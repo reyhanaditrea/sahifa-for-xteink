@@ -248,6 +248,7 @@ constexpr const char* ARABIC_PROCLITICS[] = {
     "\xD9\x84\xD9\x84",          // lil = لل
     "\xD8\xA7\xD9\x84",          // al = ال
     "\xD9\x88",                  // wa = و
+    "\xD9\x81",                  // fa = ف
     "\xD8\xA8",                  // bi = ب
     "\xD9\x83",                  // ka = ك
     "\xD9\x84",                  // li = ل
@@ -1972,16 +1973,120 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
     if (bare != word) add(bare);
     if (folded != bare) add(folded);
 
-    auto addWithoutPrefix = [&add](const std::string& base, const char* prefix) {
-      const size_t n = strlen(prefix);
-      if (base.size() >= n + MIN_ARABIC_STEM_BYTES && base.starts_with(prefix)) add(base.substr(n));
+    // Every form here costs one index probe plus one .syn probe on the miss path, so
+    // the affix rules are capped rather than left to multiply. Prefixes and suffixes
+    // combine (ya- ... -un on one verb), and without a ceiling a single long word
+    // could generate dozens of probes for a lookup that is already failing.
+    constexpr size_t MAX_ARABIC_FORMS = 16;
+    auto arabicAdd = [&add, &forms, &word](std::string value) {
+      if (forms.size() >= MAX_ARABIC_FORMS) return;
+      // lookup() probes the query itself, through both the index and the .syn file,
+      // before it touches this list. A form identical to it is two guaranteed-dead
+      // SD reads, and the suffix pass below starts from the unmodified word, so it
+      // produces one on every Arabic lookup that carries no marks.
+      if (value == word) return;
+      add(std::move(value));
     };
-    // The whole table here, single letters included: see getSuggestionAnchor() for
-    // why those are affordable on this path and not on that one.
-    for (const char* proclitic : ARABIC_PROCLITICS) {
-      addWithoutPrefix(bare, proclitic);
-      addWithoutPrefix(folded, proclitic);
+
+    // The length test is the real work: starts_with/ends_with alone would happily
+    // strip a word down to nothing.
+    auto hasPrefix = [](const std::string& base, const char* affix, const size_t n) {
+      return base.size() >= n + MIN_ARABIC_STEM_BYTES && base.starts_with(affix);
+    };
+    auto hasSuffix = [](const std::string& base, const char* affix, const size_t n) {
+      return base.size() >= n + MIN_ARABIC_STEM_BYTES && base.ends_with(affix);
+    };
+
+    // Attached pronouns, the perfect-tense person markers, then the plural/dual
+    // endings. Longest first for the same reason: "-huma" must win over "-ha".
+    // The perfect markers conjugate a past-tense verb for its subject ("dhahaba"
+    // -> "dhahabtu", I went); for a sound triliteral Form I verb the bare past is
+    // already the headword, so peeling one lands on it.
+    static constexpr const char* ENCLITICS[] = {
+        "\xD9\x87\xD9\x85\xD8\xA7",  // -huma
+        "\xD9\x83\xD9\x85\xD8\xA7",  // -kuma
+        "\xD8\xAA\xD9\x85\xD8\xA7",  // -tuma
+        "\xD9\x87\xD9\x85",          // -hum
+        "\xD9\x87\xD9\x86",          // -hunna
+        "\xD9\x83\xD9\x85",          // -kum
+        "\xD9\x83\xD9\x86",          // -kunna
+        "\xD8\xAA\xD9\x85",          // -tum
+        "\xD8\xAA\xD9\x86",          // -tunna
+        "\xD9\x87\xD8\xA7",          // -ha
+        "\xD9\x86\xD8\xA7",          // -na
+        "\xD9\x86\xD9\x8A",          // -ni
+        "\xD9\x88\xD9\x86",          // -un (pl)
+        "\xD9\x8A\xD9\x86",          // -in (pl)
+        "\xD8\xA7\xD9\x86",          // -an (dual)
+        "\xD8\xA7\xD8\xAA",          // -at (pl)
+        "\xD9\x88\xD8\xA7",          // -u (verb)
+        "\xD9\x87",                  // -hu
+        "\xD9\x83",                  // -ka
+        "\xD9\x8A",                  // -i
+        "\xD8\xAA",                  // -tu / -ta / -ti
+        "\xD9\x86",                  // -na (3fp)
+    };
+    // Imperfect verb prefixes. The last of these is alef because normalizeArabicHamza()
+    // has already folded the first-person hamza onto it.
+    static constexpr const char* VERB_PREFIXES[] = {
+        "\xD8\xB3\xD9\x8A",  // sa-ya
+        "\xD8\xB3\xD8\xAA",  // sa-ta
+        "\xD8\xB3\xD9\x86",  // sa-na
+        "\xD9\x8A",          // ya
+        "\xD8\xAA",          // ta
+        "\xD9\x86",          // na
+        "\xD8\xA7",          // a (folded from hamza)
+    };
+
+    // Proclitics stack -- "wa-" + "bil-" + stem is ordinary Arabic -- so this strips
+    // repeatedly instead of once, and offers every intermediate as a candidate: the
+    // dictionary may hold the partly-clitic form even when it lacks the bare stem.
+    auto stripProclitics = [&](std::string base) {
+      for (bool changed = true; changed;) {
+        changed = false;
+        for (const char* proclitic : ARABIC_PROCLITICS) {
+          const size_t n = strlen(proclitic);
+          if (!hasPrefix(base, proclitic, n)) continue;
+          base = base.substr(n);
+          arabicAdd(base);
+          changed = true;
+          break;
+        }
+      }
+      return base;
+    };
+
+    // The stem itself, then the same stem with one attached pronoun or plural ending
+    // removed. One suffix, not repeated: two stacked enclitics do not occur.
+    auto addStemAndSuffixStrips = [&](const std::string& stem) {
+      arabicAdd(stem);
+      for (const char* enclitic : ENCLITICS) {
+        const size_t n = strlen(enclitic);
+        if (hasSuffix(stem, enclitic, n)) arabicAdd(stem.substr(0, stem.size() - n));
+      }
+    };
+
+    // Suffixes first, on the word as it stands. A proclitic strip is a guess and it
+    // is destructive: "kitabuhu" (his book) starts with the kaf that "ka-" claims, so
+    // everything derived after that strip is built on a mangled stem and the form
+    // actually wanted -- the same word minus only its pronoun -- would never be
+    // generated at all.
+    addStemAndSuffixStrips(folded);
+    const std::string stem = stripProclitics(folded);
+    if (stem != folded) addStemAndSuffixStrips(stem);
+    // A conjugated verb carries both ends at once: ya-...-un is one word, and the
+    // headword is what is left after both come off. So the suffix pass runs again
+    // over each verb-prefix-stripped stem rather than only over the bare one.
+    for (const char* verbPrefix : VERB_PREFIXES) {
+      const size_t n = strlen(verbPrefix);
+      if (hasPrefix(stem, verbPrefix, n)) addStemAndSuffixStrips(stem.substr(n));
     }
+
+    // Single-letter prefixes and suffixes are also ordinary root letters, so a good
+    // number of these forms are wrong. That is affordable HERE and nowhere else: each
+    // is one index probe that misses before the next is tried, and lookup() returns on
+    // the first hit. getSuggestionAnchor() deliberately does not reuse any of this --
+    // see it for what an over-strip costs once a fuzzy scan is anchored on it.
     return forms;
   }
 
