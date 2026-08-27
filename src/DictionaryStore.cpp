@@ -231,6 +231,36 @@ std::string normalizeArabicHamza(const std::string& s) {
   return out;
 }
 
+// Proclitics that attach to the front of an Arabic word, longest first so "wal-" is
+// taken whole rather than read as "wa-" + "al-". Shared by the two callers on purpose:
+// they take different slices of the SAME list, and one copy is what stops the slices
+// drifting apart.
+//
+// The first MULTI_LETTER_PROCLITICS entries are unambiguous -- no Arabic word opens
+// with those sequences as its root -- so they are safe anywhere. The rest are single
+// letters that are also ordinary first root letters, and are only safe where a wrong
+// strip is cheap. See getSuggestionAnchor() for where that line falls.
+constexpr const char* ARABIC_PROCLITICS[] = {
+    "\xD9\x88\xD8\xA7\xD9\x84",  // wal = وال
+    "\xD9\x81\xD8\xA7\xD9\x84",  // fal = فال
+    "\xD8\xA8\xD8\xA7\xD9\x84",  // bal = بال
+    "\xD9\x83\xD8\xA7\xD9\x84",  // kal = كال
+    "\xD9\x84\xD9\x84",          // lil = لل
+    "\xD8\xA7\xD9\x84",          // al = ال
+    "\xD9\x88",                  // wa = و
+    "\xD9\x81",                  // fa = ف
+    "\xD8\xA8",                  // bi = ب
+    "\xD9\x83",                  // ka = ك
+    "\xD9\x84",                  // li = ل
+};
+constexpr size_t MULTI_LETTER_PROCLITICS = 6;
+
+// A stripped stem has to be able to BE a word. Arabic roots are triliteral, and Arabic
+// is two bytes a letter in UTF-8, so anything below this is debris rather than a
+// candidate: "كتاب" (book) would otherwise lose its first root letter to the "ك"
+// proclitic and offer up a two-letter remainder.
+constexpr size_t MIN_ARABIC_STEM_BYTES = 6;
+
 std::string lowercaseLatinUtf8(const std::string& input) {
   std::string out;
   out.reserve(input.size());
@@ -1893,6 +1923,41 @@ std::string DictionaryStore::readDefinition(const DictionaryEntry& entry, const 
   return stripHtmlAndEntities(decoded);
 }
 
+// findSuggestions() scans the index neighbourhood around one word and scores every
+// key against it, so this single choice decides which part of the dictionary the
+// user is offered. It used to be getFallbackForms().back() -- the most heavily
+// stripped form available -- which is exactly the wrong pick, because the most
+// stripped form is also the most likely to be wrong.
+//
+// The single-letter proclitics are the problem. "ك" (like), "ب" (with), "ل" (for)
+// and "و" (and) are real prefixes, but they are also ordinary first root letters:
+// "كتاب" (book) is not "ك" + "تاب", and nothing short of a lexicon can tell the
+// two apart. As a LOOKUP candidate a wrong strip is cheap -- one index probe that
+// misses, and the next form is tried. As the suggestion ANCHOR it is not: the scan
+// lands in the wrong part of the index and every candidate offered is unrelated.
+//
+// So the anchor only uses transformations that cannot corrupt a word: dropping
+// marks, folding hamza seats, and removing the multi-letter proclitics, which are
+// unambiguous because no Arabic word begins with "ال" as root letters.
+std::string DictionaryStore::getSuggestionAnchor(const std::string& word) {
+  std::string anchor = normalizeArabicHamza(stripArabicMarks(word));
+  // The multi-letter head of the shared table only. Looped because these do stack
+  // ("و" + "بال" + stem), and one pass would leave the inner one in place.
+  for (bool stripped = true; stripped;) {
+    stripped = false;
+    for (size_t i = 0; i < MULTI_LETTER_PROCLITICS; ++i) {
+      const char* proclitic = ARABIC_PROCLITICS[i];
+      const size_t n = strlen(proclitic);
+      // Same three-letter floor as the fallback forms: never strip a word to debris.
+      if (anchor.size() < n + MIN_ARABIC_STEM_BYTES || !anchor.starts_with(proclitic)) continue;
+      anchor = anchor.substr(n);
+      stripped = true;
+      break;
+    }
+  }
+  return anchor;
+}
+
 std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry& entry,
                                                            const std::string& word) const {
   std::vector<std::string> forms;
@@ -1916,26 +1981,112 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
     if (bare != word) add(bare);
     if (folded != bare) add(folded);
 
-    auto addWithoutPrefix = [&add](const std::string& base, const char* prefix) {
-      const size_t n = strlen(prefix);
-      if (base.size() > n && base.compare(0, n, prefix) == 0) add(base.substr(n));
+    // Every form here costs one index probe plus one .syn probe on the miss path, so
+    // the affix rules are capped rather than left to multiply. Prefixes and suffixes
+    // combine (ya- ... -un on one verb), and without a ceiling a single long word
+    // could generate dozens of probes for a lookup that is already failing.
+    constexpr size_t MAX_ARABIC_FORMS = 16;
+    auto arabicAdd = [&add, &forms, &word](std::string value) {
+      if (forms.size() >= MAX_ARABIC_FORMS) return;
+      // lookup() probes the query itself, through both the index and the .syn file,
+      // before it touches this list. A form identical to it is two guaranteed-dead
+      // SD reads, and the suffix pass below starts from the unmodified word, so it
+      // produces one on every Arabic lookup that carries no marks.
+      if (value == word) return;
+      add(std::move(value));
     };
-    static constexpr const char* PROCLITICS[] = {
-        "\xD9\x88\xD8\xA7\xD9\x84",  // وال
-        "\xD9\x81\xD8\xA7\xD9\x84",  // فال
-        "\xD8\xA8\xD8\xA7\xD9\x84",  // بال
-        "\xD9\x83\xD8\xA7\xD9\x84",  // كال
-        "\xD9\x84\xD9\x84",          // لل
-        "\xD8\xA7\xD9\x84",          // ال
-        "\xD9\x88",                  // و
-        "\xD8\xA8",                  // ب
-        "\xD9\x83",                  // ك
-        "\xD9\x84",                  // ل
+
+    // The length test is the real work: starts_with/ends_with alone would happily
+    // strip a word down to nothing.
+    auto hasPrefix = [](const std::string& base, const char* affix, const size_t n) {
+      return base.size() >= n + MIN_ARABIC_STEM_BYTES && base.starts_with(affix);
     };
-    for (const char* p : PROCLITICS) {
-      addWithoutPrefix(bare, p);
-      addWithoutPrefix(folded, p);
+    auto hasSuffix = [](const std::string& base, const char* affix, const size_t n) {
+      return base.size() >= n + MIN_ARABIC_STEM_BYTES && base.ends_with(affix);
+    };
+
+    // Attached pronouns, then the plural/dual endings. Longest first for the same
+    // reason: "-huma" must win over "-ha".
+    static constexpr const char* ENCLITICS[] = {
+        "\xD9\x87\xD9\x85\xD8\xA7",  // -huma
+        "\xD9\x83\xD9\x85\xD8\xA7",  // -kuma
+        "\xD9\x87\xD9\x85",          // -hum
+        "\xD9\x87\xD9\x86",          // -hunna
+        "\xD9\x83\xD9\x85",          // -kum
+        "\xD9\x83\xD9\x86",          // -kunna
+        "\xD9\x87\xD8\xA7",          // -ha
+        "\xD9\x86\xD8\xA7",          // -na
+        "\xD9\x86\xD9\x8A",          // -ni
+        "\xD9\x88\xD9\x86",          // -un (pl)
+        "\xD9\x8A\xD9\x86",          // -in (pl)
+        "\xD8\xA7\xD9\x86",          // -an (dual)
+        "\xD8\xA7\xD8\xAA",          // -at (pl)
+        "\xD9\x88\xD8\xA7",          // -u (verb)
+        "\xD9\x87",                  // -hu
+        "\xD9\x83",                  // -ka
+        "\xD9\x8A",                  // -i
+    };
+    // Imperfect verb prefixes. The last of these is alef because normalizeArabicHamza()
+    // has already folded the first-person hamza onto it.
+    static constexpr const char* VERB_PREFIXES[] = {
+        "\xD8\xB3\xD9\x8A",  // sa-ya
+        "\xD8\xB3\xD8\xAA",  // sa-ta
+        "\xD8\xB3\xD9\x86",  // sa-na
+        "\xD9\x8A",          // ya
+        "\xD8\xAA",          // ta
+        "\xD9\x86",          // na
+        "\xD8\xA7",          // a (folded from hamza)
+    };
+
+    // Proclitics stack -- "wa-" + "bil-" + stem is ordinary Arabic -- so this strips
+    // repeatedly instead of once, and offers every intermediate as a candidate: the
+    // dictionary may hold the partly-clitic form even when it lacks the bare stem.
+    auto stripProclitics = [&](std::string base) {
+      for (bool changed = true; changed;) {
+        changed = false;
+        for (const char* proclitic : ARABIC_PROCLITICS) {
+          const size_t n = strlen(proclitic);
+          if (!hasPrefix(base, proclitic, n)) continue;
+          base = base.substr(n);
+          arabicAdd(base);
+          changed = true;
+          break;
+        }
+      }
+      return base;
+    };
+
+    // The stem itself, then the same stem with one attached pronoun or plural ending
+    // removed. One suffix, not repeated: two stacked enclitics do not occur.
+    auto addStemAndSuffixStrips = [&](const std::string& stem) {
+      arabicAdd(stem);
+      for (const char* enclitic : ENCLITICS) {
+        const size_t n = strlen(enclitic);
+        if (hasSuffix(stem, enclitic, n)) arabicAdd(stem.substr(0, stem.size() - n));
+      }
+    };
+
+    // Suffixes first, on the word as it stands. A proclitic strip is a guess and it
+    // is destructive: "kitabuhu" (his book) starts with the kaf that "ka-" claims, so
+    // everything derived after that strip is built on a mangled stem and the form
+    // actually wanted -- the same word minus only its pronoun -- would never be
+    // generated at all.
+    addStemAndSuffixStrips(folded);
+    const std::string stem = stripProclitics(folded);
+    if (stem != folded) addStemAndSuffixStrips(stem);
+    // A conjugated verb carries both ends at once: ya-...-un is one word, and the
+    // headword is what is left after both come off. So the suffix pass runs again
+    // over each verb-prefix-stripped stem rather than only over the bare one.
+    for (const char* verbPrefix : VERB_PREFIXES) {
+      const size_t n = strlen(verbPrefix);
+      if (hasPrefix(stem, verbPrefix, n)) addStemAndSuffixStrips(stem.substr(n));
     }
+
+    // Single-letter prefixes and suffixes are also ordinary root letters, so a good
+    // number of these forms are wrong. That is affordable HERE and nowhere else: each
+    // is one index probe that misses before the next is tried, and lookup() returns on
+    // the first hit. getSuggestionAnchor() deliberately does not reuse any of this --
+    // see it for what an over-strip costs once a fuzzy scan is anchored on it.
     return forms;
   }
 
@@ -2125,17 +2276,13 @@ std::vector<std::string> DictionaryStore::findSuggestions(const DictionaryEntry&
   HalFile idx;
   if (!Storage.openFileForRead("DICT", entry.idxPath, idx)) return results;
 
-  // getFallbackForms() strips diacritics/hamza variants and common proclitics
-  // (definite article ال, وال/فال/بال/كال, etc.) -- computed once here and
-  // reused below for the exact-fallback pass. Its LAST distinct form is the
-  // most heavily stripped one available (bare -> hamza-folded -> proclitic-
-  // stripped, in that order), so anchoring the neighborhood scan and scoring
-  // on it instead of the raw query keeps a word like "القدماء" (no exact hit)
-  // from landing the scan among unrelated ال*-prefixed headwords that merely
-  // sort near the raw query -- it lands near "قدماء"/"قديم" instead, the same
-  // neighborhood the exact-fallback lookups already target.
-  const std::vector<std::string> fallbackForms = getFallbackForms(entry, word);
-  const std::string& anchorWord = fallbackForms.empty() ? word : fallbackForms.back();
+  // Anchors the neighbourhood scan and the scoring below. getSuggestionAnchor()
+  // rather than the raw query so a word like the definite-article form of
+  // "ancients" lands near its bare stem instead of among unrelated al-prefixed
+  // headwords that merely sort near it -- and rather than the most-stripped
+  // fallback form, which is the one most likely to be a wrong strip. See that
+  // function for why the difference matters here and not on the lookup path.
+  const std::string anchorWord = getSuggestionAnchor(word);
 
   int lo = 0;
   int hi = static_cast<int>(entry.checkpoints.size()) - 1;
@@ -2199,8 +2346,9 @@ std::vector<std::string> DictionaryStore::findSuggestions(const DictionaryEntry&
   // only ever re-derive the same misses. For Arabic (up to ~12 fallback forms)
   // that cost 12 full index scans plus 12 .syn binary searches on every
   // not-found lookup -- roughly a second of guaranteed-useless SD I/O.
-  // fallbackForms itself is still load-bearing: anchorWord (above) is derived
-  // from it and steers the neighborhood scan below.
+  // getFallbackForms() is no longer called here at all: anchorWord now comes from
+  // getSuggestionAnchor(), which shares the normalization but stops short of the
+  // strips that can corrupt a word.
 
   for (uint32_t i = 0; i < totalToScan; ++i) {
     const std::string key = readIndexWord(idx);
