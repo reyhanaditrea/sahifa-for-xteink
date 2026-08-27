@@ -90,6 +90,33 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
   return kEntries;
 }
 
+std::vector<const AppsActivity::AppEntry*> AppsActivity::visibleEntries() {
+  const auto& all = entries();
+  std::vector<const AppEntry*> visible;
+  visible.reserve(all.size());
+  for (const auto& entry : all) {
+    // No toggle (Files, Midad BLE) means nothing to hide it by. The Quran keeps its
+    // tile while off because it is the only app that ships off by default: enabling
+    // it extracts a real EPUB to the SD card, so hiding it would leave no route to it
+    // from this screen at all -- precisely the discoverability problem this screen was
+    // added to solve. Its tile stays and pressing it is the opt-in. Every other app
+    // defaults to on, so "off" there is a deliberate choice and hiding is what was
+    // asked for.
+    if (entry.id == AppId::Quran) {
+      visible.push_back(&entry);
+      continue;
+    }
+    if (entry.getEnabled && entry.getEnabled() == 0) continue;
+    visible.push_back(&entry);
+  }
+  // An app switched off in Settings shrinks the grid under a selection made before it
+  // was, so clamp here rather than leaving each caller to remember.
+  if (selectorIndex >= static_cast<int>(visible.size())) {
+    selectorIndex = std::max(0, static_cast<int>(visible.size()) - 1);
+  }
+  return visible;
+}
+
 void AppsActivity::onEnter() {
   Activity::onEnter();
   selectorIndex = 0;
@@ -163,12 +190,13 @@ bool AppsActivity::launch(const AppEntry& entry) {
 }
 
 void AppsActivity::loop() {
-  const int count = static_cast<int>(entries().size());
+  const auto visible = visibleEntries();
+  const int count = static_cast<int>(visible.size());
   const int itemsPerPage = std::max(1, columns * rowsPerPage);
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (selectorIndex >= 0 && selectorIndex < count) {
-      if (!launch(entries()[selectorIndex])) requestUpdate();  // stayed here; repaint over the popup
+      if (!launch(*visible[selectorIndex])) requestUpdate();  // stayed here; repaint over the popup
     }
     return;
   }
@@ -218,8 +246,9 @@ void AppsActivity::render(RenderLock&&) {
   rowsPerPage = std::max(1, contentHeight / rowHeight);
 
   const int itemsPerPage = columns * rowsPerPage;
+  const auto visible = visibleEntries();
+  const int count = static_cast<int>(visible.size());
   const int pageStart = (selectorIndex / itemsPerPage) * itemsPerPage;
-  const int count = static_cast<int>(entries().size());
   const int pageCount = std::min(itemsPerPage, count - pageStart);
 
   const int totalGridWidth = columns * (tileWidth + GUTTER) - GUTTER;
@@ -227,7 +256,7 @@ void AppsActivity::render(RenderLock&&) {
 
   for (int i = 0; i < pageCount; i++) {
     const int idx = pageStart + i;
-    const auto& entry = entries()[idx];
+    const auto& entry = *visible[idx];
     const int col = i % columns;
     const int row = i / columns;
     const int cellX = gridStartX + col * (tileWidth + GUTTER);
