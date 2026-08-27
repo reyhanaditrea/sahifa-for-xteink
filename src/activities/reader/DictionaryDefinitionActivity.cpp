@@ -59,15 +59,21 @@ int DictionaryDefinitionActivity::measureDefinitionText(const char* text) const 
   return renderer.getTextAdvanceX(definitionFontId, text, EpdFontFamily::REGULAR);
 }
 
-int DictionaryDefinitionActivity::definitionLineHeight() const {
-  int pitch = renderer.getLineHeight(definitionFontId);
+int DictionaryDefinitionActivity::lineHeightFor(const std::string& line) const {
+  const int latin = renderer.getLineHeight(definitionFontId);
+  int pitch = latin;
 
-  if (ScriptDetector::containsArabic(definition.c_str())) {
+  if (line.empty()) {
+    // A blank source line is a paragraph break, not a row of text -- it only has to
+    // read as a gap. Giving it a full row of the tallest pitch on the page is what
+    // padded entries out to roughly twice the height they needed.
+    pitch = latin / 2;
+  } else if (ScriptDetector::containsArabic(line.c_str())) {
     // Arabic is drawn from its own resolved face, not the Latin one the overlay
     // takes its pitch from. With the Reading-font definition size those differ
     // sharply -- Noto Naskh advances 43 where the Latin font it resolves from
     // advances 30 -- so rows drawn at the Latin pitch collided.
-    pitch = std::max(pitch, renderer.getLineHeight(renderer.getResolvedArabicFontId(definitionFontId)));
+    pitch = std::max(latin, renderer.getLineHeight(renderer.getResolvedArabicFontId(definitionFontId)));
 
     // advanceY reserves room for the ascender and descender, and tashkeel sit
     // outside both, so an Arabic face set solid still reads cramped. This is the
@@ -85,16 +91,50 @@ int DictionaryDefinitionActivity::definitionLineHeight() const {
   return std::max(1, static_cast<int>(pitch * SETTINGS.getReaderLineCompression() + 0.5f));
 }
 
+void DictionaryDefinitionActivity::paginate(const int bodyHeight) {
+  lineHeights.clear();
+  lineHeights.reserve(wrappedLines.size());
+  for (const auto& line : wrappedLines) lineHeights.push_back(lineHeightFor(line));
+
+  // Measured once, here, over the final line list -- the truncation marker is
+  // appended before this runs, so no line can land on a page it was not counted for.
+  pageStarts.clear();
+  pageStarts.push_back(0);
+  int used = 0;
+  for (size_t i = 0; i < lineHeights.size(); ++i) {
+    // used > 0 guarantees forward progress: a single line taller than the body gets
+    // its own page rather than starting an empty one forever.
+    if (used > 0 && used + lineHeights[i] > bodyHeight) {
+      pageStarts.push_back(static_cast<int>(i));
+      used = 0;
+    }
+    used += lineHeights[i];
+  }
+  totalPages = static_cast<int>(pageStarts.size());
+}
+
+void DictionaryDefinitionActivity::pageLineRange(const int page, int& begin, int& end) const {
+  if (pageStarts.empty()) {
+    begin = end = 0;
+    return;
+  }
+  const int last = static_cast<int>(pageStarts.size()) - 1;
+  const int p = std::clamp(page, 0, last);
+  begin = pageStarts[p];
+  end = p < last ? pageStarts[p + 1] : static_cast<int>(wrappedLines.size());
+}
+
 void DictionaryDefinitionActivity::prewarmVisibleDefinitionText() const {
   auto* fcm = renderer.getFontCacheManager();
   if (!fcm) return;
 
-  const int startLine = currentPage * linesPerPage;
+  int begin = 0, end = 0;
+  pageLineRange(currentPage, begin, end);
   std::string visibleText;
   visibleText.reserve(512);
-  for (int i = 0; i < linesPerPage && startLine + i < static_cast<int>(wrappedLines.size()); ++i) {
+  for (int i = begin; i < end; ++i) {
     if (!visibleText.empty()) visibleText.push_back('\n');
-    visibleText += wrappedLines[startLine + i];
+    visibleText += wrappedLines[i];
   }
 
   if (!visibleText.empty()) {
@@ -108,10 +148,9 @@ void DictionaryDefinitionActivity::wrapText() {
   const Rect rect = overlayRect();
   const int padding = 10;
   const int maxWidth = std::max(80, rect.width - padding * 2);
-  const int lineHeight = definitionLineHeight();
   const int headerHeight = renderer.getLineHeight(UI_10_FONT_ID) + 20;
   const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 8;
-  linesPerPage = std::max(1, (rect.height - headerHeight - footerHeight - padding) / lineHeight);
+  const int bodyHeight = std::max(1, rect.height - headerHeight - footerHeight - padding);
 
   auto utf8UnitLength = [](const unsigned char c) -> size_t {
     if ((c & 0x80) == 0) return 1;
@@ -298,7 +337,7 @@ void DictionaryDefinitionActivity::wrapText() {
       wrappedLines.back() = marker;
     }
   }
-  totalPages = std::max(1, (static_cast<int>(wrappedLines.size()) + linesPerPage - 1) / linesPerPage);
+  paginate(bodyHeight);
   currentPage = std::clamp(currentPage, 0, totalPages - 1);
 }
 
@@ -368,20 +407,21 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - padding - pageWidth, titleY + 2, pageText.c_str());
   }
 
-  const int lineHeight = definitionLineHeight();
   const int separatorY = titleY + renderer.getLineHeight(UI_10_FONT_ID) + 12;
   renderer.drawLine(rect.x + padding, separatorY, rect.x + rect.width - padding - 1, separatorY, true);
 
   const int bodyY = separatorY + 10;
   const int bodyWidth = rect.width - padding * 2;
-  const int startLine = currentPage * linesPerPage;
+  int begin = 0, end = 0;
+  pageLineRange(currentPage, begin, end);
   prewarmVisibleDefinitionText();
-  for (int i = 0; i < linesPerPage && startLine + i < static_cast<int>(wrappedLines.size()); ++i) {
-    // drawTextInWidth right-aligns a line only when it contains Arabic (ar-ar
-    // dictionaries, and Lane's Lexicon's isolated Arabic quote lines); pure-Latin
-    // lines fall straight through to the normal left-aligned drawText.
-    renderer.drawTextInWidth(definitionFontId, rect.x + padding, bodyY + i * lineHeight, bodyWidth,
-                             wrappedLines[startLine + i].c_str());
+  int y = bodyY;
+  for (int i = begin; i < end; ++i) {
+    // drawTextInWidth right-aligns a line only when it contains Arabic. Every wrapped
+    // line is single-script (see wrapSourceLine's script break), so that test now
+    // decides the whole line instead of being outvoted by one word in the other script.
+    renderer.drawTextInWidth(definitionFontId, rect.x + padding, y, bodyWidth, wrappedLines[i].c_str());
+    y += lineHeights[i];
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));

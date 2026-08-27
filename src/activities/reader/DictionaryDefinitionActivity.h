@@ -43,8 +43,12 @@ class DictionaryDefinitionActivity final : public Activity {
   int marginTop = 0;
   bool renderPageBackground = true;
   std::vector<std::string> wrappedLines;
+  // Row pitch varies line to line now that a wrapped line is single-script, so a
+  // page is a range of lines rather than a fixed count: pageStarts[p] is the first
+  // line of page p, and lineHeights runs parallel to wrappedLines.
+  std::vector<int> lineHeights;
+  std::vector<int> pageStarts;
   int currentPage = 0;
-  int linesPerPage = 1;
   int totalPages = 1;
 
   Rect overlayRect() const;
@@ -54,6 +58,8 @@ class DictionaryDefinitionActivity final : public Activity {
   // Row pitch for the definition body. Both the wrap pass (which divides the
   // overlay by it) and the render pass (which steps rows by it) must use this
   // one value or the page they agree on stops matching the page drawn.
-  int definitionLineHeight() const;
+  int lineHeightFor(const std::string& line) const;
+  void paginate(int bodyHeight);
+  void pageLineRange(int page, int& begin, int& end) const;
   void prewarmVisibleDefinitionText() const;
 };
