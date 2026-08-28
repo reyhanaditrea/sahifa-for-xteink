@@ -12,6 +12,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "MidadAppSettings.h"
+#include "SilentRestart.h"
 #include "activities/apps/PrayerCoordsActivity.h"
 #include "activities/apps/PrayerPickActivity.h"
 #include "activities/settings/ClockSyncActivity.h"
@@ -126,11 +127,12 @@ void PrayerActivity::activateRow() {
   if (row == ROW_CLOCK) {
     // The shared clock screen owns the WiFi/NTP dance; the prayer app has no
     // business repeating it.
-    startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput), [this](const ActivityResult&) {
-      refresh();
-      cursor = 0;
-      requestUpdate();
-    });
+    startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput, &silentRestartToPrayer),
+                           [this](const ActivityResult&) {
+                             refresh();
+                             cursor = 0;
+                             requestUpdate();
+                           });
     return;
   }
   if (row == ROW_COUNTRY) {
