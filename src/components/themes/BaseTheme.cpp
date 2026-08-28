@@ -1241,10 +1241,42 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
   }
 
   const int optionCount = static_cast<int>(options.size());
-  const int listHeight = rowHeight * optionCount + itemSpacing * (optionCount - 1);
+  const int rowPitch = rowHeight + itemSpacing;
+
+  // Only as many rows as actually fit between the button hints and the top of
+  // the screen. Without this the dialog simply grew past both edges and the
+  // options at each end were unreachable -- a settings enum with eighteen
+  // entries (prayer calculation methods) ran off the panel on device.
+  constexpr int kScrollArrowHeight = 6;
+  constexpr int kScrollArrowGap = 4;
+  const int chromeHeight = titleLineHeight + metrics.optionPopupTitleGap + innerPadding * 2;
+  const int availableHeight = pageHeight - metrics.buttonHintsHeight - metrics.optionPopupDialogSideMargin * 2;
+  int visibleCount = optionCount;
+  if (rowPitch > 0) {
+    const int roomForRows = availableHeight - chromeHeight;
+    // Assume the arrow strips are needed, then take them back if everything
+    // fits after all: their height is what decides whether it does.
+    const int scrolledRoom = roomForRows - (kScrollArrowHeight + kScrollArrowGap) * 2;
+    const int fits = (roomForRows + itemSpacing) / rowPitch;
+    if (fits < optionCount) {
+      visibleCount = std::max(1, (scrolledRoom + itemSpacing) / rowPitch);
+    }
+    visibleCount = std::max(1, std::min(visibleCount, optionCount));
+  }
+  const bool scrolls = visibleCount < optionCount;
+
+  // The window follows the selection and is a pure function of it, so the
+  // popup needs no scroll state of its own.
+  int firstVisible = 0;
+  if (scrolls) {
+    firstVisible = std::max(0, std::min(selectedIndex - visibleCount / 2, optionCount - visibleCount));
+  }
+
+  const int listHeight = rowHeight * visibleCount + itemSpacing * (visibleCount - 1);
+  const int arrowStripHeight = scrolls ? kScrollArrowHeight + kScrollArrowGap : 0;
   const int dialogW = std::min((maxTextWidth + innerPadding * 2 + selectionHPadding * 2) * 12 / 10,
                                pageWidth - metrics.optionPopupDialogSideMargin * 2);
-  const int contentHeight = titleLineHeight + metrics.optionPopupTitleGap + listHeight;
+  const int contentHeight = titleLineHeight + metrics.optionPopupTitleGap + arrowStripHeight * 2 + listHeight;
   const int dialogH = contentHeight + innerPadding * 2;
   const int dialogX = (pageWidth - dialogW) / 2;
   const int dialogY = (pageHeight - dialogH) / 2;
@@ -1281,8 +1313,25 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
   const int itemRectW = dialogW - innerPadding * 2;
   const int selectionRadius = metrics.optionPopupSelectionRadius;
 
-  for (int i = 0; i < optionCount; i++) {
-    const int itemY = y + i * (rowHeight + itemSpacing);
+  // Scroll arrows sit inside the dialog, above and below the visible window,
+  // so "there is more" reads at a glance without a scrollbar's pixel cost.
+  const auto drawArrow = [&](const int arrowY, const bool pointingUp) {
+    for (int row = 0; row < kScrollArrowHeight; row++) {
+      const int spread = pointingUp ? row : kScrollArrowHeight - 1 - row;
+      const int lineWidth = 1 + spread * 2;
+      const int startX = dialogX + dialogW / 2 - spread;
+      renderer.drawLine(startX, arrowY + row, startX + lineWidth - 1, arrowY + row, true);
+    }
+  };
+
+  if (scrolls) {
+    if (firstVisible > 0) drawArrow(y, true);
+    y += arrowStripHeight;
+  }
+
+  for (int slot = 0; slot < visibleCount; slot++) {
+    const int i = firstVisible + slot;
+    const int itemY = y + slot * (rowHeight + itemSpacing);
     const bool selected = (i == selectedIndex);
     const char* labelText = options[i].c_str();
 
@@ -1308,5 +1357,9 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
     // Selected on light bg: text stays dark (invert=true).
     const bool invertText = selected ? metrics.optionPopupSelectionLight : true;
     renderer.drawText(optionFontId, textX, textY, labelText, invertText, optionStyle);
+  }
+
+  if (scrolls && firstVisible + visibleCount < optionCount) {
+    drawArrow(y + listHeight + kScrollArrowGap, false);
   }
 }
