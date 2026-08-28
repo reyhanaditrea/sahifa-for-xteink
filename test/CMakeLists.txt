@@ -55,6 +55,7 @@ endif()
 enable_testing()
 include(GoogleTest)
 
+add_subdirectory(prayer_pure)
 add_subdirectory(streaming_json_parser)
 add_subdirectory(release_json_parser)
 add_subdirectory(differential_rounding)

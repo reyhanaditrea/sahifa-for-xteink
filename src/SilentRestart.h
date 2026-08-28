@@ -42,6 +42,7 @@ void silentRestartToNews();  // Apps -> News (EINK_NEWS_TASKS.md)
 void silentRestartToGym();         // GymActivity (catalog/asset sync callers)
 void silentRestartToSettings();    // SettingsActivity (font download caller)
 void silentRestartToDictionary();  // DictionaryActivity (dictionary download caller)
+void silentRestartToPrayer();      // PrayerActivity (prayer times sync caller)
 
 // True when the current boot was produced by any silentRestart* call -- i.e.
 // the heap is as fresh as a reboot can make it. Used as a loop guard by

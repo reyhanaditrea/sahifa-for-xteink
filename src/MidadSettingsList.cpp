@@ -2,6 +2,8 @@
 
 #include "MidadAppSettings.h"
 #include "SettingsList.h"
+#include "prayer/PrayerMethods.h"
+#include "prayer/PrayerStore.h"
 
 void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
   // Quran toggle: SettingsActivity::toggleCurrentSetting() extracts the
@@ -106,6 +108,28 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
                              },
                              "gymWeightUnit", StrId::STR_CAT_APPS)
                              .shownWhen([] { return MIDAD_APP_SETTINGS.gymEnabled != 0; }));
+  // Prayer Times toggle, with the calculation method under it. The method is
+  // the one prayer setting not on the app's own screen (that screen is
+  // location + sync only); changing it invalidates the stored months, since
+  // Aladhan computed them for the old method.
+  appsSettings.push_back(SettingInfo::DynamicToggle(
+      StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
+      [](uint8_t val) {
+        MIDAD_APP_SETTINGS.prayerEnabled = val;
+        MIDAD_APP_SETTINGS.saveToFile();
+      },
+      "prayerEnabled", StrId::STR_CAT_APPS));
+  appsSettings.push_back(SettingInfo::DynamicEnum(
+                             StrId::STR_PRAYER_METHOD, PrayerMethods::labels(),
+                             [] { return MIDAD_APP_SETTINGS.prayerMethod; },
+                             [](uint8_t val) {
+                               if (val == MIDAD_APP_SETTINGS.prayerMethod) return;
+                               MIDAD_APP_SETTINGS.prayerMethod = val;
+                               MIDAD_APP_SETTINGS.saveToFile();
+                               PrayerStore::clearMonths();
+                             },
+                             "prayerMethod", StrId::STR_CAT_APPS)
+                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
   // Midad BLE used to also be registered here as a persisted Settings->Apps toggle
   // (see MidadAppSettings.h's own removal comment) -- removed along with the field
   // itself under BLE-R2 correction 2. Opening BluetoothActivity (Apps tile or

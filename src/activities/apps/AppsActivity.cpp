@@ -14,6 +14,7 @@
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/apps/GymActivity.h"
+#include "activities/apps/PrayerActivity.h"
 #include "activities/apps/StopwatchActivity.h"
 #include "activities/apps/TasbihActivity.h"
 #include "activities/games/GamesMenuActivity.h"
@@ -24,6 +25,7 @@
 #include "components/icons/appgames72.h"
 #include "components/icons/appgym72.h"
 #include "components/icons/apppomodoro72.h"
+#include "components/icons/appprayer72.h"
 #include "components/icons/appquran72.h"
 #include "components/icons/appstopwatch72.h"
 #include "components/icons/apptasbih72.h"
@@ -102,6 +104,11 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
       // the screen starts BLE; leaving it stops BLE. Nothing to auto-enable on first
       // tap the way a normal app's opt-in does.
       {AppId::MidadBle, StrId::STR_MIDAD_BLE, nullptr, nullptr},
+      {AppId::Prayer, StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
+       [](uint8_t v) {
+         MIDAD_APP_SETTINGS.prayerEnabled = v;
+         MIDAD_APP_SETTINGS.saveToFile();
+       }},
   };
   return kEntries;
 }
@@ -121,6 +128,7 @@ const uint8_t* AppsActivity::iconFor(const AppId id) {
       AppPomodoro72Icon,   // Pomodoro
       AppGym72Icon,        // Gym
       AppBle72Icon,        // MidadBle
+      AppPrayer72Icon,     // Prayer
   };
   const size_t index = static_cast<size_t>(id);
   return index < std::size(ICONS) ? ICONS[index] : nullptr;
@@ -220,6 +228,9 @@ bool AppsActivity::launch(const AppEntry& entry) {
       // nothing comparable to Home's retained cover buffer. Back correctly returns
       // to Apps, not Home.
       startActivityForResult(std::make_unique<BluetoothActivity>(renderer, mappedInput), [](const ActivityResult&) {});
+      return true;
+    case AppId::Prayer:
+      startActivityForResult(std::make_unique<PrayerActivity>(renderer, mappedInput), [](const ActivityResult&) {});
       return true;
   }
   return false;

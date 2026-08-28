@@ -5,6 +5,7 @@
 
 #include "CrossPointSettings.h"
 #include "MidadAppSettingsLoadPlan.h"
+#include "prayer/PrayerMethods.h"
 
 namespace {
 uint8_t clampToggle(uint8_t val, uint8_t fieldDefault) { return val < 2 ? val : fieldDefault; }
@@ -23,6 +24,14 @@ void MidadAppSettings::toJson(JsonDocument& doc) const {
   doc["gymEnabled"] = gymEnabled;
   doc["gymWeightUnit"] = gymWeightUnit;
   doc["debugLoggingEnabled"] = debugLoggingEnabled;
+  doc["prayerEnabled"] = prayerEnabled;
+  doc["prayerMethod"] = prayerMethod;
+  doc["prayerCountry"] = prayerCountryIso;
+  doc["prayerHasCity"] = prayerHasCity;
+  doc["prayerLat"] = prayerLatE2;
+  doc["prayerLng"] = prayerLngE2;
+  doc["prayerCity"] = prayerCityName;
+  doc["prayerLastSync"] = prayerLastSyncEpoch;
 }
 
 bool MidadAppSettings::fromJson(JsonVariantConst doc) {
@@ -46,6 +55,18 @@ bool MidadAppSettings::fromJson(JsonVariantConst doc) {
   const uint8_t weightUnit = doc["gymWeightUnit"] | gymWeightUnit;
   gymWeightUnit = weightUnit < GYM_WEIGHT_UNIT_COUNT ? weightUnit : gymWeightUnit;
   debugLoggingEnabled = clampToggle(doc["debugLoggingEnabled"] | debugLoggingEnabled, debugLoggingEnabled);
+
+  prayerEnabled = clampToggle(doc["prayerEnabled"] | prayerEnabled, prayerEnabled);
+  const uint8_t method = doc["prayerMethod"] | prayerMethod;
+  prayerMethod = method < PrayerMethods::count() ? method : prayerMethod;
+  strlcpy(prayerCountryIso, doc["prayerCountry"] | prayerCountryIso, sizeof(prayerCountryIso));
+  prayerHasCity = clampToggle(doc["prayerHasCity"] | prayerHasCity, prayerHasCity);
+  const int32_t lat = doc["prayerLat"] | prayerLatE2;
+  prayerLatE2 = (lat >= -9000 && lat <= 9000) ? lat : prayerLatE2;
+  const int32_t lng = doc["prayerLng"] | prayerLngE2;
+  prayerLngE2 = (lng >= -18000 && lng <= 18000) ? lng : prayerLngE2;
+  strlcpy(prayerCityName, doc["prayerCity"] | prayerCityName, sizeof(prayerCityName));
+  prayerLastSyncEpoch = doc["prayerLastSync"] | prayerLastSyncEpoch;
 
   return true;
 }

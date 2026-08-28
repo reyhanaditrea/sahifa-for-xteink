@@ -185,6 +185,19 @@ def draw_ble(d):
     line(d, 16.4, 16.2, 7.6, 7.8)
 
 
+def draw_prayer(d):
+    # Mosque: a dome on a base, one minaret to each side. Every edge is either
+    # straight or a half-circle, which is what survives a 1-bit threshold at
+    # tile size -- the crescent that first sat on the dome did not.
+    arc(d, 12, 11.4, 4.4, 180, 360)   # dome
+    line(d, 7.6, 11.4, 7.6, 19.2)     # dome sides down to the base
+    line(d, 16.4, 11.4, 16.4, 19.2)
+    line(d, 12, 4.6, 12, 6.8)         # finial
+    line(d, 4.0, 9.6, 4.0, 19.2)      # left minaret
+    line(d, 20.0, 9.6, 20.0, 19.2)    # right minaret
+    line(d, 2.8, 19.2, 21.2, 19.2)    # base
+
+
 ICONS = [
     ("AppFiles72Icon", "appfiles72", draw_files),
     ("AppQuran72Icon", "appquran72", draw_quran),
@@ -194,6 +207,7 @@ ICONS = [
     ("AppPomodoro72Icon", "apppomodoro72", draw_pomodoro),
     ("AppGym72Icon", "appgym72", draw_gym),
     ("AppBle72Icon", "appble72", draw_ble),
+    ("AppPrayer72Icon", "appprayer72", draw_prayer),
 ]
 
 
