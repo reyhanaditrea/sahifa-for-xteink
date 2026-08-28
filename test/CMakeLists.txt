@@ -40,11 +40,17 @@ target_include_directories(crosspoint_test_common INTERFACE
   ${REPO_ROOT}
   ${REPO_ROOT}/lib
 )
-target_compile_options(crosspoint_test_common INTERFACE
-  -Wall
-  -Wextra
-  -pedantic
-)
+# MSVC rejects the GCC/Clang spellings outright (D8021), so the Windows host
+# build gets the equivalent /W4 instead of no warnings at all.
+if(MSVC)
+  target_compile_options(crosspoint_test_common INTERFACE /W4)
+else()
+  target_compile_options(crosspoint_test_common INTERFACE
+    -Wall
+    -Wextra
+    -pedantic
+  )
+endif()
 
 enable_testing()
 include(GoogleTest)
@@ -67,3 +73,4 @@ add_subdirectory(token_boundary)
 add_subdirectory(ble_device_info_payload)
 add_subdirectory(x4pro_power_button_gesture)
 add_subdirectory(line_height_math)
+add_subdirectory(chess_engine)
