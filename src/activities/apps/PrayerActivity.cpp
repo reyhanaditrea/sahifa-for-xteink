@@ -167,12 +167,13 @@ bool PrayerActivity::handleArmedButtons() {
 
 void PrayerActivity::loop() {
   if (handleArmedButtons()) return;
-  // Front buttons walk the rows, matching the pickers they open. The side
-  // buttons do the same here: there are never enough rows to page.
-  buttonNavigator.onNextRelease([this] { moveCursor(1); });
-  buttonNavigator.onPreviousRelease([this] { moveCursor(-1); });
-  buttonNavigator.onScrollNextRelease([this] { moveCursor(1); });
-  buttonNavigator.onScrollPreviousRelease([this] { moveCursor(-1); });
+  // Front pair walks the rows; the side pair does the same, since there are
+  // never enough rows to page. Bound to the physical buttons rather than
+  // NavNext/ScrollNext, which resolve to the same pair as each other.
+  buttonNavigator.onRelease({MappedInputManager::Button::ScreenRight, MappedInputManager::Button::Down},
+                            [this] { moveCursor(1); });
+  buttonNavigator.onRelease({MappedInputManager::Button::ScreenLeft, MappedInputManager::Button::Up},
+                            [this] { moveCursor(-1); });
 }
 
 void PrayerActivity::render(RenderLock&&) {

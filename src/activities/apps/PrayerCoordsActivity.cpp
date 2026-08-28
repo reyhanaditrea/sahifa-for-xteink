@@ -82,11 +82,11 @@ bool PrayerCoordsActivity::handleArmedButtons() {
 void PrayerCoordsActivity::loop() {
   if (handleArmedButtons()) return;
   // Continuous, not release-only: crossing tens of degrees a press at a time
-  // would be unusable. Both pairs adjust -- there is no list here to page.
-  buttonNavigator.onNextContinuous([this] { adjust(1); });
-  buttonNavigator.onPreviousContinuous([this] { adjust(-1); });
-  buttonNavigator.onScrollPreviousContinuous([this] { adjust(1); });
-  buttonNavigator.onScrollNextContinuous([this] { adjust(-1); });
+  // would be unusable. Both physical pairs adjust -- there is no list to page.
+  buttonNavigator.onContinuous({MappedInputManager::Button::ScreenLeft, MappedInputManager::Button::Up},
+                               [this] { adjust(1); });
+  buttonNavigator.onContinuous({MappedInputManager::Button::ScreenRight, MappedInputManager::Button::Down},
+                               [this] { adjust(-1); });
 }
 
 void PrayerCoordsActivity::render(RenderLock&&) {

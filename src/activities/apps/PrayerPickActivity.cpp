@@ -94,21 +94,25 @@ void PrayerPickActivity::loop() {
   if (handleArmedButtons()) return;
 
   const int count = itemCount();
-  // Front buttons step the selection, side buttons jump a page: the division
-  // every other list on the device uses.
-  buttonNavigator.onNextRelease([this, count] {
+  // Bind the physical pairs, not NavNext/ScrollNext: those two resolve to the
+  // SAME buttons (side Down plus front Right, see MappedInputManager::
+  // mapButton), so binding one to stepping and the other to paging fired both
+  // on every press and only the page jump was visible.
+  // ScreenLeft/ScreenRight are the front pair with the orientation transform
+  // the hint labels already use; Up/Down are the side buttons, which are fixed.
+  buttonNavigator.onRelease({MappedInputManager::Button::ScreenRight}, [this, count] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, count);
     requestUpdate();
   });
-  buttonNavigator.onPreviousRelease([this, count] {
+  buttonNavigator.onRelease({MappedInputManager::Button::ScreenLeft}, [this, count] {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, count);
     requestUpdate();
   });
-  buttonNavigator.onScrollNextRelease([this, count] {
+  buttonNavigator.onRelease({MappedInputManager::Button::Down}, [this, count] {
     selectedIndex = ButtonNavigator::nextPageIndex(selectedIndex, count, itemsPerPage);
     requestUpdate();
   });
-  buttonNavigator.onScrollPreviousRelease([this, count] {
+  buttonNavigator.onRelease({MappedInputManager::Button::Up}, [this, count] {
     selectedIndex = ButtonNavigator::previousPageIndex(selectedIndex, count, itemsPerPage);
     requestUpdate();
   });
