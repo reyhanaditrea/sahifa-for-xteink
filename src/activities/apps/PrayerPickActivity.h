@@ -39,10 +39,18 @@ class PrayerPickActivity final : public Activity {
 
   int itemCount() const;
   void activate();
+  // A button counts only when this screen saw both its press and its release.
+  // Settings dispatches on the press, so without this the release of the very
+  // click that opened the picker selected whatever row happened to be
+  // highlighted and closed it again -- the stray-click bug the interval
+  // picker had.
+  bool handleArmedButtons();
 
   const uint16_t countryIndex;
   const Mode mode;
   int selectedIndex = 0;
   int itemsPerPage = 1;
+  bool confirmArmed = false;
+  bool backArmed = false;
   ButtonNavigator buttonNavigator;
 };

@@ -62,20 +62,31 @@ void PrayerCoordsActivity::adjust(const int delta) {
   requestUpdate();
 }
 
-void PrayerCoordsActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+bool PrayerCoordsActivity::handleArmedButtons() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmArmed = true;
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backArmed = true;
+  if (confirmArmed && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    confirmArmed = false;
     activeField = static_cast<Field>((activeField + 1) % FIELD_COUNT);
     requestUpdate();
-    return;
+    return true;
   }
+  if (backArmed && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    backArmed = false;
+    finish();
+    return true;
+  }
+  return false;
+}
+
+void PrayerCoordsActivity::loop() {
+  if (handleArmedButtons()) return;
   // Continuous, not release-only: crossing tens of degrees a press at a time
-  // would be unusable.
-  buttonNavigator.onScrollNextContinuous([this] { adjust(-1); });
+  // would be unusable. Both pairs adjust -- there is no list here to page.
+  buttonNavigator.onNextContinuous([this] { adjust(1); });
+  buttonNavigator.onPreviousContinuous([this] { adjust(-1); });
   buttonNavigator.onScrollPreviousContinuous([this] { adjust(1); });
+  buttonNavigator.onScrollNextContinuous([this] { adjust(-1); });
 }
 
 void PrayerCoordsActivity::render(RenderLock&&) {

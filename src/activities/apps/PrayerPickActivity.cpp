@@ -74,31 +74,41 @@ void PrayerPickActivity::activate() {
   finish();
 }
 
-void PrayerPickActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+bool PrayerPickActivity::handleArmedButtons() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmArmed = true;
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backArmed = true;
+  if (confirmArmed && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    confirmArmed = false;
     activate();
-    return;
+    return true;
   }
+  if (backArmed && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    backArmed = false;
+    finish();
+    return true;
+  }
+  return false;
+}
+
+void PrayerPickActivity::loop() {
+  if (handleArmedButtons()) return;
 
   const int count = itemCount();
-  buttonNavigator.onScrollNextRelease([this, count] {
+  // Front buttons step the selection, side buttons jump a page: the division
+  // every other list on the device uses.
+  buttonNavigator.onNextRelease([this, count] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, count);
     requestUpdate();
   });
-  buttonNavigator.onScrollPreviousRelease([this, count] {
+  buttonNavigator.onPreviousRelease([this, count] {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, count);
     requestUpdate();
   });
-  // A country list is 244 rows long: page jumps make it usable on four buttons.
-  buttonNavigator.onRelease({MappedInputManager::Button::Right}, [this, count] {
+  buttonNavigator.onScrollNextRelease([this, count] {
     selectedIndex = ButtonNavigator::nextPageIndex(selectedIndex, count, itemsPerPage);
     requestUpdate();
   });
-  buttonNavigator.onRelease({MappedInputManager::Button::Left}, [this, count] {
+  buttonNavigator.onScrollPreviousRelease([this, count] {
     selectedIndex = ButtonNavigator::previousPageIndex(selectedIndex, count, itemsPerPage);
     requestUpdate();
   });
@@ -140,7 +150,12 @@ void PrayerPickActivity::render(RenderLock&&) {
         })
                              : nullptr);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN), false);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // The side buttons page a list that runs to hundreds of rows; nothing else
+  // on screen would say so.
+  if (itemCount() > itemsPerPage) {
+    GUI.drawSideButtonHints(renderer, tr(STR_PAGE_UP), tr(STR_PAGE_DOWN));
+  }
   renderer.displayBuffer();
 }

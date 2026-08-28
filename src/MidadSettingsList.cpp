@@ -14,6 +14,38 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
         MIDAD_APP_SETTINGS.saveToFile();
       },
       "quranEnabled", StrId::STR_CAT_APPS));
+  // Prayer Times toggle, with the calculation method under it. The method is
+  // the one prayer setting not on the app's own screen, which is location
+  // only -- the times themselves are computed, so there is nothing to sync
+  // and nothing to invalidate when this changes.
+  appsSettings.push_back(SettingInfo::DynamicToggle(
+      StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
+      [](uint8_t val) {
+        MIDAD_APP_SETTINGS.prayerEnabled = val;
+        MIDAD_APP_SETTINGS.saveToFile();
+      },
+      "prayerEnabled", StrId::STR_CAT_APPS));
+  appsSettings.push_back(SettingInfo::DynamicEnum(
+                             StrId::STR_PRAYER_METHOD, PrayerMethods::labels(),
+                             [] { return MIDAD_APP_SETTINGS.prayerMethod; },
+                             [](uint8_t val) {
+                               MIDAD_APP_SETTINGS.prayerMethod = val;
+                               MIDAD_APP_SETTINGS.saveToFile();
+                             },
+                             "prayerMethod", StrId::STR_CAT_APPS)
+                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
+  // Asr sits under the method because it answers a different question: the
+  // method fixes the twilight angles, this fixes how long a shadow has to
+  // grow. Auto follows the country's prevailing school.
+  appsSettings.push_back(SettingInfo::DynamicEnum(
+                             StrId::STR_PRAYER_ASR_SCHOOL, PrayerMethods::asrSchoolLabels(),
+                             [] { return MIDAD_APP_SETTINGS.prayerAsrSchool; },
+                             [](uint8_t val) {
+                               MIDAD_APP_SETTINGS.prayerAsrSchool = val;
+                               MIDAD_APP_SETTINGS.saveToFile();
+                             },
+                             "prayerAsrSchool", StrId::STR_CAT_APPS)
+                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
   // Games toggle: pins a "Games" tile in My Books that opens a Snake/Tetris
   // picker. No extraction step needed -- unlike Quran, nothing but the
   // toggle itself is required.
@@ -107,38 +139,6 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
                              },
                              "gymWeightUnit", StrId::STR_CAT_APPS)
                              .shownWhen([] { return MIDAD_APP_SETTINGS.gymEnabled != 0; }));
-  // Prayer Times toggle, with the calculation method under it. The method is
-  // the one prayer setting not on the app's own screen, which is location
-  // only -- the times themselves are computed, so there is nothing to sync
-  // and nothing to invalidate when this changes.
-  appsSettings.push_back(SettingInfo::DynamicToggle(
-      StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
-      [](uint8_t val) {
-        MIDAD_APP_SETTINGS.prayerEnabled = val;
-        MIDAD_APP_SETTINGS.saveToFile();
-      },
-      "prayerEnabled", StrId::STR_CAT_APPS));
-  appsSettings.push_back(SettingInfo::DynamicEnum(
-                             StrId::STR_PRAYER_METHOD, PrayerMethods::labels(),
-                             [] { return MIDAD_APP_SETTINGS.prayerMethod; },
-                             [](uint8_t val) {
-                               MIDAD_APP_SETTINGS.prayerMethod = val;
-                               MIDAD_APP_SETTINGS.saveToFile();
-                             },
-                             "prayerMethod", StrId::STR_CAT_APPS)
-                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
-  // Asr sits under the method because it answers a different question: the
-  // method fixes the twilight angles, this fixes how long a shadow has to
-  // grow. Auto follows the country's prevailing school.
-  appsSettings.push_back(SettingInfo::DynamicEnum(
-                             StrId::STR_PRAYER_ASR_SCHOOL, PrayerMethods::asrSchoolLabels(),
-                             [] { return MIDAD_APP_SETTINGS.prayerAsrSchool; },
-                             [](uint8_t val) {
-                               MIDAD_APP_SETTINGS.prayerAsrSchool = val;
-                               MIDAD_APP_SETTINGS.saveToFile();
-                             },
-                             "prayerAsrSchool", StrId::STR_CAT_APPS)
-                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
   // Midad BLE used to also be registered here as a persisted Settings->Apps toggle
   // (see MidadAppSettings.h's own removal comment) -- removed along with the field
   // itself under BLE-R2 correction 2. Opening BluetoothActivity (Apps tile or

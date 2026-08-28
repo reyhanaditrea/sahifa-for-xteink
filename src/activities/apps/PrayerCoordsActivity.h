@@ -31,10 +31,15 @@ class PrayerCoordsActivity final : public Activity {
   };
 
   void adjust(int delta);
+  // See PrayerPickActivity: act only on a press and release this screen both
+  // saw, so the click that opened it cannot fall through into it.
+  bool handleArmedButtons();
 
   Field activeField = FIELD_LAT_DEGREES;
   // Working copy in hundredths of a degree, seeded from settings.
   int32_t latE2 = 0;
   int32_t lngE2 = 0;
   ButtonNavigator buttonNavigator;
+  bool confirmArmed = false;
+  bool backArmed = false;
 };

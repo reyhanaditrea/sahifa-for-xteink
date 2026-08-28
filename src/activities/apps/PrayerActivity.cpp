@@ -14,6 +14,7 @@
 #include "MidadAppSettings.h"
 #include "activities/apps/PrayerCoordsActivity.h"
 #include "activities/apps/PrayerPickActivity.h"
+#include "activities/settings/ClockSyncActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "prayer/PrayerCityTable.h"
@@ -110,8 +111,29 @@ void PrayerActivity::openCityPicker() {
       });
 }
 
+int PrayerActivity::buildRows(Row (&rows)[3]) const {
+  int count = 0;
+  if (needsClock()) rows[count++] = ROW_CLOCK;
+  rows[count++] = ROW_COUNTRY;
+  if (hasCountry()) rows[count++] = ROW_CITY;
+  return count;
+}
+
 void PrayerActivity::activateRow() {
-  if (cursor == ROW_COUNTRY || !hasCountry()) {
+  Row rows[3] = {ROW_NONE, ROW_NONE, ROW_NONE};
+  const int count = buildRows(rows);
+  const Row row = rows[cursor < count ? cursor : 0];
+  if (row == ROW_CLOCK) {
+    // The shared clock screen owns the WiFi/NTP dance; the prayer app has no
+    // business repeating it.
+    startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput), [this](const ActivityResult&) {
+      refresh();
+      cursor = 0;
+      requestUpdate();
+    });
+    return;
+  }
+  if (row == ROW_COUNTRY) {
     openCountryPicker();
     return;
   }
@@ -119,20 +141,34 @@ void PrayerActivity::activateRow() {
 }
 
 void PrayerActivity::moveCursor(const int delta) {
-  const int count = visibleRowCount();
+  Row rows[3] = {ROW_NONE, ROW_NONE, ROW_NONE};
+  const int count = buildRows(rows);
   cursor = (cursor + delta + count) % count;
   requestUpdate();
 }
 
-void PrayerActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+bool PrayerActivity::handleArmedButtons() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmArmed = true;
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backArmed = true;
+  if (confirmArmed && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    confirmArmed = false;
     activateRow();
-    return;
+    return true;
   }
+  if (backArmed && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    backArmed = false;
+    finish();
+    return true;
+  }
+  return false;
+}
+
+void PrayerActivity::loop() {
+  if (handleArmedButtons()) return;
+  // Front buttons walk the rows, matching the pickers they open. The side
+  // buttons do the same here: there are never enough rows to page.
+  buttonNavigator.onNextRelease([this] { moveCursor(1); });
+  buttonNavigator.onPreviousRelease([this] { moveCursor(-1); });
   buttonNavigator.onScrollNextRelease([this] { moveCursor(1); });
   buttonNavigator.onScrollPreviousRelease([this] { moveCursor(-1); });
 }
@@ -212,24 +248,38 @@ void PrayerActivity::render(RenderLock&&) {
     const int index = PrayerCityTable::findCountry(MIDAD_APP_SETTINGS.prayerCountryIso);
     countryValue = PrayerCityTable::country(static_cast<uint16_t>(std::max(0, index))).name;
   }
-  drawRow(y, tr(STR_PRAYER_COUNTRY), countryValue, cursor == ROW_COUNTRY, false);
-  y += rowHeight;
 
-  if (hasCountry()) {
-    char coords[28];
-    const char* cityValue = tr(STR_PRAYER_SELECT_CITY);
-    if (MIDAD_APP_SETTINGS.prayerHasCity != 0) {
-      if (isCustomLocation()) {
-        char lat[14], lng[14];
-        PrayerPure::formatCoordinate(lat, sizeof(lat), MIDAD_APP_SETTINGS.prayerLatE2, true);
-        PrayerPure::formatCoordinate(lng, sizeof(lng), MIDAD_APP_SETTINGS.prayerLngE2, false);
-        snprintf(coords, sizeof(coords), "%s, %s", lat, lng);
-        cityValue = coords;
-      } else {
-        cityValue = MIDAD_APP_SETTINGS.prayerCityName;
-      }
+  char coords[28];
+  const char* cityValue = tr(STR_PRAYER_SELECT_CITY);
+  if (MIDAD_APP_SETTINGS.prayerHasCity != 0) {
+    if (isCustomLocation()) {
+      char lat[14], lng[14];
+      PrayerPure::formatCoordinate(lat, sizeof(lat), MIDAD_APP_SETTINGS.prayerLatE2, true);
+      PrayerPure::formatCoordinate(lng, sizeof(lng), MIDAD_APP_SETTINGS.prayerLngE2, false);
+      snprintf(coords, sizeof(coords), "%s, %s", lat, lng);
+      cityValue = coords;
+    } else {
+      cityValue = MIDAD_APP_SETTINGS.prayerCityName;
     }
-    drawRow(y, tr(STR_PRAYER_CITY), cityValue, cursor == ROW_CITY, false);
+  }
+
+  Row rows[3] = {ROW_NONE, ROW_NONE, ROW_NONE};
+  const int rowCount = buildRows(rows);
+  for (int i = 0; i < rowCount; ++i) {
+    const bool selected = i == cursor;
+    switch (rows[i]) {
+      case ROW_CLOCK:
+        drawRow(y, tr(STR_PRAYER_SET_CLOCK), tr(STR_NOT_SET), selected, false);
+        break;
+      case ROW_COUNTRY:
+        drawRow(y, tr(STR_PRAYER_COUNTRY), countryValue, selected, false);
+        break;
+      case ROW_CITY:
+      default:
+        drawRow(y, tr(STR_PRAYER_CITY), cityValue, selected, false);
+        break;
+    }
+    y += rowHeight;
   }
 
   // Footer: what to do next while the location is incomplete, otherwise what
@@ -237,12 +287,12 @@ void PrayerActivity::render(RenderLock&&) {
   // and a user comparing against a mosque schedule needs to see which one.
   const char* infoLeft = tr(STR_PRAYER_CALCULATED);
   const char* infoRight = "";
-  if (!hasCountry()) {
+  if (needsClock()) {
+    infoLeft = tr(STR_PRAYER_CLOCK_INVALID);
+  } else if (!hasCountry()) {
     infoLeft = tr(STR_PRAYER_HINT_COUNTRY);
   } else if (MIDAD_APP_SETTINGS.prayerHasCity == 0) {
     infoLeft = tr(STR_PRAYER_HINT_CITY);
-  } else if (todayOrdinal == 0) {
-    infoLeft = tr(STR_PRAYER_CLOCK_INVALID);
   } else {
     infoLeft = hasTimes && !times.exact ? tr(STR_PRAYER_APPROXIMATE) : tr(STR_PRAYER_CALCULATED);
     infoRight = I18N.get(PrayerMethods::currentLabel());
@@ -255,7 +305,7 @@ void PrayerActivity::render(RenderLock&&) {
     renderer.drawText(font, rtl ? sidePadding : pageWidth - sidePadding - rightWidth, infoY, infoRight);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN), false);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

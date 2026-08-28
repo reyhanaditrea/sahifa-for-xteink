@@ -37,18 +37,26 @@ class PrayerActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum Row : uint8_t { ROW_COUNTRY = 0, ROW_CITY = 1, ROW_COUNT = 2 };
+  // The rows a cursor can sit on. The clock row only appears when the device
+  // has no date to compute with -- which is the normal state on hardware
+  // whose RTC does not keep one across a reboot, so it needs to be reachable
+  // from here rather than buried in Settings.
+  enum Row : uint8_t { ROW_CLOCK, ROW_COUNTRY, ROW_CITY, ROW_NONE };
 
   void refresh();
   void openCountryPicker();
   void openCityPicker();
   void activateRow();
   void moveCursor(int delta);
+  // See PrayerPickActivity: a click counts only where both halves landed.
+  bool handleArmedButtons();
+  // The rows on screen right now, in order.
+  int buildRows(Row (&rows)[3]) const;
 
   bool hasCountry() const;
   bool isCustomLocation() const;
   bool hasLocation() const;
-  int visibleRowCount() const { return hasCountry() ? ROW_COUNT : ROW_COUNT - 1; }
+  bool needsClock() const { return todayOrdinal == 0; }
 
   PrayerCalc::DayTimes times{};
   bool hasTimes = false;
@@ -62,4 +70,6 @@ class PrayerActivity final : public Activity {
 
   int cursor = 0;
   ButtonNavigator buttonNavigator;
+  bool confirmArmed = false;
+  bool backArmed = false;
 };
