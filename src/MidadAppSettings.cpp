@@ -31,7 +31,6 @@ void MidadAppSettings::toJson(JsonDocument& doc) const {
   doc["prayerLat"] = prayerLatE2;
   doc["prayerLng"] = prayerLngE2;
   doc["prayerCity"] = prayerCityName;
-  doc["prayerLastSync"] = prayerLastSyncEpoch;
 }
 
 bool MidadAppSettings::fromJson(JsonVariantConst doc) {
@@ -66,7 +65,6 @@ bool MidadAppSettings::fromJson(JsonVariantConst doc) {
   const int32_t lng = doc["prayerLng"] | prayerLngE2;
   prayerLngE2 = (lng >= -18000 && lng <= 18000) ? lng : prayerLngE2;
   strlcpy(prayerCityName, doc["prayerCity"] | prayerCityName, sizeof(prayerCityName));
-  prayerLastSyncEpoch = doc["prayerLastSync"] | prayerLastSyncEpoch;
 
   return true;
 }

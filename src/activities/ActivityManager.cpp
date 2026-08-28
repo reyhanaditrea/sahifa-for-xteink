@@ -19,7 +19,6 @@
 #include "apps/AppsActivity.h"
 #include "apps/DictionaryActivity.h"
 #include "apps/GymActivity.h"
-#include "apps/PrayerActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/FouladQrLoginActivity.h"
@@ -255,8 +254,6 @@ void ActivityManager::goToFileTransfer() {
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToGym() { replaceActivity(std::make_unique<GymActivity>(renderer, mappedInput)); }
-
-void ActivityManager::goToPrayer() { replaceActivity(std::make_unique<PrayerActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToDictionary() { replaceActivity(std::make_unique<DictionaryActivity>(renderer, mappedInput)); }
 

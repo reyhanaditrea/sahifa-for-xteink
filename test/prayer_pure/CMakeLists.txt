@@ -1,6 +1,9 @@
 add_executable(PrayerPureTest
   PrayerPureTest.cpp
+  PrayerCalcTest.cpp
   ${REPO_ROOT}/src/prayer/PrayerPure.cpp
+  ${REPO_ROOT}/src/prayer/PrayerCalc.cpp
+  ${REPO_ROOT}/src/prayer/PrayerHijri.cpp
 )
 
 target_include_directories(PrayerPureTest PRIVATE

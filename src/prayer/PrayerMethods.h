@@ -5,30 +5,36 @@
 #include <cstdint>
 #include <vector>
 
-// Aladhan calculation methods offered in Settings -> Apps -> Prayer Times.
+#include "prayer/PrayerCalc.h"
+
+// The calculation conventions offered in Settings -> Apps -> Prayer Times.
+// A "method" is nothing more than the twilight angles a given authority
+// settles on, which is why the times can be computed on the device: there is
+// no schedule to fetch, only these few numbers.
+//
 // Index 0 is "Auto (by country)", resolved from the chosen location's ISO
-// code; the rest map straight onto Aladhan's `method` query parameter.
+// code. The country also decides whether the published local schedule carries
+// an ihtiyati (safety) margin -- Indonesia's does -- see scheduleFor().
 namespace PrayerMethods {
 
-struct Method {
-  uint8_t aladhanId;  // 0xFF = auto
-  StrId label;
-};
-
 constexpr uint8_t AUTO_INDEX = 0;
-constexpr uint8_t AUTO_ID = 0xFF;
 
 uint8_t count();
-const Method& method(uint8_t index);
+StrId label(uint8_t index);
 // Labels in table order, for SettingInfo::DynamicEnum.
 const std::vector<StrId>& labels();
 
-// Aladhan method id for a country: Kemenag for Indonesia, Umm al-Qura for
-// Saudi Arabia, ISNA for North America, ... and MWL (3) for everyone else,
-// including custom coordinates (iso "").
-uint8_t autoMethodForIso(const char* iso);
+// The angles for a method index, resolving Auto through the country's ISO
+// code (Kemenag for Indonesia, Umm al-Qura for Saudi Arabia, ISNA for North
+// America, MWL for everyone else, including custom coordinates).
+PrayerCalc::Method methodFor(uint8_t index, const char* iso);
 
-// The id to send for the current settings (method index + location).
-uint8_t effectiveAladhanId();
+// The label actually in force, so the screen can name what it computed with
+// even when the setting says "Auto".
+StrId effectiveLabel(uint8_t index, const char* iso);
+
+// The method the current settings ask for.
+PrayerCalc::Method current();
+StrId currentLabel();
 
 }  // namespace PrayerMethods

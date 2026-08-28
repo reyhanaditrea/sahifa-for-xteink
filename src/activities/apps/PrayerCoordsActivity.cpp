@@ -10,7 +10,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "prayer/PrayerPure.h"
-#include "prayer/PrayerStore.h"
 
 namespace {
 constexpr int32_t LAT_LIMIT = 9000;
@@ -40,7 +39,6 @@ void PrayerCoordsActivity::onExit() {
     settings.prayerHasCity = 1;
     settings.prayerCityName[0] = '\0';  // the row renders the coordinates instead
     settings.saveToFile();
-    if (changed) PrayerStore::clearMonths();
   }
   Activity::onExit();
 }

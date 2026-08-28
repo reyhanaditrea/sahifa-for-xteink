@@ -5,30 +5,17 @@
 
 namespace PrayerPure {
 
-const char* const TIMING_KEYS[TIMING_COUNT] = {"Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"};
-
 namespace {
 bool isDigit(const char c) { return c >= '0' && c <= '9'; }
 }  // namespace
 
-void buildCalendarUrl(char* buf, const size_t len, const int year, const unsigned month, const int32_t latE2,
-                      const int32_t lngE2, const uint8_t method) {
-  const char* latSign = latE2 < 0 ? "-" : "";
-  const char* lngSign = lngE2 < 0 ? "-" : "";
-  const int32_t latAbs = latE2 < 0 ? -latE2 : latE2;
-  const int32_t lngAbs = lngE2 < 0 ? -lngE2 : lngE2;
-  snprintf(buf, len,
-           "https://api.aladhan.com/v1/calendar/%d/%u?latitude=%s%ld.%02ld&longitude=%s%ld.%02ld&method=%u&school=0",
-           year, month, latSign, static_cast<long>(latAbs / 100), static_cast<long>(latAbs % 100), lngSign,
-           static_cast<long>(lngAbs / 100), static_cast<long>(lngAbs % 100), static_cast<unsigned>(method));
-}
+int wrapMinutes(const int minutes) { return ((minutes % 1440) + 1440) % 1440; }
 
-bool copyTime(const char* in, char* out, const size_t outLen) {
-  if (in == nullptr || outLen < 6) return false;
-  if (!(isDigit(in[0]) && isDigit(in[1]) && in[2] == ':' && isDigit(in[3]) && isDigit(in[4]))) return false;
-  memcpy(out, in, 5);
-  out[5] = '\0';
-  return true;
+int localMinutesOfDay(const int64_t epochSeconds, const int32_t offsetSeconds) {
+  const int64_t local = epochSeconds + offsetSeconds;
+  // C++ truncates toward zero, so a pre-1970 epoch would give a negative
+  // remainder; wrapMinutes puts it back on the clock face either way.
+  return wrapMinutes(static_cast<int>((local % 86400) / 60));
 }
 
 int timeToMinutes(const char* hhmm) {
@@ -40,25 +27,26 @@ int timeToMinutes(const char* hhmm) {
   return h * 60 + m;
 }
 
-int nextPrayerIndex(const char times[TIMING_COUNT][6], const int nowMinutes) {
-  for (int i = 0; i < TIMING_COUNT; ++i) {
-    if (i == 1) continue;  // Sunrise marks the end of Fajr, it is not itself a prayer
-    const int t = timeToMinutes(times[i]);
-    if (t >= 0 && t > nowMinutes) return i;
+void formatClock(char* buf, const size_t len, const int minutesOfDay, const bool use12Hour) {
+  const int wrapped = wrapMinutes(minutesOfDay);
+  const int hour24 = wrapped / 60;
+  const int minute = wrapped % 60;
+  if (use12Hour) {
+    const bool pm = hour24 >= 12;
+    int hour12 = hour24 % 12;
+    if (hour12 == 0) hour12 = 12;
+    snprintf(buf, len, "%d:%02d %s", hour12, minute, pm ? "PM" : "AM");
+  } else {
+    snprintf(buf, len, "%02d:%02d", hour24, minute);
   }
-  return -1;
 }
 
-bool parseMonthFileName(const char* name, int& year, unsigned& month) {
-  // YYYY-MM.json
-  if (name == nullptr || strlen(name) != 12) return false;
-  for (int i = 0; i < 4; ++i) {
-    if (!isDigit(name[i])) return false;
+int nextPrayerIndex(const int minutes[TIMING_COUNT], const int nowMinutes) {
+  for (int i = 0; i < TIMING_COUNT; ++i) {
+    if (i == 1) continue;  // sunrise ends Fajr, it is not itself a prayer
+    if (minutes[i] > nowMinutes) return i;
   }
-  if (name[4] != '-' || !isDigit(name[5]) || !isDigit(name[6]) || strcmp(name + 7, ".json") != 0) return false;
-  year = (name[0] - '0') * 1000 + (name[1] - '0') * 100 + (name[2] - '0') * 10 + (name[3] - '0');
-  month = static_cast<unsigned>((name[5] - '0') * 10 + (name[6] - '0'));
-  return month >= 1 && month <= 12;
+  return -1;
 }
 
 void formatCoordinate(char* buf, const size_t len, const int32_t valueE2, const bool isLatitude) {

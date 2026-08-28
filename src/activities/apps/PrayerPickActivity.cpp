@@ -9,7 +9,6 @@
 #include "MidadAppSettings.h"
 #include "components/UITheme.h"
 #include "prayer/PrayerCityTable.h"
-#include "prayer/PrayerStore.h"
 
 void PrayerPickActivity::onEnter() {
   Activity::onEnter();
@@ -51,7 +50,6 @@ void PrayerPickActivity::activate() {
       settings.prayerLatE2 = 0;
       settings.prayerLngE2 = 0;
       settings.saveToFile();
-      PrayerStore::clearMonths();
     }
     finish();
     return;
@@ -65,7 +63,6 @@ void PrayerPickActivity::activate() {
   settings.prayerLngE2 = city.lngE2;
   settings.prayerHasCity = 1;
   settings.saveToFile();
-  if (changed) PrayerStore::clearMonths();
   finish();
 }
 

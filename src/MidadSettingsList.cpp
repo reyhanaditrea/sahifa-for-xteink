@@ -3,7 +3,6 @@
 #include "MidadAppSettings.h"
 #include "SettingsList.h"
 #include "prayer/PrayerMethods.h"
-#include "prayer/PrayerStore.h"
 
 void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
   // Quran toggle: SettingsActivity::toggleCurrentSetting() extracts the
@@ -109,9 +108,9 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
                              "gymWeightUnit", StrId::STR_CAT_APPS)
                              .shownWhen([] { return MIDAD_APP_SETTINGS.gymEnabled != 0; }));
   // Prayer Times toggle, with the calculation method under it. The method is
-  // the one prayer setting not on the app's own screen (that screen is
-  // location + sync only); changing it invalidates the stored months, since
-  // Aladhan computed them for the old method.
+  // the one prayer setting not on the app's own screen, which is location
+  // only -- the times themselves are computed, so there is nothing to sync
+  // and nothing to invalidate when this changes.
   appsSettings.push_back(SettingInfo::DynamicToggle(
       StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
       [](uint8_t val) {
@@ -123,10 +122,8 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
                              StrId::STR_PRAYER_METHOD, PrayerMethods::labels(),
                              [] { return MIDAD_APP_SETTINGS.prayerMethod; },
                              [](uint8_t val) {
-                               if (val == MIDAD_APP_SETTINGS.prayerMethod) return;
                                MIDAD_APP_SETTINGS.prayerMethod = val;
                                MIDAD_APP_SETTINGS.saveToFile();
-                               PrayerStore::clearMonths();
                              },
                              "prayerMethod", StrId::STR_CAT_APPS)
                              .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));

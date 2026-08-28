@@ -229,8 +229,7 @@ constexpr uint32_t SILENT_REBOOT_TARGET_GYM = 6;
 constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 7;
 constexpr uint32_t SILENT_REBOOT_TARGET_DICTIONARY = 8;
 constexpr uint32_t SILENT_REBOOT_TARGET_NEWS = 9;
-constexpr uint32_t SILENT_REBOOT_TARGET_PRAYER = 10;
-constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_PRAYER;
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_NEWS;
 // Must always name the highest target above. The boot-time range check below uses it
 // to reject uninitialised RTC memory on a cold boot, and a target outside the range
 // is silently treated as 0 -- which is HOME. Adding a target without moving this
@@ -361,16 +360,6 @@ void silentRestartToGym() {
   silentRebootTarget = SILENT_REBOOT_TARGET_GYM;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=gym)");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  delay(50);
-  ESP.restart();
-}
-
-void silentRestartToPrayer() {
-  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
-  silentRebootTarget = SILENT_REBOOT_TARGET_PRAYER;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
-  LOG_DBG("MAIN", "Silent restart (target=prayer)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
@@ -911,10 +900,6 @@ void setup() {
     // Return-to-caller: Gym catalog/asset sync reboots here instead of Home
     // so the user lands back in the Gym app they were actually using.
     activityManager.goToGym();
-  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_PRAYER) {
-    // Return-to-caller: the prayer times sync reboots here instead of Home, so
-    // the user lands back on today's timings it just fetched.
-    activityManager.goToPrayer();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
     // Return-to-caller: the font download store reboots here instead of Home.
     activityManager.goToSettings();

@@ -6,58 +6,48 @@
 
 namespace {
 
-TEST(PrayerPureUrl, FormatsFixedPointCoordinates) {
-  char url[192];
-  // Jakarta: negative latitude, positive longitude, Kemenag method.
-  PrayerPure::buildCalendarUrl(url, sizeof(url), 2026, 8, -621, 10685, 20);
-  EXPECT_STREQ(url, "https://api.aladhan.com/v1/calendar/2026/8?latitude=-6.21&longitude=106.85&method=20&school=0");
-}
-
-TEST(PrayerPureUrl, KeepsLeadingZeroInTheFraction) {
-  char url[192];
-  PrayerPure::buildCalendarUrl(url, sizeof(url), 2026, 12, 5107, -5, 3);
-  EXPECT_NE(strstr(url, "latitude=51.07"), nullptr) << url;
-  // -0.05 must keep its sign even though the whole-degree part is zero.
-  EXPECT_NE(strstr(url, "longitude=-0.05"), nullptr) << url;
-}
-
-TEST(PrayerPureTimes, CopiesOnlyTheHhMmPrefix) {
-  char out[6];
-  EXPECT_TRUE(PrayerPure::copyTime("04:31 (WIB)", out, sizeof(out)));
-  EXPECT_STREQ(out, "04:31");
-  EXPECT_TRUE(PrayerPure::copyTime("19:05", out, sizeof(out)));
-  EXPECT_STREQ(out, "19:05");
-  EXPECT_FALSE(PrayerPure::copyTime("4:31", out, sizeof(out)));
-  EXPECT_FALSE(PrayerPure::copyTime("", out, sizeof(out)));
-}
-
 TEST(PrayerPureTimes, MinutesSinceMidnight) {
   EXPECT_EQ(PrayerPure::timeToMinutes("00:00"), 0);
   EXPECT_EQ(PrayerPure::timeToMinutes("15:14"), 15 * 60 + 14);
   EXPECT_EQ(PrayerPure::timeToMinutes("24:00"), -1);
   EXPECT_EQ(PrayerPure::timeToMinutes("12:60"), -1);
+  EXPECT_EQ(PrayerPure::timeToMinutes("4:31"), -1);
   EXPECT_EQ(PrayerPure::timeToMinutes(nullptr), -1);
 }
 
+TEST(PrayerPureLocalTime, AppliesTheTimezoneOffset) {
+  // The bug this covers: the RTC reports UTC, while the timings are local
+  // wall-clock. Jakarta (UTC+7) at 23:35 local is 16:35 UTC; comparing the
+  // raw UTC minutes against a 17:54 Maghrib made it look 79 minutes away.
+  constexpr int32_t WIB = 7 * 3600;
+  EXPECT_EQ(PrayerPure::wrapMinutes(16 * 60 + 35 + WIB / 60), 23 * 60 + 35);
+  EXPECT_EQ(PrayerPure::wrapMinutes(-30), 1410);
+  EXPECT_EQ(PrayerPure::wrapMinutes(1440), 0);
+
+  // 2026-08-20T16:35:00Z is 23:35 in Jakarta.
+  EXPECT_EQ(PrayerPure::localMinutesOfDay(1787243700LL, WIB), 23 * 60 + 35);
+  // Crossing midnight westward stays on the clock face.
+  EXPECT_EQ(PrayerPure::localMinutesOfDay(1787243700LL, -8 * 3600), 8 * 60 + 35);
+}
+
 TEST(PrayerPureNext, SkipsSunriseAndReturnsTheNextPrayer) {
-  const char times[PrayerPure::TIMING_COUNT][6] = {"04:38", "05:52", "11:54", "15:14", "17:54", "19:03"};
+  const int times[PrayerPure::TIMING_COUNT] = {4 * 60 + 38,  5 * 60 + 52,  11 * 60 + 54,
+                                               15 * 60 + 14, 17 * 60 + 54, 19 * 60 + 3};
   EXPECT_EQ(PrayerPure::nextPrayerIndex(times, 4 * 60), 0);        // before Fajr
   EXPECT_EQ(PrayerPure::nextPrayerIndex(times, 5 * 60), 2);        // after Fajr: Dhuhr, not Sunrise
   EXPECT_EQ(PrayerPure::nextPrayerIndex(times, 14 * 60 + 32), 3);  // Asr
   EXPECT_EQ(PrayerPure::nextPrayerIndex(times, 19 * 60 + 3), -1);  // Isha has started: nothing left today
+  EXPECT_EQ(PrayerPure::nextPrayerIndex(times, 23 * 60 + 35), -1);
 }
 
-TEST(PrayerPureMonthFile, ParsesOnlyWellFormedNames) {
-  int year = 0;
-  unsigned month = 0;
-  EXPECT_TRUE(PrayerPure::parseMonthFileName("2026-09.json", year, month));
-  EXPECT_EQ(year, 2026);
-  EXPECT_EQ(month, 9u);
-  EXPECT_FALSE(PrayerPure::parseMonthFileName("2026-13.json", year, month));
-  EXPECT_FALSE(PrayerPure::parseMonthFileName("2026-00.json", year, month));
-  EXPECT_FALSE(PrayerPure::parseMonthFileName("dl.tmp", year, month));
-  EXPECT_FALSE(PrayerPure::parseMonthFileName("2026-9.json", year, month));
-  EXPECT_FALSE(PrayerPure::parseMonthFileName(nullptr, year, month));
+TEST(PrayerPureLocalTime, FormatsAClockFace) {
+  char buf[12];
+  PrayerPure::formatClock(buf, sizeof(buf), 14 * 60 + 2, false);
+  EXPECT_STREQ(buf, "14:02");
+  PrayerPure::formatClock(buf, sizeof(buf), 14 * 60 + 2, true);
+  EXPECT_STREQ(buf, "2:02 PM");
+  PrayerPure::formatClock(buf, sizeof(buf), 0, true);
+  EXPECT_STREQ(buf, "12:00 AM");
 }
 
 TEST(PrayerPureCoordinate, UsesHemisphereLetters) {

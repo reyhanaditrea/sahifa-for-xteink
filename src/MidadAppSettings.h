@@ -77,23 +77,22 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
   uint8_t gymWeightUnit = GYM_WEIGHT_KG;
 
   // Settings -> Apps -> Prayer Times: pins a "Prayer Times" tile that opens
-  // PrayerActivity (today's timings from the Aladhan API, synced on demand).
+  // PrayerActivity: today's timings, computed on the device from the city.
   uint8_t prayerEnabled = 1;
   // Index into PrayerMethods' table; 0 = Auto (resolved from prayerCountryIso).
   uint8_t prayerMethod = 0;
-  // Chosen location. prayerCountryIso is "" while nothing is chosen; the
+  // Chosen location -- the only thing the app needs, since the timings are
+  // computed from it (src/prayer/PrayerCalc.h) rather than fetched.
+  // prayerCountryIso is "" while nothing is chosen; the
   // custom-coordinates pseudo-country stores "XX". prayerHasCity flips once a
-  // city (or a custom coordinate pair) is set, which is what makes a sync
-  // possible. Coordinates are hundredths of a degree, matching the city table
+  // city (or a custom coordinate pair) is set, which is what the timings need.
+  // Coordinates are hundredths of a degree, matching the city table
   // (src/prayer/PrayerCityTable.h) so a picked city round-trips exactly.
   char prayerCountryIso[3] = "";
   uint8_t prayerHasCity = 0;
   int32_t prayerLatE2 = 0;
   int32_t prayerLngE2 = 0;
   char prayerCityName[32] = "";
-  // Epoch seconds of the last successful sync (0 = never); shown on the
-  // "Sync Now" row.
-  uint32_t prayerLastSyncEpoch = 0;
   static constexpr const char* PRAYER_CUSTOM_ISO = "XX";
 
   // Settings -> Apps -> Debug: gates whether ANY diagnostic entries get
