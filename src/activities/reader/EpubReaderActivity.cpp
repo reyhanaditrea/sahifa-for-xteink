@@ -568,36 +568,40 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   }
 }
 
-void EpubReaderActivity::openDictionaryTypedLookup() {
+void EpubReaderActivity::openDictionaryTypedLookup(const std::string& prefill) {
   if (!DICTIONARIES.hasActiveDictionary()) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
     requestUpdate();
     return;
   }
-  startActivityForResult(
-      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LOOKUP_TYPE_WORD), "", 63, InputType::Text),
-      [this](const ActivityResult& result) {
-        if (result.isCancelled) {
-          requestUpdate();
-          return;
-        }
-        const auto* typed = std::get_if<KeyboardResult>(&result.data);
-        if (typed == nullptr || typed->text.empty()) {
-          requestUpdate();
-          return;
-        }
-        int marginLeft = 0, marginTop = 0;
-        auto page = loadCurrentPageForLookup(marginLeft, marginTop);
-        if (!page) {
-          requestUpdate();
-          return;
-        }
-        startActivityForResult(
-            std::make_unique<DictionaryWordSelectActivity>(
-                renderer, mappedInput, std::move(page), SETTINGS.getReaderFontId(), marginLeft, marginTop, typed->text),
-            [this](const ActivityResult&) { requestUpdate(); });
-      });
+  auto keyboard = std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LOOKUP_TYPE_WORD), prefill, 63,
+                                                          InputType::Text);
+  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
+    const auto* typed = std::get_if<KeyboardResult>(&result.data);
+    if (result.isCancelled || typed == nullptr || typed->text.empty()) {
+      requestUpdate();
+      return;
+    }
+    int marginLeft = 0, marginTop = 0;
+    auto page = loadCurrentPageForLookup(marginLeft, marginTop);
+    if (!page) {
+      requestUpdate();
+      return;
+    }
+    auto select = std::make_unique<DictionaryWordSelectActivity>(
+        renderer, mappedInput, std::move(page), SETTINGS.getReaderFontId(), marginLeft, marginTop, typed->text);
+    // Back off the definition means "wrong word", not "done with the dictionary":
+    // reopen the keyboard with the word still in it. Done ends the lookup and drops
+    // straight back into the book.
+    startActivityForResult(std::move(select), [this, query = typed->text](const ActivityResult& result) {
+      if (result.isCancelled) {
+        openDictionaryTypedLookup(query);
+        return;
+      }
+      requestUpdate();
+    });
+  });
 }
 
 void EpubReaderActivity::loop() {

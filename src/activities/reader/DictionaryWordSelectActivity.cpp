@@ -384,7 +384,7 @@ void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
     GUI.drawPopup(renderer, tr(STR_LOOKUP_EMPTY_PAGE));
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     delay(700);
-    requestUpdate();
+    if (!finishTypedLookup(true)) requestUpdate();
     return;
   }
 
@@ -400,7 +400,7 @@ void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
     GUI.drawPopup(renderer, tr(STR_DICTIONARY_NOT_READY));
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     delay(900);
-    requestUpdate();
+    if (!finishTypedLookup(true)) requestUpdate();
     return;
   }
 
@@ -416,8 +416,11 @@ void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
                            // Both Done and Back land back here rather than closing: opening the
                            // dictionary is a mode, and a mode ends when the user says so. Looking
                            // up two words in a row used to mean re-entering word select and
-                           // re-finding your place on the page after the first one.
-                           [this](const ActivityResult&) { requestUpdate(); });
+                           // re-finding your place on the page after the first one. A typed
+                           // lookup has no page word behind it, so it ends here instead.
+                           [this](const ActivityResult& result) {
+                             if (!finishTypedLookup(result.isCancelled)) requestUpdate();
+                           });
     return;
   }
 
@@ -429,7 +432,9 @@ void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
         // distinguishes the two itself: Done on a definition reached through it
         // finishes the list (you settled on a word, so the candidates are spent
         // and you come back here), while Back returns to the candidates.
-        [this](const ActivityResult&) { requestUpdate(); });
+        [this](const ActivityResult& result) {
+          if (!finishTypedLookup(result.isCancelled)) requestUpdate();
+        });
     return;
   }
 
@@ -454,7 +459,16 @@ void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
   GUI.drawPopup(renderer, msg);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   delay(900);
-  requestUpdate();
+  if (!finishTypedLookup(true)) requestUpdate();
+}
+
+bool DictionaryWordSelectActivity::finishTypedLookup(bool cancelled) {
+  if (!typedLookup) return false;
+  ActivityResult result;
+  result.isCancelled = cancelled;
+  setResult(std::move(result));
+  finish();
+  return true;
 }
 
 void DictionaryWordSelectActivity::loop() {

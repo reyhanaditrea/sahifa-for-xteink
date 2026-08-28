@@ -271,8 +271,9 @@ void ChessGameActivity::finishGameIfOver() {
 void ChessGameActivity::reportOutcome() {
   if (outcomeReported_) return;
   outcomeReported_ = true;
-  // Clears the saved game too: a finished game is not resumable.
-  CHESS_STORE.reportResult(static_cast<uint8_t>(level_), outcome_);
+  // Nothing to record -- no win/loss ledger, the game is meant to be fun rather
+  // than scored. All a finished game leaves behind is that it is not resumable.
+  CHESS_STORE.clearSavedGame();
 }
 
 void ChessGameActivity::persist() {
@@ -479,11 +480,14 @@ void ChessGameActivity::drawPlayerBar(int y, bool opponentRow) const {
   const int leadWidth = leadText[0] == '\0' ? 0 : renderer.getTextWidth(UI_10_FONT_ID, leadText, EpdFontFamily::BOLD);
 
   const int glyph = chess_view::SMALL_GLYPH_SIZE;
-  int x = right - leadWidth - (leadWidth > 0 ? 6 : 0) - count * (glyph - 4);
+  // Step, not the glyph box: the pieces are narrower than their box and overlap, so
+  // a full 15-piece set still fits the row at this size.
+  constexpr int step = chess_view::SMALL_GLYPH_SIZE - 8;
+  int x = right - leadWidth - (leadWidth > 0 ? 6 : 0) - count * step;
   x = std::max(x, left + pageWidth / 3);
   for (int i = 0; i < count; i++) {
     chess_view::drawPiece(renderer, captured[i], x, y, glyph);
-    x += glyph - 4;  // slight overlap keeps a full set inside the row
+    x += step;
   }
   if (leadText[0] != '\0') {
     renderer.drawText(UI_10_FONT_ID, right - leadWidth, y + (nameHeight - renderer.getLineHeight(UI_10_FONT_ID)),
@@ -502,7 +506,12 @@ void ChessGameActivity::drawMoveList(int y, int height) const {
   y += 8;
 
   const int plies = game_->plyCount();
-  const int pairs = (plies + 1) / 2;
+  // Whose turn it is belongs in the record, as the next unplayed half-move: "3. your
+  // move" says both that it is your turn and where in the game you are, which a
+  // separate status line said half of. Counted as a pair so the window sizing and
+  // scrolling below reserve a row for it.
+  const int pendingPly = (focus_ == Focus::Board && state_ == State::Playing && playerToMove()) ? plies : -1;
+  const int pairs = (plies + (pendingPly >= 0 ? 2 : 1)) / 2;
   // Three pairs is enough to see the current sequence while playing; reviewing is
   // reading the scoresheet, so it uses whatever rows the panel actually has.
   const int visiblePairs = std::max(1, std::min(focus_ == Focus::Review ? (height - 12) / lineHeight : 3, pairs));
@@ -529,9 +538,15 @@ void ChessGameActivity::drawMoveList(int y, int height) const {
     if (blackCurrent) renderer.fillRect(left + 128, y - 2, 88, lineHeight, true);
 
     renderer.drawText(UI_12_FONT_ID, left + 32 - numberWidth, y, number, true);
-    renderer.drawText(UI_12_FONT_ID, left + 42, y, game_->sanAt(whitePly), !whiteCurrent);
+    if (whitePly < plies) {
+      renderer.drawText(UI_12_FONT_ID, left + 42, y, game_->sanAt(whitePly), !whiteCurrent);
+    } else if (whitePly == pendingPly) {
+      renderer.drawText(UI_12_FONT_ID, left + 42, y, tr(STR_CHESS_YOUR_MOVE), true, EpdFontFamily::BOLD);
+    }
     if (whitePly + 1 < plies) {
       renderer.drawText(UI_12_FONT_ID, left + 132, y, game_->sanAt(whitePly + 1), !blackCurrent);
+    } else if (whitePly + 1 == pendingPly) {
+      renderer.drawText(UI_12_FONT_ID, left + 132, y, tr(STR_CHESS_YOUR_MOVE), true, EpdFontFamily::BOLD);
     }
     y += lineHeight;
   }
@@ -543,7 +558,9 @@ void ChessGameActivity::drawMoveList(int y, int height) const {
   }
 
   y = std::max(y, layout_.y + layout_.size + 4);
-  const char* status = tr(STR_CHESS_YOUR_MOVE);
+  // Empty on a normal player turn: the record already says "your move". What is left
+  // are the states the record cannot show -- thinking, check, game over.
+  const char* status = nullptr;
   if (focus_ == Focus::MoveList) {
     status = tr(STR_CHESS_MOVES);
   } else if (focus_ == Focus::Review) {
@@ -557,13 +574,9 @@ void ChessGameActivity::drawMoveList(int y, int height) const {
   } else if (!playerToMove()) {
     status = tr(STR_CHESS_THINKING);
   }
-  renderer.drawText(UI_12_FONT_ID, left, y + 6, status, true, EpdFontFamily::BOLD);
-
-  // The side buttons carry up/down here, and they have no slot in the four-button
-  // hint bar, so they get their own line -- the same reason the dictionary spells
-  // out "Up"/"Down" instead of leaving the user to guess which button scrolls.
-  const char* sideHint = (focus_ == Focus::Review) ? tr(STR_CHESS_HINT_STEP) : tr(STR_CHESS_HINT_UP_DOWN);
-  renderer.drawText(SMALL_FONT_ID, right - renderer.getTextWidth(SMALL_FONT_ID, sideHint), y + 8, sideHint, true);
+  if (status != nullptr) {
+    renderer.drawText(UI_12_FONT_ID, left, y + 6, status, true, EpdFontFamily::BOLD);
+  }
 }
 
 void ChessGameActivity::drawOverlay() const {
@@ -577,7 +590,6 @@ void ChessGameActivity::drawOverlay() const {
 
   char title[64];
   char detail[80];
-  char record[64];
   int optionCount;
   const char* options[3];
 
@@ -594,9 +606,6 @@ void ChessGameActivity::drawOverlay() const {
       snprintf(title, sizeof(title), "%s", tr(STR_CHESS_DRAW));
       snprintf(detail, sizeof(detail), tr(STR_CHESS_LOST_TO_FMT), I18N.get(persona.name), persona.rating);
     }
-    snprintf(record, sizeof(record), tr(STR_CHESS_RECORD_VS_FMT), I18N.get(persona.name),
-             CHESS_STORE.getWins(static_cast<uint8_t>(level_)), CHESS_STORE.getLosses(static_cast<uint8_t>(level_)),
-             CHESS_STORE.getDraws(static_cast<uint8_t>(level_)));
     optionCount = OVER_OPTION_COUNT;
     options[0] = tr(STR_CHESS_PLAY_AGAIN);
     options[1] = tr(STR_CHESS_REVIEW);
@@ -604,14 +613,13 @@ void ChessGameActivity::drawOverlay() const {
   } else {
     snprintf(title, sizeof(title), "%s", tr(STR_CHESS_PAUSED));
     detail[0] = '\0';
-    record[0] = '\0';
     optionCount = QUIT_OPTION_COUNT;
     options[0] = tr(STR_CHESS_RESUME);
     options[1] = tr(STR_CHESS_SAVE_EXIT);
     options[2] = tr(STR_CHESS_RESIGN);
   }
 
-  const int detailLines = (detail[0] != '\0' ? 1 : 0) + (record[0] != '\0' ? 1 : 0);
+  const int detailLines = (detail[0] != '\0' ? 1 : 0);
   const int boxHeight = 20 + lineHeight * 2 + detailLines * (lineHeight + 2) + 12 + rowHeight * optionCount + 20;
   const int boxY = layout_.y + (layout_.size - boxHeight) / 2;
 
@@ -626,11 +634,6 @@ void ChessGameActivity::drawOverlay() const {
     UITheme::drawCenteredText(renderer, Rect{boxX, boxY, boxWidth, boxHeight}, UI_10_FONT_ID, y, detail);
     y += lineHeight;
   }
-  if (record[0] != '\0') {
-    UITheme::drawCenteredText(renderer, Rect{boxX, boxY, boxWidth, boxHeight}, UI_10_FONT_ID, y, record);
-    y += lineHeight;
-  }
-
   y += 6;
   renderer.fillRect(boxX + 16, y, boxWidth - 32, 1, true);
   y += 6;
@@ -711,6 +714,12 @@ void ChessGameActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, leftLabel, rightLabel,
                                             /*rtlSwap=*/false);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // Up/down are on the side buttons, which have no slot in the four-button bar. Drawn
+  // at the buttons themselves, as dictionary word select does, rather than spelled out
+  // in a line of text the user has to map back onto the hardware. The board never
+  // reaches these edges -- MAX_CELL caps it at 448 px, well inside the 30 px hint
+  // columns -- so nothing is painted over.
+  GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
 
   // Periodic HALF refresh: FAST leaves residue, and a dithered board shows it.
   if (++rendersSinceFullRefresh_ >= 20) {
