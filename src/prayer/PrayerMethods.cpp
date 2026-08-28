@@ -58,6 +58,9 @@ constexpr Schedule SCHEDULES[] = {
     {"ID", true, {2, -4, 3, 2, 3, 2}},
 };
 
+// Countries where Hanafi is the prevailing school, so Auto shows its Asr.
+constexpr char HANAFI_COUNTRIES[][3] = {"TR", "PK", "IN", "BD", "AF", "UZ", "TJ", "TM", "KG", "KZ", "AZ"};
+
 const Convention& conventionAt(const uint8_t index) { return TABLE[index < TABLE_COUNT ? index : AUTO_INDEX]; }
 
 uint8_t autoIndexForIso(const char* iso) {
@@ -76,6 +79,14 @@ uint8_t resolve(const uint8_t index, const char* iso) {
 
 uint8_t count() { return TABLE_COUNT; }
 
+uint8_t asrSchoolCount() { return ASR_SCHOOL_COUNT; }
+
+const std::vector<StrId>& asrSchoolLabels() {
+  static const std::vector<StrId> kLabels = {StrId::STR_PRAYER_ASR_AUTO, StrId::STR_PRAYER_ASR_STANDARD,
+                                             StrId::STR_PRAYER_ASR_HANAFI};
+  return kLabels;
+}
+
 StrId label(const uint8_t index) { return conventionAt(index).label; }
 
 const std::vector<StrId>& labels() {
@@ -88,15 +99,26 @@ const std::vector<StrId>& labels() {
   return kLabels;
 }
 
-PrayerCalc::Method methodFor(const uint8_t index, const char* iso) {
+uint8_t asrShadowFor(const uint8_t asrSchool, const char* iso) {
+  if (asrSchool == ASR_STANDARD) return 1;
+  if (asrSchool == ASR_HANAFI) return 2;
+  if (iso != nullptr) {
+    for (const auto& country : HANAFI_COUNTRIES) {
+      if (strcmp(country, iso) == 0) return 2;
+    }
+  }
+  return 1;
+}
+
+PrayerCalc::Method methodFor(const uint8_t index, const uint8_t asrSchool, const char* iso) {
   const Convention& convention = conventionAt(resolve(index, iso));
   PrayerCalc::Method method{};
   method.fajrAngle = convention.fajrAngle;
   method.ishaAngle = convention.ishaAngle;
   method.ishaMinutes = convention.ishaMinutes;
-  // Hanafi Asr is a school, not a method, and nobody has asked for it yet;
-  // the majority position is the one every listed authority publishes.
-  method.asrShadow = 1;
+  // The Asr school is orthogonal to the method: it decides how far the shadow
+  // has to grow, not which twilight angle counts.
+  method.asrShadow = asrShadowFor(asrSchool, iso);
   method.roundUp = false;
   for (auto& offset : method.offsets) offset = 0;
 
@@ -113,7 +135,10 @@ PrayerCalc::Method methodFor(const uint8_t index, const char* iso) {
 
 StrId effectiveLabel(const uint8_t index, const char* iso) { return conventionAt(resolve(index, iso)).label; }
 
-PrayerCalc::Method current() { return methodFor(MIDAD_APP_SETTINGS.prayerMethod, MIDAD_APP_SETTINGS.prayerCountryIso); }
+PrayerCalc::Method current() {
+  return methodFor(MIDAD_APP_SETTINGS.prayerMethod, MIDAD_APP_SETTINGS.prayerAsrSchool,
+                   MIDAD_APP_SETTINGS.prayerCountryIso);
+}
 
 StrId currentLabel() { return effectiveLabel(MIDAD_APP_SETTINGS.prayerMethod, MIDAD_APP_SETTINGS.prayerCountryIso); }
 

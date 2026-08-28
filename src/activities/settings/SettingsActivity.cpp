@@ -29,6 +29,7 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "activities/apps/DictionaryActivity.h"
+#include "activities/apps/PrayerPickActivity.h"
 #include "activities/browser/FouladLogoutActivity.h"
 #include "activities/browser/FouladQrLoginActivity.h"
 #include "activities/home/FileBrowserActivity.h"
@@ -337,6 +338,15 @@ void SettingsActivity::toggleCurrentSetting() {
             SETTINGS.saveToFile();
             rebuildSettingsLists();
           });
+      return;
+    }
+    if (setting.nameId == StrId::STR_PRAYER_METHOD) {
+      // Eighteen conventions do not fit the option popup, which sizes itself
+      // to its option count and does not scroll -- same reasoning as the two
+      // font pickers above.
+      startActivityForResult(
+          std::make_unique<PrayerPickActivity>(renderer, mappedInput, PrayerPickActivity::MethodTag{}),
+          [this](const ActivityResult&) { rebuildSettingsLists(); });
       return;
     }
     const uint8_t totalValues = setting.enumStringValues.empty()

@@ -26,6 +26,7 @@ void MidadAppSettings::toJson(JsonDocument& doc) const {
   doc["debugLoggingEnabled"] = debugLoggingEnabled;
   doc["prayerEnabled"] = prayerEnabled;
   doc["prayerMethod"] = prayerMethod;
+  doc["prayerAsrSchool"] = prayerAsrSchool;
   doc["prayerCountry"] = prayerCountryIso;
   doc["prayerHasCity"] = prayerHasCity;
   doc["prayerLat"] = prayerLatE2;
@@ -58,6 +59,8 @@ bool MidadAppSettings::fromJson(JsonVariantConst doc) {
   prayerEnabled = clampToggle(doc["prayerEnabled"] | prayerEnabled, prayerEnabled);
   const uint8_t method = doc["prayerMethod"] | prayerMethod;
   prayerMethod = method < PrayerMethods::count() ? method : prayerMethod;
+  const uint8_t asrSchool = doc["prayerAsrSchool"] | prayerAsrSchool;
+  prayerAsrSchool = asrSchool < PrayerMethods::asrSchoolCount() ? asrSchool : prayerAsrSchool;
   strlcpy(prayerCountryIso, doc["prayerCountry"] | prayerCountryIso, sizeof(prayerCountryIso));
   prayerHasCity = clampToggle(doc["prayerHasCity"] | prayerHasCity, prayerHasCity);
   const int32_t lat = doc["prayerLat"] | prayerLatE2;

@@ -127,6 +127,18 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
                              },
                              "prayerMethod", StrId::STR_CAT_APPS)
                              .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
+  // Asr sits under the method because it answers a different question: the
+  // method fixes the twilight angles, this fixes how long a shadow has to
+  // grow. Auto follows the country's prevailing school.
+  appsSettings.push_back(SettingInfo::DynamicEnum(
+                             StrId::STR_PRAYER_ASR_SCHOOL, PrayerMethods::asrSchoolLabels(),
+                             [] { return MIDAD_APP_SETTINGS.prayerAsrSchool; },
+                             [](uint8_t val) {
+                               MIDAD_APP_SETTINGS.prayerAsrSchool = val;
+                               MIDAD_APP_SETTINGS.saveToFile();
+                             },
+                             "prayerAsrSchool", StrId::STR_CAT_APPS)
+                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
   // Midad BLE used to also be registered here as a persisted Settings->Apps toggle
   // (see MidadAppSettings.h's own removal comment) -- removed along with the field
   // itself under BLE-R2 correction 2. Opening BluetoothActivity (Apps tile or

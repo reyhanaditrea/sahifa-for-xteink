@@ -87,6 +87,34 @@ TEST(PrayerCalcTest, StaysWithinAMinuteOfKemenagsPublishedSchedule) {
   }
 }
 
+TEST(PrayerCalcTest, HanafiAsrMatchesTheReferenceCalculation) {
+  // Aladhan, Jakarta, method 20 with school=1 (HANAFI). Hanafi Asr waits for
+  // the shadow to grow twice the object's length rather than once, so it
+  // falls the better part of an hour later; nothing else moves.
+  struct Day {
+    unsigned day;
+    const char* hanafiAsr;
+    const char* standardAsr;
+  };
+  constexpr Day DAYS[] = {{1, "16:16", "15:21"}, {15, "16:15", "15:18"}, {28, "16:12", "15:13"}};
+
+  PrayerCalc::Method hanafi = kemenagAngles();
+  hanafi.asrShadow = 2;
+  for (const Day& day : DAYS) {
+    PrayerCalc::DayTimes t{}, standard{};
+    ASSERT_TRUE(PrayerCalc::compute(2026, 8, day.day, JKT_LAT, JKT_LNG, WIB, hanafi, t)) << day.day;
+    ASSERT_TRUE(PrayerCalc::compute(2026, 8, day.day, JKT_LAT, JKT_LNG, WIB, kemenagAngles(), standard)) << day.day;
+    EXPECT_LE(std::abs(t.minutes[3] - PrayerPure::timeToMinutes(day.hanafiAsr)), 1) << hhmm(t.minutes[3]);
+    EXPECT_EQ(hhmm(standard.minutes[3]), day.standardAsr);
+    EXPECT_GT(t.minutes[3], standard.minutes[3]);
+    // Only Asr differs: the school says nothing about the other timings.
+    for (int i = 0; i < PrayerPure::TIMING_COUNT; ++i) {
+      if (i == 3) continue;
+      EXPECT_EQ(t.minutes[i], standard.minutes[i]) << "timing " << i;
+    }
+  }
+}
+
 TEST(PrayerCalcTest, TimingsRunInOrderThroughTheYear) {
   const PrayerCalc::Method method = kemenagSchedule();
   for (unsigned month = 1; month <= 12; ++month) {

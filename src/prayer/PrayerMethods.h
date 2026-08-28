@@ -19,15 +19,28 @@ namespace PrayerMethods {
 
 constexpr uint8_t AUTO_INDEX = 0;
 
+// Asr school setting values.
+constexpr uint8_t ASR_AUTO = 0;
+constexpr uint8_t ASR_STANDARD = 1;
+constexpr uint8_t ASR_HANAFI = 2;
+constexpr uint8_t ASR_SCHOOL_COUNT = 3;
+
 uint8_t count();
 StrId label(uint8_t index);
+
+// The Asr schools, in settings order: Auto, Standard (Shafi/Maliki/Hanbali),
+// Hanafi. Auto follows the country's prevailing school -- Hanafi across
+// Turkiye, South and Central Asia -- and the majority position elsewhere.
+uint8_t asrSchoolCount();
+const std::vector<StrId>& asrSchoolLabels();
 // Labels in table order, for SettingInfo::DynamicEnum.
 const std::vector<StrId>& labels();
 
 // The angles for a method index, resolving Auto through the country's ISO
 // code (Kemenag for Indonesia, Umm al-Qura for Saudi Arabia, ISNA for North
-// America, MWL for everyone else, including custom coordinates).
-PrayerCalc::Method methodFor(uint8_t index, const char* iso);
+// America, MWL for everyone else, including custom coordinates). asrSchool
+// indexes the list above.
+PrayerCalc::Method methodFor(uint8_t index, uint8_t asrSchool, const char* iso);
 
 // The label actually in force, so the screen can name what it computed with
 // even when the setting says "Auto".

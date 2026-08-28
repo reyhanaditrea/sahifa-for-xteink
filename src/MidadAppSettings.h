@@ -81,6 +81,12 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
   uint8_t prayerEnabled = 1;
   // Index into PrayerMethods' table; 0 = Auto (resolved from prayerCountryIso).
   uint8_t prayerMethod = 0;
+  // Which school's Asr the app shows: 0 = Auto (Hanafi where that is the
+  // prevailing school, majority position elsewhere), 1 = Standard
+  // (Shafi/Maliki/Hanbali), 2 = Hanafi. Not part of the method: every
+  // authority in the list publishes both, and a Hanafi user in a country
+  // whose ministry prints the majority time still wants the Hanafi one.
+  uint8_t prayerAsrSchool = 0;
   // Chosen location -- the only thing the app needs, since the timings are
   // computed from it (src/prayer/PrayerCalc.h) rather than fetched.
   // prayerCountryIso is "" while nothing is chosen; the
