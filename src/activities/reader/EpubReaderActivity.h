@@ -173,7 +173,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // "Type a word": collect the query on the keyboard, then hand it to the same
   // word-select screen the page path uses, which looks it up and leaves the user on
   // the page rather than back in the menu.
-  void openDictionaryTypedLookup();
+  // `prefill` seeds the keyboard: empty when the row is first chosen, and the
+  // previous word when the user backs out of its definition to try another.
+  void openDictionaryTypedLookup(const std::string& prefill = "");
   bool launchKOReaderSync();
   // Midad equivalent: same save-release-replace shape, see the implementation.
   void launchMidadSync();
