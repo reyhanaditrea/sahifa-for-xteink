@@ -8,6 +8,24 @@
 
 HalClock halClock;  // Singleton instance
 
+namespace {
+// Civil date (UTC) -> Unix epoch. Howard Hinnant's days_from_civil, the same
+// public-domain algorithm src/util/TimeUtils.cpp uses -- copied rather than
+// shared because this is the HAL and must not reach up into the app.
+//
+// mktime() would read the fields through whatever TZ is set, which at this point
+// in boot is nothing in particular, and newlib here has no timegm().
+time_t epochFromUtc(const Rtc::DateTime& dt) {
+  int year = static_cast<int>(dt.year) - (dt.month <= 2 ? 1 : 0);
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(year - era * 400);
+  const unsigned doy = (153U * (dt.month + (dt.month > 2 ? -3U : 9U)) + 2U) / 5U + dt.day - 1U;
+  const unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
+  const int64_t days = static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+  return static_cast<time_t>(days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second);
+}
+}  // namespace
+
 void HalClock::begin() {
   _available = _sdkRtc.begin();
   LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
@@ -25,16 +43,7 @@ void HalClock::restoreSystemTimeFromRTC() {
   Rtc::DateTime dt;
   if (!_sdkRtc.now(dt)) return;  // absent, or oscillator stopped -- nothing trustworthy in there
 
-  struct tm timeinfo = {};
-  timeinfo.tm_year = dt.year - 1900;
-  timeinfo.tm_mon = dt.month - 1;
-  timeinfo.tm_mday = dt.day;
-  timeinfo.tm_hour = dt.hour;
-  timeinfo.tm_min = dt.minute;
-  timeinfo.tm_sec = dt.second;
-  // timegm, not mktime: the RTC holds UTC, and mktime would read it through whatever
-  // TZ happens to be set at this point in boot.
-  const time_t epoch = timegm(&timeinfo);
+  const time_t epoch = epochFromUtc(dt);
 
   // A device last synced by firmware that wrote only hour/minute is still ticking, but
   // stamped year 2000. Its time-of-day is right and the status bar has always shown it;
