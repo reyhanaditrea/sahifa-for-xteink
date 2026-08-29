@@ -2,7 +2,6 @@
 
 #include "MidadAppSettings.h"
 #include "SettingsList.h"
-#include "prayer/PrayerMethods.h"
 
 void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
   // Quran toggle: SettingsActivity::toggleCurrentSetting() extracts the
@@ -14,10 +13,10 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
         MIDAD_APP_SETTINGS.saveToFile();
       },
       "quranEnabled", StrId::STR_CAT_APPS));
-  // Prayer Times toggle, with the calculation method under it. The method is
-  // the one prayer setting not on the app's own screen, which is location
-  // only -- the times themselves are computed, so there is nothing to sync
-  // and nothing to invalidate when this changes.
+  // Prayer Times toggle only. The calculation method and the Asr school are on
+  // the app's own screen next to the times they change -- see PrayerActivity's
+  // Row enum. Both are still written to settings.json under the same keys, so
+  // the Midad app keeps syncing them.
   appsSettings.push_back(SettingInfo::DynamicToggle(
       StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
       [](uint8_t val) {
@@ -25,27 +24,6 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
         MIDAD_APP_SETTINGS.saveToFile();
       },
       "prayerEnabled", StrId::STR_CAT_APPS));
-  appsSettings.push_back(SettingInfo::DynamicEnum(
-                             StrId::STR_PRAYER_METHOD, PrayerMethods::labels(),
-                             [] { return MIDAD_APP_SETTINGS.prayerMethod; },
-                             [](uint8_t val) {
-                               MIDAD_APP_SETTINGS.prayerMethod = val;
-                               MIDAD_APP_SETTINGS.saveToFile();
-                             },
-                             "prayerMethod", StrId::STR_CAT_APPS)
-                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
-  // Asr sits under the method because it answers a different question: the
-  // method fixes the twilight angles, this fixes how long a shadow has to
-  // grow. Auto follows the country's prevailing school.
-  appsSettings.push_back(SettingInfo::DynamicEnum(
-                             StrId::STR_PRAYER_ASR_SCHOOL, PrayerMethods::asrSchoolLabels(),
-                             [] { return MIDAD_APP_SETTINGS.prayerAsrSchool; },
-                             [](uint8_t val) {
-                               MIDAD_APP_SETTINGS.prayerAsrSchool = val;
-                               MIDAD_APP_SETTINGS.saveToFile();
-                             },
-                             "prayerAsrSchool", StrId::STR_CAT_APPS)
-                             .shownWhen([] { return MIDAD_APP_SETTINGS.prayerEnabled != 0; }));
   // Games toggle: pins a "Games" tile in My Books that opens a Snake/Tetris
   // picker. No extraction step needed -- unlike Quran, nothing but the
   // toggle itself is required.

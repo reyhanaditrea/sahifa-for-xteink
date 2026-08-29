@@ -11,12 +11,22 @@
 #include "prayer/PrayerCityTable.h"
 #include "prayer/PrayerMethods.h"
 
+namespace {
+// U+25CF BLACK CIRCLE. Spelled as bytes, the way the rest of the codebase
+// spells its non-ASCII punctuation (DictionaryStore.cpp) -- the literal that
+// used to sit here had been through one encoding pass too many and drew as
+// mojibake, so the method list marked its current row with three stray glyphs.
+constexpr const char* SELECTED_MARK = "\xE2\x97\x8F";
+}  // namespace
+
 void PrayerPickActivity::onEnter() {
   Activity::onEnter();
   // Open on the current choice rather than the top of a 244-row list.
   selectedIndex = 0;
   if (mode == Mode::Method) {
     selectedIndex = MIDAD_APP_SETTINGS.prayerMethod;
+  } else if (mode == Mode::AsrSchool) {
+    selectedIndex = MIDAD_APP_SETTINGS.prayerAsrSchool;
   } else if (mode == Mode::Country) {
     const int current = PrayerCityTable::findCountry(MIDAD_APP_SETTINGS.prayerCountryIso);
     if (current > 0) selectedIndex = current;
@@ -35,14 +45,16 @@ void PrayerPickActivity::onEnter() {
 
 int PrayerPickActivity::itemCount() const {
   if (mode == Mode::Method) return PrayerMethods::count();
+  if (mode == Mode::AsrSchool) return PrayerMethods::asrSchoolCount();
   if (mode == Mode::Country) return PrayerCityTable::countryCount();
   return PrayerCityTable::cityEnd(countryIndex) - PrayerCityTable::cityBegin(countryIndex);
 }
 
 void PrayerPickActivity::activate() {
   auto& settings = MIDAD_APP_SETTINGS;
-  if (mode == Mode::Method) {
-    settings.prayerMethod = static_cast<uint8_t>(selectedIndex);
+  if (mode == Mode::Method || mode == Mode::AsrSchool) {
+    uint8_t& field = mode == Mode::Method ? settings.prayerMethod : settings.prayerAsrSchool;
+    field = static_cast<uint8_t>(selectedIndex);
     settings.saveToFile();
     finish();
     return;
@@ -125,9 +137,10 @@ void PrayerPickActivity::render(RenderLock&&) {
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
 
-  const char* title = mode == Mode::Method    ? tr(STR_PRAYER_METHOD)
-                      : mode == Mode::Country ? tr(STR_PRAYER_COUNTRY)
-                                              : PrayerCityTable::country(countryIndex).name;
+  const char* title = mode == Mode::Method      ? tr(STR_PRAYER_METHOD)
+                      : mode == Mode::AsrSchool ? tr(STR_PRAYER_ASR_SCHOOL)
+                      : mode == Mode::Country   ? tr(STR_PRAYER_COUNTRY)
+                                                : PrayerCityTable::country(countryIndex).name;
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, title);
 
   const int listTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
@@ -135,24 +148,44 @@ void PrayerPickActivity::render(RenderLock&&) {
   itemsPerPage = GUI.getListPageItems(listHeight, false);
 
   const uint16_t cityBase = mode == Mode::City ? PrayerCityTable::cityBegin(countryIndex) : 0;
+
+  // Country rows carry their ISO code as the value: two countries can share a
+  // prefix in a long list, and the code is how the auto method is chosen. The
+  // two enum lists mark the row in force instead -- neither has a second thing
+  // worth saying about a row, and without a mark a list of conventions gives no
+  // clue which one the times came from.
+  std::function<std::string(int)> rowValue;
+  switch (mode) {
+    case Mode::Country:
+      rowValue = [](const int index) -> std::string {
+        return PrayerCityTable::country(static_cast<uint16_t>(index)).iso;
+      };
+      break;
+    case Mode::Method:
+      rowValue = [](const int index) -> std::string {
+        return index == MIDAD_APP_SETTINGS.prayerMethod ? SELECTED_MARK : "";
+      };
+      break;
+    case Mode::AsrSchool:
+      rowValue = [](const int index) -> std::string {
+        return index == MIDAD_APP_SETTINGS.prayerAsrSchool ? SELECTED_MARK : "";
+      };
+      break;
+    case Mode::City:
+      break;
+  }
+
   GUI.drawList(
       renderer, Rect{0, listTop, pageWidth, listHeight}, itemCount(), selectedIndex,
       [this, cityBase](const int index) -> std::string {
         if (mode == Mode::Method) return I18N.get(PrayerMethods::label(static_cast<uint8_t>(index)));
+        if (mode == Mode::AsrSchool) {
+          return I18N.get(PrayerMethods::asrSchoolLabels()[static_cast<size_t>(index)]);
+        }
         if (mode == Mode::Country) return PrayerCityTable::country(static_cast<uint16_t>(index)).name;
         return PrayerCityTable::city(static_cast<uint16_t>(cityBase + index)).name;
       },
-      nullptr, nullptr,
-      // Country rows carry their ISO code as the value: two countries can share
-      // a prefix in a long list, and the code is how the auto method is chosen.
-      // The method list marks the one in force instead.
-      mode == Mode::Country  ? std::function<std::string(int)>([](const int index) -> std::string {
-        return PrayerCityTable::country(static_cast<uint16_t>(index)).iso;
-      })
-      : mode == Mode::Method ? std::function<std::string(int)>([](const int index) -> std::string {
-          return index == MIDAD_APP_SETTINGS.prayerMethod ? "â" : "";
-        })
-                             : nullptr);
+      nullptr, nullptr, rowValue);
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

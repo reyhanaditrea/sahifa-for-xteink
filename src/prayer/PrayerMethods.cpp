@@ -89,16 +89,6 @@ const std::vector<StrId>& asrSchoolLabels() {
 
 StrId label(const uint8_t index) { return conventionAt(index).label; }
 
-const std::vector<StrId>& labels() {
-  static const std::vector<StrId> kLabels = [] {
-    std::vector<StrId> out;
-    out.reserve(TABLE_COUNT);
-    for (const auto& convention : TABLE) out.push_back(convention.label);
-    return out;
-  }();
-  return kLabels;
-}
-
 uint8_t asrShadowFor(const uint8_t asrSchool, const char* iso) {
   if (asrSchool == ASR_STANDARD) return 1;
   if (asrSchool == ASR_HANAFI) return 2;

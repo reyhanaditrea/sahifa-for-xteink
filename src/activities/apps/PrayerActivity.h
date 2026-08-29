@@ -19,6 +19,8 @@
 //   ----------------------------------------------------
 //   Country                                  Indonesia
 //   City                                       Jakarta   (hidden until a country is set)
+//   Method                              Auto (by country)
+//   Asr                                              Auto
 //
 //   Calculated on device               Kemenag Indonesia
 //
@@ -38,10 +40,16 @@ class PrayerActivity final : public Activity {
 
  private:
   // The rows a cursor can sit on. The clock row only appears when the device
-  // has no date to compute with -- which is the normal state on hardware
-  // whose RTC does not keep one across a reboot, so it needs to be reachable
-  // from here rather than buried in Settings.
-  enum Row : uint8_t { ROW_CLOCK, ROW_COUNTRY, ROW_CITY, ROW_NONE };
+  // has no date to compute with, so it needs to be reachable from here rather
+  // than buried in Settings.
+  //
+  // Method and Asr are here for the same reason the location is: they are what
+  // you reach for while looking at times that disagree with the mosque down the
+  // road, and that comparison happens on this screen -- not in Settings -> Apps,
+  // three levels away from the numbers being questioned. The footer still names
+  // the convention actually in force, which is what "Auto" resolves to.
+  enum Row : uint8_t { ROW_CLOCK, ROW_COUNTRY, ROW_CITY, ROW_METHOD, ROW_ASR, ROW_NONE };
+  static constexpr int MAX_ROWS = 5;
 
   void refresh();
   void openCountryPicker();
@@ -51,7 +59,12 @@ class PrayerActivity final : public Activity {
   // See PrayerPickActivity: a click counts only where both halves landed.
   bool handleArmedButtons();
   // The rows on screen right now, in order.
-  int buildRows(Row (&rows)[3]) const;
+  int buildRows(Row (&rows)[MAX_ROWS]) const;
+  // Where `target` sits in that list, for the callers that want to leave the
+  // cursor on a particular row. A Row is not its own position: the clock row is
+  // only sometimes there and the city row only exists once a country is set, so
+  // the two differ by one or two most of the time.
+  int rowIndex(Row target) const;
 
   bool hasCountry() const;
   bool isCustomLocation() const;

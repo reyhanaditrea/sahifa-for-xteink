@@ -86,10 +86,21 @@ void PrayerActivity::refresh() {
   if (nextIndex >= 0) minutesToNext = times.minutes[nextIndex] - nowMinutes;
 }
 
+int PrayerActivity::rowIndex(const Row target) const {
+  Row rows[MAX_ROWS] = {ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE};
+  const int count = buildRows(rows);
+  for (int i = 0; i < count; ++i) {
+    if (rows[i] == target) return i;
+  }
+  return 0;
+}
+
 void PrayerActivity::openCountryPicker() {
   startActivityForResult(std::make_unique<PrayerPickActivity>(renderer, mappedInput), [this](const ActivityResult&) {
     refresh();
-    cursor = hasCountry() ? ROW_CITY : ROW_COUNTRY;
+    // A country was just chosen, so the city is the next thing missing -- land on
+    // it rather than making the user step down to it.
+    cursor = rowIndex(hasCountry() ? ROW_CITY : ROW_COUNTRY);
     requestUpdate();
   });
 }
@@ -112,38 +123,60 @@ void PrayerActivity::openCityPicker() {
       });
 }
 
-int PrayerActivity::buildRows(Row (&rows)[3]) const {
+int PrayerActivity::buildRows(Row (&rows)[MAX_ROWS]) const {
   int count = 0;
   if (needsClock()) rows[count++] = ROW_CLOCK;
   rows[count++] = ROW_COUNTRY;
   if (hasCountry()) rows[count++] = ROW_CITY;
+  // Method and Asr stay whatever the location is: both are answerable before a
+  // city is picked, and hiding them would put the app's own settings behind a
+  // step that has nothing to do with them.
+  rows[count++] = ROW_METHOD;
+  rows[count++] = ROW_ASR;
   return count;
 }
 
 void PrayerActivity::activateRow() {
-  Row rows[3] = {ROW_NONE, ROW_NONE, ROW_NONE};
+  Row rows[MAX_ROWS] = {ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE};
   const int count = buildRows(rows);
   const Row row = rows[cursor < count ? cursor : 0];
-  if (row == ROW_CLOCK) {
-    // The shared clock screen owns the WiFi/NTP dance; the prayer app has no
-    // business repeating it.
-    startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput, &silentRestartToPrayer),
-                           [this](const ActivityResult&) {
-                             refresh();
-                             cursor = 0;
-                             requestUpdate();
-                           });
-    return;
+  // Method and Asr change the numbers above without changing which rows exist,
+  // so the cursor stays where it was; the location pickers move it themselves.
+  auto recompute = [this](const ActivityResult&) {
+    refresh();
+    requestUpdate();
+  };
+  switch (row) {
+    case ROW_CLOCK:
+      // The shared clock screen owns the WiFi/NTP dance; the prayer app has no
+      // business repeating it.
+      startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput, &silentRestartToPrayer),
+                             [this](const ActivityResult&) {
+                               refresh();
+                               cursor = 0;
+                               requestUpdate();
+                             });
+      return;
+    case ROW_COUNTRY:
+      openCountryPicker();
+      return;
+    case ROW_CITY:
+      openCityPicker();
+      return;
+    case ROW_METHOD:
+      startActivityForResult(
+          std::make_unique<PrayerPickActivity>(renderer, mappedInput, PrayerPickActivity::MethodTag{}), recompute);
+      return;
+    case ROW_ASR:
+    default:
+      startActivityForResult(std::make_unique<PrayerPickActivity>(renderer, mappedInput, PrayerPickActivity::AsrTag{}),
+                             recompute);
+      return;
   }
-  if (row == ROW_COUNTRY) {
-    openCountryPicker();
-    return;
-  }
-  openCityPicker();
 }
 
 void PrayerActivity::moveCursor(const int delta) {
-  Row rows[3] = {ROW_NONE, ROW_NONE, ROW_NONE};
+  Row rows[MAX_ROWS] = {ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE};
   const int count = buildRows(rows);
   cursor = (cursor + delta + count) % count;
   requestUpdate();
@@ -266,7 +299,7 @@ void PrayerActivity::render(RenderLock&&) {
     }
   }
 
-  Row rows[3] = {ROW_NONE, ROW_NONE, ROW_NONE};
+  Row rows[MAX_ROWS] = {ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE, ROW_NONE};
   const int rowCount = buildRows(rows);
   for (int i = 0; i < rowCount; ++i) {
     const bool selected = i == cursor;
@@ -278,8 +311,18 @@ void PrayerActivity::render(RenderLock&&) {
         drawRow(y, tr(STR_PRAYER_COUNTRY), countryValue, selected, false);
         break;
       case ROW_CITY:
-      default:
         drawRow(y, tr(STR_PRAYER_CITY), cityValue, selected, false);
+        break;
+      case ROW_METHOD:
+        // The value set, not the one resolved: "Auto" is a real answer here, and
+        // the footer already names what it resolved to.
+        drawRow(y, tr(STR_PRAYER_METHOD), I18N.get(PrayerMethods::label(MIDAD_APP_SETTINGS.prayerMethod)), selected,
+                false);
+        break;
+      case ROW_ASR:
+      default:
+        drawRow(y, tr(STR_PRAYER_ASR_SCHOOL),
+                I18N.get(PrayerMethods::asrSchoolLabels()[MIDAD_APP_SETTINGS.prayerAsrSchool]), selected, false);
         break;
     }
     y += rowHeight;

@@ -33,8 +33,6 @@ StrId label(uint8_t index);
 // Turkiye, South and Central Asia -- and the majority position elsewhere.
 uint8_t asrSchoolCount();
 const std::vector<StrId>& asrSchoolLabels();
-// Labels in table order, for SettingInfo::DynamicEnum.
-const std::vector<StrId>& labels();
 
 // The angles for a method index, resolving Auto through the country's ISO
 // code (Kemenag for Indonesia, Umm al-Qura for Saudi Arabia, ISNA for North

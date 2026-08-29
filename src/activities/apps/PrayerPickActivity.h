@@ -6,14 +6,16 @@
 #include "util/ButtonNavigator.h"
 
 // Full-page picker for the Prayer Times app: the country, the cities inside
-// it (over the generated table in src/prayer/PrayerCities.h), or the
-// calculation method. One class for all three -- they differ only in what
-// they enumerate and what a pick writes.
+// it (over the generated table in src/prayer/PrayerCities.h), the calculation
+// method, or the Asr school. One class for all four -- they differ only in
+// what they enumerate and what a pick writes.
 //
-// The method list is here rather than in Settings' option popup because that
-// popup sizes itself to its option count with no scrolling, so eighteen
-// conventions run off the panel. Font Family and Arabic Font take the same
-// way out (see SettingsActivity::toggleCurrentSetting).
+// A full page rather than Settings' option popup: that popup sizes itself to
+// its option count and does not scroll, so eighteen conventions run off the
+// panel. Font Family and Arabic Font take the same way out. The Asr list is
+// three rows and would fit the popup, but it opens from the row directly under
+// the method on the same screen, and two different shapes for two adjacent
+// rows is a seam worth not having.
 //
 // Picking writes MidadAppSettings and finishes; the caller re-reads the
 // settings in its result handler.
@@ -29,13 +31,17 @@ class PrayerPickActivity final : public Activity {
   struct MethodTag {};
   PrayerPickActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, MethodTag)
       : Activity("PrayerPickMethod", renderer, mappedInput), countryIndex(0), mode(Mode::Method) {}
+  // Asr school picker (Auto / Standard / Hanafi).
+  struct AsrTag {};
+  PrayerPickActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, AsrTag)
+      : Activity("PrayerPickAsr", renderer, mappedInput), countryIndex(0), mode(Mode::AsrSchool) {}
 
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
-  enum class Mode : uint8_t { Country, City, Method };
+  enum class Mode : uint8_t { Country, City, Method, AsrSchool };
 
   int itemCount() const;
   void activate();
