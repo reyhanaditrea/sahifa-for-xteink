@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Rtc.h>
+#include <time.h>
 
 class HalClock;
 extern HalClock halClock;  // Singleton
@@ -47,13 +48,19 @@ class HalClock {
   // works whether or not a DS3231 is present.
   static bool isSystemTimeValid();
 
+  // Earliest date treated as a real one, shared by isSystemTimeValid() and the
+  // restore in begin(): Jan 1 2024, comfortably before this feature existed and
+  // comfortably after both the post-boot default (epoch 0) and the year-2000 stamp
+  // left by firmware that wrote only hour/minute into the RTC.
+  static constexpr time_t MIN_PLAUSIBLE_EPOCH = 1704067200;
+
   // Sets the system clock via SNTP, independent of any RTC hardware. Blocks for up
   // to ~5s while waiting for SNTP response. Requires WiFi to be connected.
-  // Needed because neither the DS3231 (hour/minute only, no calendar date) nor X4
-  // (no RTC at all) can preserve the date across a reboot -- without re-syncing,
-  // mbedTLS certificate validation silently fails on every HTTPS request (OPDS,
-  // OTA checks, font downloads) until something calls this. Safe/cheap to call
-  // whenever isSystemTimeValid() is false; a no-op if WiFi isn't connected yet.
+  // Still needed on X4, which has no RTC to preserve the date across a reboot, and on
+  // any device whose RTC lost power or was last set by firmware that wrote no calendar
+  // date -- without a sync, mbedTLS certificate validation silently fails on every
+  // HTTPS request (OPDS, OTA checks, font downloads). Safe/cheap to call whenever
+  // isSystemTimeValid() is false; a no-op if WiFi isn't connected yet.
   static bool quickSyncSystemTime();
 
   // Stops the SNTP client in place, if running. A no-op otherwise. Used when tearing
@@ -63,5 +70,7 @@ class HalClock {
   static void stopSntp();
 
  private:
-  bool writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second);
+  // Seeds the system clock from the RTC at boot -- see the definition for why.
+  void restoreSystemTimeFromRTC();
+  bool writeTimeToRTC(const Rtc::DateTime& dt);
 };
