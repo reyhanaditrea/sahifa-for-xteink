@@ -237,6 +237,92 @@ uint8_t Game::drawItem(uint8_t depth) {
   return pool[roll(count)];
 }
 
+uint8_t Game::drawItems(uint8_t depth, uint8_t* out, uint8_t wanted) {
+  uint8_t pool[ITEM_COUNT];
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < ITEM_COUNT; i++) {
+    if (kItems[i].minDepth <= depth) pool[count++] = i;
+  }
+  uint8_t drawn = 0;
+  while (drawn < wanted && count > 0) {
+    const uint32_t index = roll(count);
+    out[drawn++] = pool[index];
+    pool[index] = pool[--count];  // taken out of the pool, so it cannot repeat
+  }
+  return drawn;
+}
+
+// A chest holds one, two or three different things -- and now and then nothing
+// at all, which is its own kind of room.
+void Game::openChest() {
+  for (int i = 0; i < 3; i++) s_.offer[i] = NONE;
+  const uint32_t r = roll(100);
+  uint8_t wanted = 2;
+  if (r < 12) {
+    wanted = 0;
+  } else if (r < 37) {
+    wanted = 1;
+  } else if (r < 80) {
+    wanted = 2;
+  } else {
+    wanted = 3;
+  }
+  const uint8_t count = drawItems(s_.depth, s_.offer, wanted);
+  if (count == 0) {
+    setBody("Whatever was worth taking here, somebody took.");
+    nextRoom(true);
+    return;
+  }
+  s_.phase = P_CHEST_PICK;
+  if (count == 1) {
+    setBody("One thing, and it is not nothing.");
+  } else if (count == 2) {
+    setBody("Two things are worth carrying. You cannot manage both.");
+  } else {
+    setBody("Three things worth carrying, and hands enough for one of them.");
+  }
+}
+
+// A pile is taken whole: nought to three things, so searching is worth doing
+// without being worth doing every time.
+void Game::takeLoot() {
+  for (int i = 0; i < 3; i++) s_.loot[i] = NONE;
+  const uint32_t r = roll(100);
+  uint8_t wanted = 1;
+  if (r < 22) {
+    wanted = 0;
+  } else if (r < 62) {
+    wanted = 1;
+  } else if (r < 88) {
+    wanted = 2;
+  } else {
+    wanted = 3;
+  }
+  const uint8_t count = drawItems(s_.depth, s_.loot, wanted);
+  if (count == 0) {
+    setBody("You go through all of it, and come away with nothing but the smell.");
+    nextRoom(true);
+    return;
+  }
+  if (count == 1) {
+    setBody("There is one thing here worth having.");
+  } else {
+    setBody("");
+    bodyPrintf("There are %u things here worth having.", static_cast<unsigned>(count));
+  }
+  continueLoot();
+}
+
+void Game::continueLoot() {
+  for (int i = 0; i < 3; i++) {
+    if (s_.loot[i] == NONE) continue;
+    const uint8_t id = s_.loot[i];
+    s_.loot[i] = NONE;
+    if (!giveItem(id)) return;  // parked on P_DROP_PICK; the rest of the pile waits
+  }
+  nextRoom(true);
+}
+
 bool Game::giveItem(uint8_t itemId) {
   const ItemDef& def = kItems[itemId];
   if (!itemGoesInPack(def.kind)) {
@@ -543,14 +629,13 @@ void Game::applyEffect(uint8_t effect, uint8_t arg) {
       beginCombat(s_.depth >= MAX_DEPTH ? BOSS_FINAL : BOSS_MID);
       return;
 
-    case EF_CHEST: {
-      s_.offer[0] = drawItem(s_.depth);
-      s_.offer[1] = drawItem(s_.depth);
-      s_.offer[2] = NONE;
-      s_.phase = P_CHEST_PICK;
-      setBody("Two things are worth carrying. You cannot manage both.");
+    case EF_CHEST:
+      openChest();
       return;
-    }
+
+    case EF_LOOT:
+      takeLoot();
+      return;
 
     case EF_GOLD_GAIN: {
       const uint16_t amount = static_cast<uint16_t>(arg + roll(6));
@@ -600,7 +685,8 @@ void Game::applyEffect(uint8_t effect, uint8_t arg) {
     }
 
     case EF_SHOP: {
-      for (int i = 0; i < 3; i++) s_.offer[i] = drawItem(s_.depth);
+      for (int i = 0; i < 3; i++) s_.offer[i] = NONE;
+      drawItems(s_.depth, s_.offer, 3);
       s_.phase = P_SHOP;
       setBody("He turns the lamp so you can see the cloth properly, and waits.");
       return;
@@ -1030,7 +1116,7 @@ int Game::buildRows() const {
       break;
 
     case P_CHEST_PICK:
-      for (uint8_t i = 0; i < 2; i++) {
+      for (uint8_t i = 0; i < 3; i++) {
         if (s_.offer[i] != NONE) add(RA_OFFER, i, false);
       }
       add(RA_KEEP, 0, false);
@@ -1267,7 +1353,7 @@ void Game::pick(int index) {
         setBody("");
         for (int i = 0; i < 3; i++) s_.offer[i] = NONE;
         if (!giveItem(itemId)) return;  // waits on P_DROP_PICK
-        nextRoom(true);
+        continueLoot();
       }
       return;
 
@@ -1296,7 +1382,7 @@ void Game::pick(int index) {
         s_.pendingItem = NONE;
         setBody("");
         bodyPrintf("You leave the %s behind and take the %s.", kItems[dropped].name, kItems[s_.inv[row.arg]].name);
-        nextRoom(true);
+        continueLoot();
         return;
       }
       if (s_.phase == P_REPLACE_PICK) {
@@ -1344,11 +1430,12 @@ void Game::pick(int index) {
         setBody("");
         bodyPrintf("The %s stays where it is.", kItems[s_.pendingItem].name);
         s_.pendingItem = NONE;
-        nextRoom(true);
+        continueLoot();
         return;
       }
       setBody("");
       for (int i = 0; i < 3; i++) s_.offer[i] = NONE;
+      for (int i = 0; i < 3; i++) s_.loot[i] = NONE;
       nextRoom(true);
       return;
 
@@ -1378,23 +1465,24 @@ void Game::pick(int index) {
 
 size_t Game::toSaveString(char* out, size_t size) const {
   if (out == nullptr || size == 0) return 0;
-  int written =
-      snprintf(out, size,
-               "1;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;"
-               "%u;%u;%u;%u;%u;%u;"
-               "%u;%u;%u;"
-               "%u;%u;%u;"
-               "%u;%u;%u;"
-               "%u;%u;%u;"
-               "%u;%u;%u;%u;"
-               "%u;%u;%u;%u;%u;%u;%u;%u",
-               static_cast<unsigned>(s_.seed), static_cast<unsigned>(s_.rngState), s_.turn, s_.gold, s_.classId,
-               s_.depth, s_.hp, s_.maxHp, s_.atk, s_.def, s_.traits, s_.identified, s_.roomIdx, s_.phase, s_.monsterIdx,
-               s_.monsterHp, s_.defending, s_.roomsThisDepth, s_.perksTaken, s_.bossPending, s_.inv[0], s_.inv[1],
-               s_.inv[2], s_.inv[3], s_.inv[4], s_.inv[5], s_.offer[0], s_.offer[1], s_.offer[2], s_.skills[0],
-               s_.skills[1], s_.skills[2], s_.cooldowns[0], s_.cooldowns[1], s_.cooldowns[2], s_.skillMods[0],
-               s_.skillMods[1], s_.skillMods[2], s_.recent[0], s_.recent[1], s_.recent[2], s_.recent[3],
-               s_.pendingSkill, s_.pendingItem, s_.pendingPerk, s_.firstTurn, s_.guard, s_.rally, s_.stunned);
+  int written = snprintf(
+      out, size,
+      "1;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;"
+      "%u;%u;%u;%u;%u;%u;"
+      "%u;%u;%u;"
+      "%u;%u;%u;"
+      "%u;%u;%u;"
+      "%u;%u;%u;"
+      "%u;%u;%u;%u;"
+      "%u;%u;%u;%u;%u;%u;%u;%u;"
+      "%u;%u;%u",
+      static_cast<unsigned>(s_.seed), static_cast<unsigned>(s_.rngState), s_.turn, s_.gold, s_.classId, s_.depth, s_.hp,
+      s_.maxHp, s_.atk, s_.def, s_.traits, s_.identified, s_.roomIdx, s_.phase, s_.monsterIdx, s_.monsterHp,
+      s_.defending, s_.roomsThisDepth, s_.perksTaken, s_.bossPending, s_.inv[0], s_.inv[1], s_.inv[2], s_.inv[3],
+      s_.inv[4], s_.inv[5], s_.offer[0], s_.offer[1], s_.offer[2], s_.skills[0], s_.skills[1], s_.skills[2],
+      s_.cooldowns[0], s_.cooldowns[1], s_.cooldowns[2], s_.skillMods[0], s_.skillMods[1], s_.skillMods[2],
+      s_.recent[0], s_.recent[1], s_.recent[2], s_.recent[3], s_.pendingSkill, s_.pendingItem, s_.pendingPerk,
+      s_.firstTurn, s_.guard, s_.rally, s_.stunned, s_.loot[0], s_.loot[1], s_.loot[2]);
   if (written < 0) return 0;
   if (static_cast<size_t>(written) >= size) {
     out[0] = '\0';
@@ -1406,19 +1494,25 @@ size_t Game::toSaveString(char* out, size_t size) const {
 bool Game::fromSaveString(const char* text) {
   if (text == nullptr || *text == '\0') return false;
 
-  unsigned long values[50] = {0};
+  // FIELD_COUNT grew when loot piles arrived. Everything up to LEGACY_FIELDS is
+  // required; anything past it is filled in with its default, so a run saved by
+  // an older build still resumes instead of being thrown away.
+  constexpr size_t FIELD_COUNT = 53;
+  constexpr size_t LEGACY_FIELDS = 50;
+  unsigned long values[FIELD_COUNT] = {0};
+  size_t got = 0;
   const char* cursor = text;
-  for (size_t i = 0; i < 50; i++) {
+  while (got < FIELD_COUNT) {
     char* end = nullptr;
     const unsigned long value = strtoul(cursor, &end, 10);
-    if (end == cursor) return false;
-    values[i] = value;
+    if (end == cursor) break;
+    values[got++] = value;
     cursor = end;
-    if (i + 1 < 50) {
-      if (*cursor != ';') return false;
-      cursor++;
-    }
+    if (*cursor != ';') break;
+    cursor++;
   }
+  if (got < LEGACY_FIELDS) return false;
+  for (size_t k = got; k < FIELD_COUNT; k++) values[k] = NONE;
   if (values[0] != 1) return false;
 
   State next;
@@ -1456,6 +1550,7 @@ bool Game::fromSaveString(const char* text) {
   next.guard = static_cast<uint8_t>(values[i++]);
   next.rally = static_cast<uint8_t>(values[i++]);
   next.stunned = static_cast<uint8_t>(values[i++]);
+  for (uint8_t& slot : next.loot) slot = static_cast<uint8_t>(values[i++]);
 
   // Anything that would index a table out of range means a file from another
   // build, or a corrupted one; either way the run is not resumable.
@@ -1468,6 +1563,8 @@ bool Game::fromSaveString(const char* text) {
     if (slot != NONE && slot >= ITEM_COUNT) return false;
   for (uint8_t slot : next.skills)
     if (slot != NONE && slot >= SKILL_COUNT) return false;
+  for (uint8_t slot : next.loot)
+    if (slot != NONE && slot >= ITEM_COUNT) return false;
   if (next.pendingSkill != NONE && next.pendingSkill >= SKILL_COUNT) return false;
   if (next.pendingItem != NONE && next.pendingItem >= ITEM_COUNT) return false;
   if (next.rngState == 0) return false;
