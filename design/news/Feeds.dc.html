@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #ffffff; color: #000000; }
+    a { color: #000000; } a:hover { color: #000000; }
+    .row { height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; box-sizing: border-box; font-size: 15px; font-weight: 500; gap: 12px; }
+    .row .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row .m { font-size: 12px; white-space: nowrap; }
+    .hdr { height: 32px; display: flex; align-items: center; padding: 0 8px; box-sizing: border-box; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+    .tab { font-size: 12px; padding: 0 3px; height: 20px; line-height: 20px; white-space: nowrap; border-bottom: 2px solid transparent; }
+    .tab.on { font-weight: 700; border-bottom-color: #000; }
+    .feed { display: flex; flex-direction: column; justify-content: center; height: 52px; padding: 0 8px; box-sizing: border-box; }
+    .feed .n { font-size: 15px; font-weight: 500; }
+    .feed .u { font-size: 11px; font-weight: 500; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  </style>
+</helmet>
+<div style="width: 528px; height: 792px; background: #ffffff; position: relative; overflow: hidden;">
+  <div style="position: absolute; top: 5px; left: 0; width: 528px; height: 45px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.02em;">08:14</div>
+    <div style="font-size: 16px; font-weight: 700;">Feeds</div>
+    <div style="display: flex; align-items: center; gap: 3px;">
+      <div style="width: 15px; height: 12px; border: 1.5px solid #000; box-sizing: border-box; padding: 1.5px;"><div style="width: 70%; height: 100%; background: #000;"></div></div>
+      <div style="width: 2px; height: 5px; background: #000;"></div>
+    </div>
+  </div>
+  <div style="position: absolute; top: 50px; left: 0; width: 528px; height: 2px; background: #000;"></div>
+  <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 12px; box-sizing: border-box;">
+    <div class="row"><div class="l">+ Add feed</div><div class="m">1 / 8</div></div>
+    <div class="hdr">Your feeds</div>
+    <div class="feed"><div class="n">detikNews</div><div class="u">https://news.detik.com/googlenews/rss</div></div>
+    <div class="hdr">Default outlets</div>
+    <div class="row"><div class="l">BBC World</div><div class="m"><b>On</b></div></div>
+    <div class="row"><div class="l">Al Jazeera</div><div class="m"><b>On</b></div></div>
+    <div class="row"><div class="l">France 24</div><div class="m"><b>On</b></div></div>
+    <div class="row" style="background: #000000; color: #ffffff;"><div class="l">DW World</div><div class="m"><b>Off</b></div></div>
+    <div class="row"><div class="l">NPR World</div><div class="m"><b>On</b></div></div>
+    <div class="row"><div class="l">Arab News</div><div class="m"><b>Off</b></div></div>
+    <div style="margin-top: auto; padding: 0 8px 12px; font-size: 12px; font-weight: 500;">Built-in outlets: turn on or off, no removal.</div>
+  </div>
+  <div style="position: absolute; bottom: 0; left: 0; width: 528px; height: 40px; border-top: 2px solid #000; display: flex; align-items: center; justify-content: space-around; padding: 0 20px; box-sizing: border-box; font-size: 11px; font-weight: 500;">
+    <div>Back</div><div>Toggle</div><div>&#8593;</div><div>&#8595;</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

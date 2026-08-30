@@ -42,6 +42,7 @@
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "MidadAppSettings.h"
+#include "NewsFeedStore.h"
 #include "OpdsServerStore.h"
 #include "OtaRollbackDetection.h"
 #include "OtaRollbackRecoveryPlan.h"
@@ -719,6 +720,7 @@ void setup() {
   TASBIH.loadFromFile();
   GYM_PLAN.loadFromFile();
   GYM_LOG.loadFromFile();
+  NEWS_FEEDS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();

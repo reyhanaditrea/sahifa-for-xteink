@@ -185,11 +185,29 @@ def draw_ble(d):
     line(d, 16.4, 16.2, 7.6, 7.8)
 
 
+def draw_news(d):
+    # Newspaper: an outer sheet with a folded second sheet behind it, a masthead
+    # rule and three text lines. Only straight edges, which is what survives the
+    # 1-bit threshold at tile size.
+    line(d, 3.2, 5.6, 18.4, 5.6)      # front sheet
+    line(d, 3.2, 5.6, 3.2, 19.0)
+    line(d, 18.4, 5.6, 18.4, 19.0)
+    line(d, 3.2, 19.0, 18.4, 19.0)
+    line(d, 18.4, 8.2, 21.0, 8.2)     # folded sheet behind
+    line(d, 21.0, 8.2, 21.0, 19.0)
+    line(d, 18.4, 19.0, 21.0, 19.0)
+    line(d, 5.4, 8.6, 16.2, 8.6)      # masthead rule
+    line(d, 5.4, 11.8, 16.2, 11.8)    # text lines
+    line(d, 5.4, 14.2, 16.2, 14.2)
+    line(d, 5.4, 16.6, 12.6, 16.6)
+
+
 ICONS = [
     ("AppFiles72Icon", "appfiles72", draw_files),
     ("AppQuran72Icon", "appquran72", draw_quran),
     ("AppGames72Icon", "appgames72", draw_games),
     ("AppTasbih72Icon", "apptasbih72", draw_tasbih),
+    ("AppNews72Icon", "appnews72", draw_news),
     ("AppStopwatch72Icon", "appstopwatch72", draw_stopwatch),
     ("AppPomodoro72Icon", "apppomodoro72", draw_pomodoro),
     ("AppGym72Icon", "appgym72", draw_gym),

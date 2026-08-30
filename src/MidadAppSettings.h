@@ -35,10 +35,9 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
   // to SD and pinned as the first book in My Books (see QuranBook.h).
   uint8_t quranEnabled = 0;
 
-  // Apps -> News: pins a synthetic "News" tile that browses /opds/news. The
-  // tile itself was removed (News is app-only now -- see FouladEbooksConfig.h);
-  // this field stays purely for settings.json/web-sync compatibility, mirroring
-  // its prior life on CrossPointSettings.
+  // Apps -> News: pins the News tile, which syncs RSS/Atom feeds over WiFi and
+  // reads them offline. The name and JSON key predate that rewrite and are kept
+  // for settings.json and web-sync compatibility.
   uint8_t rssEnabled = 1;
 
   // Settings -> Apps -> Games: pins a synthetic "Games" tile that opens a

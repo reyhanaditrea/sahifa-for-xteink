@@ -19,6 +19,7 @@
 #include "apps/AppsActivity.h"
 #include "apps/DictionaryActivity.h"
 #include "apps/GymActivity.h"
+#include "apps/NewsActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/FouladQrLoginActivity.h"
@@ -301,23 +302,9 @@ void ActivityManager::goToFouladEbooks() {
 }
 
 void ActivityManager::goToNews() {
-  // News is the same browser pointed at a different root, not a second browser:
-  // the feed is ordinary OPDS, so listing, downloading, the 401-to-QR path and the
-  // WiFi handling all come free. Only the empty state differs, and the activity
-  // decides that from the URL (EINK_NEWS_TASKS.md §2).
-  const auto& servers = OPDS_STORE.getServers();
-  const auto it = std::find_if(servers.begin(), servers.end(),
-                               [](const OpdsServer& server) { return server.url == FOULAD_EBOOKS_URL; });
-  if (it == servers.end()) {
-    // Not paired. The QR screen is the correct News state too, per §2 -- same
-    // credential, same pairing, so there is nothing News-specific to sign in to.
-    replaceActivity(std::make_unique<FouladQrLoginActivity>(renderer, mappedInput));
-    return;
-  }
-  OpdsServer news = *it;
-  news.url = FOULAD_EBOOKS_NEWS_URL;
-  news.name = tr(STR_NEWS);
-  replaceActivity(std::make_unique<OpdsBookBrowserActivity>(renderer, mappedInput, std::move(news)));
+  // The News reader owns its own feeds and cache on SD; nothing here needs an
+  // account or a server, so this is a plain replaceActivity.
+  replaceActivity(std::make_unique<NewsActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {

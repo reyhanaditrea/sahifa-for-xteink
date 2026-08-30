@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #ffffff; color: #000000; }
+    a { color: #000000; } a:hover { color: #000000; }
+    .key { width: 40px; height: 34px; border: 1.5px solid #000; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; box-sizing: border-box; }
+    .key.wide { width: 86px; }
+    .krow { display: flex; gap: 6px; justify-content: center; }
+  </style>
+</helmet>
+<div style="width: 528px; height: 792px; background: #ffffff; position: relative; overflow: hidden;">
+  <div style="position: absolute; top: 5px; left: 0; width: 528px; height: 45px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.02em;">08:14</div>
+    <div style="font-size: 16px; font-weight: 700;">Add feed</div>
+    <div style="display: flex; align-items: center; gap: 3px;">
+      <div style="width: 15px; height: 12px; border: 1.5px solid #000; box-sizing: border-box; padding: 1.5px;"><div style="width: 70%; height: 100%; background: #000;"></div></div>
+      <div style="width: 2px; height: 5px; background: #000;"></div>
+    </div>
+  </div>
+  <div style="position: absolute; top: 50px; left: 0; width: 528px; height: 2px; background: #000;"></div>
+
+  <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 20px; box-sizing: border-box;">
+    <div style="font-size: 13px; font-weight: 500; margin: 8px 0 6px;">Site or feed URL</div>
+    <div style="height: 44px; border: 2px solid #000; display: flex; align-items: center; padding: 0 10px; font-size: 15px; font-weight: 500; box-sizing: border-box;">blog.arduino.cc<span style="display: inline-block; width: 2px; height: 20px; background: #000; margin-left: 2px;"></span></div>
+    <div style="font-size: 11px; font-weight: 500; margin: 6px 0 0;">Paste the site address. The feed is found for you.</div>
+
+    <div style="margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px;">
+      <div class="krow"><div class="key">q</div><div class="key">w</div><div class="key">e</div><div class="key">r</div><div class="key">t</div><div class="key">y</div><div class="key">u</div><div class="key">i</div><div class="key">o</div><div class="key">p</div></div>
+      <div class="krow"><div class="key">a</div><div class="key">s</div><div class="key">d</div><div class="key">f</div><div class="key">g</div><div class="key">h</div><div class="key">j</div><div class="key">k</div><div class="key">l</div></div>
+      <div class="krow"><div class="key">z</div><div class="key">x</div><div class="key">c</div><div class="key">v</div><div class="key">b</div><div class="key">n</div><div class="key">m</div><div class="key">.</div><div class="key">-</div></div>
+      <div class="krow"><div class="key wide">https://</div><div class="key wide">.com</div><div class="key wide">/</div><div class="key wide">Del</div><div class="key wide" style="background: #000; color: #fff;">Done</div></div>
+    </div>
+  </div>
+
+  <div style="position: absolute; bottom: 0; left: 0; width: 528px; height: 40px; border-top: 2px solid #000; display: flex; align-items: center; justify-content: space-around; padding: 0 20px; box-sizing: border-box; font-size: 11px; font-weight: 500;">
+    <div>Cancel</div><div>Type</div><div>&#8592;</div><div>&#8594;</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
