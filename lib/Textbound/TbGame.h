@@ -60,9 +60,12 @@ class Game {
     uint8_t recent[4] = {NONE, NONE, NONE, NONE};
     uint8_t pendingSkill = NONE;  // waiting for P_REPLACE_PICK
     uint8_t pendingItem = NONE;   // waiting for P_DROP_PICK
-    uint8_t pendingPerk = 0;      // a perk offer is owed once combat clears
-    uint8_t bossPending = 0;      // the next room is this depth's boss landing
-    uint8_t firstTurn = 0;        // Backstab only lands on the fight's opener
+    // What is still on the floor of a loot pile: handed over one at a time, so
+    // a full pack can interrupt the pickup and resume after the drop screen.
+    uint8_t loot[3] = {NONE, NONE, NONE};
+    uint8_t pendingPerk = 0;  // a perk offer is owed once combat clears
+    uint8_t bossPending = 0;  // the next room is this depth's boss landing
+    uint8_t firstTurn = 0;    // Backstab only lands on the fight's opener
     uint8_t guard = 0, rally = 0, stunned = 0;
   };
 
@@ -175,6 +178,13 @@ class Game {
   bool giveItem(uint8_t itemId);  // false when the pack is full (opens DropPick)
   void consumeItem(uint8_t itemId);
   uint8_t drawItem(uint8_t depth);
+  // Draws up to `wanted` DIFFERENT items and returns how many it managed; a
+  // chest never offers the same thing twice.
+  uint8_t drawItems(uint8_t depth, uint8_t* out, uint8_t wanted);
+  void openChest();
+  void takeLoot();
+  // Hands over the next item of a loot pile, or moves on when it is empty.
+  void continueLoot();
   uint8_t drawMonster(uint8_t depth);
   int freeInvSlot() const;
   int invCount() const;

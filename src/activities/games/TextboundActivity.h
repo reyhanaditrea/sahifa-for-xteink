@@ -27,11 +27,16 @@ class TextboundActivity final : public Activity {
  private:
   enum class Mode : uint8_t { Title, Playing, Paused };
   enum TitleRow : uint8_t { TITLE_NEW = 0, TITLE_CONTINUE };
+  // The run is written to the card after every action, so "save and exit" only
+  // has to leave; it is spelled out because "back out and it is gone" is what
+  // players assume otherwise.
+  enum PauseRow : uint8_t { PAUSE_RESUME = 0, PAUSE_SAVE_EXIT, PAUSE_ABANDON, PAUSE_ROW_COUNT };
 
   void startNewRun();
   void continueRun();
   void activateRow();
   void openPause();
+  void saveAndExit();
   void abandonRun();
   void afterAction();  // repaginate, clamp the cursor, persist, redraw
   void paginate();

@@ -21,7 +21,8 @@ enum Effect : uint8_t {
   EF_FIGHT,         // arg = monster id
   EF_FIGHT_RANDOM,  // monster drawn from the depth band
   EF_BOSS,          // the depth's boss
-  EF_CHEST,         // pick 1 of 2 items
+  EF_CHEST,         // pick one of the things in it (1-3, sometimes nothing)
+  EF_LOOT,          // take everything found; the pile is 0-3 things
   EF_GOLD_GAIN,     // arg gold
   EF_GOLD_LOSS,
   EF_HEAL,    // arg HP
@@ -227,7 +228,7 @@ inline constexpr RoomTemplate kRooms[] = {
      4,
      1,
      10,
-     8},
+     5},
 
     {"A long hall of pillars, half of them fallen. Between two of them a merchant has set out a cloth, and on it a "
      "lamp and a few things worth carrying. He does not look up.",
@@ -237,7 +238,7 @@ inline constexpr RoomTemplate kRooms[] = {
      3,
      2,
      10,
-     8},
+     6},
 
     {"A chest sits alone in the middle of a swept floor. The sweeping is the part you do not like.",
      {{"Open it", EF_CHEST, 0}, {"Leave it alone", EF_EXPLORE, 0}},
@@ -343,6 +344,88 @@ inline constexpr RoomTemplate kRooms[] = {
      6,
      10,
      6},
+
+    {"Someone else got this far. He is sitting with his back to the wall, and his pack is still on.",
+     {{"Search him", EF_LOOT, 0}, {"Say something over him", EF_HEAL, 3}, {"Walk past", EF_EXPLORE, 0}},
+     3,
+     1,
+     10,
+     8},
+
+    {"Part of the ceiling came down here, a long time ago, on top of whatever was underneath it.",
+     {{"Dig through the rubble", EF_LOOT, 0},
+      {"Squeeze past the slab", EF_DAMAGE, 3},
+      {"Find another way", EF_EXPLORE, 0}},
+     3,
+     1,
+     6,
+     7},
+
+    {"Pale mushrooms grow out of the wall in a long shelf, each one turned to face the corridor.",
+     {{"Eat one", EF_HEAL, 5}, {"Fill your pockets", EF_LOOT, 0}, {"Leave them", EF_EXPLORE, 0}},
+     3,
+     1,
+     5,
+     6},
+
+    {"A nest of chewed rope and bone, still warm, with something small and bright half buried in it.",
+     {{"Take what is shining", EF_FIGHT_RANDOM, 0}, {"Back out quietly", EF_EXPLORE, 0}},
+     2,
+     1,
+     6,
+     7},
+
+    {"A crack in the wall with cold air coming through it, and behind it the sound of a much larger room.",
+     {{"Widen it and go through", EF_EXPLORE, 0},
+      {"Listen a while longer", EF_NOTHING, 0},
+      {"Take the steps down", EF_DESCEND, 0}},
+     3,
+     1,
+     10,
+     6},
+
+    {"A rope bridge over a gap you cannot see the bottom of. Two of the boards are missing, and one is new.",
+     {{"Cross carefully", EF_EXPLORE, 0},
+      {"Take the stair under it", EF_DESCEND, 0},
+      {"Climb down the ropes instead", EF_DAMAGE, 4}},
+     3,
+     2,
+     8,
+     7},
+
+    {"A man behind a grate, thin as the bars. \"Coin,\" he says. \"Or water. Or nothing. I have had nothing before.\"",
+     {{"Give him coin", EF_GOLD_LOSS, 10},
+      {"Sit with him a while", EF_REST, 7},
+      {"Ask him about the stair", EF_DESCEND, 0}},
+     3,
+     2,
+     9,
+     6},
+
+    {"A gallery of statues, all of them facing the wall. One is holding something behind its back.",
+     {{"Take it from the statue", EF_CHEST, 0},
+      {"Turn a statue around", EF_FIGHT_RANDOM, 0},
+      {"Keep walking", EF_EXPLORE, 0}},
+     3,
+     3,
+     10,
+     6},
+
+    {"A wheel the height of two men turns in a dry channel, driving nothing. Coins have been wedged into its teeth.",
+     {{"Prise the coins out", EF_GOLD_GAIN, 16},
+      {"Jam the wheel", EF_DAMAGE, 4},
+      {"Follow the channel down", EF_DESCEND, 0}},
+     3,
+     4,
+     10,
+     6},
+
+    {"A pit of the dead: orderly, layered, and picked over already, though not all the way down.",
+     {{"Go down into it", EF_LOOT, 0}, {"Burn what you can reach", EF_CURSE, 0}, {"Skirt the edge", EF_EXPLORE, 0}},
+     3,
+     5,
+     10,
+     7},
 };
 constexpr uint8_t ROOM_COUNT = sizeof(kRooms) / sizeof(kRooms[0]);
 

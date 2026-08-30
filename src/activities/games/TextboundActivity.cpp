@@ -84,6 +84,11 @@ void TextboundActivity::continueRun() {
   afterAction();
 }
 
+void TextboundActivity::saveAndExit() {
+  persist();
+  finish();
+}
+
 void TextboundActivity::abandonRun() {
   recordFinishedRun();
   game_->reset();
@@ -103,7 +108,7 @@ void TextboundActivity::persist() {
   if (mode_ == Mode::Title) return;
   if (game_->runActive()) {
     char save[tb::Game::MAX_SAVE_LENGTH + 1];
-    if (game_->toSaveString(save, sizeof(save)) > 0) TEXTBOUND_STORE.saveRun(save);
+    if (game_->toSaveString(save, sizeof(save)) > 0) TEXTBOUND_STORE.saveRun(save, game_->state().depth);
     return;
   }
   // Dead or escaped: the record is written once, and the run stops being resumable.
@@ -137,7 +142,7 @@ std::string TextboundActivity::listRowText(int index) const {
     if (index == TITLE_NEW) return tr(STR_TB_NEW_RUN);
     char label[64];
     snprintf(label, sizeof(label), "%s (%s %u)", tr(STR_TB_CONTINUE), tr(STR_TB_DEPTH),
-             static_cast<unsigned>(TEXTBOUND_STORE.getBestDepth()));
+             static_cast<unsigned>(TEXTBOUND_STORE.getSavedDepth()));
     return std::string(label);
   }
   char label[96];
@@ -153,11 +158,17 @@ bool TextboundActivity::listRowDimmed(int index) const {
 
 void TextboundActivity::activateRow() {
   if (mode_ == Mode::Paused) {
-    if (pauseSelected_ == 0) {
-      mode_ = Mode::Playing;
-      requestUpdate();
-    } else {
-      abandonRun();
+    switch (pauseSelected_) {
+      case PAUSE_RESUME:
+        mode_ = Mode::Playing;
+        requestUpdate();
+        break;
+      case PAUSE_SAVE_EXIT:
+        saveAndExit();
+        break;
+      default:
+        abandonRun();
+        break;
     }
     return;
   }
@@ -207,7 +218,7 @@ void TextboundActivity::loop() {
   }
   if (!mappedInput.isPressed(MappedInputManager::Button::Back)) backHandled_ = false;
 
-  const int rows = (mode_ == Mode::Paused) ? 2 : listRowCount();
+  const int rows = (mode_ == Mode::Paused) ? PAUSE_ROW_COUNT : listRowCount();
   buttonNavigator_.onScrollNextRelease([this, rows] {
     int& cursor = (mode_ == Mode::Paused) ? pauseSelected_ : selected_;
     cursor = ButtonNavigator::nextIndex(cursor, rows);
@@ -402,15 +413,28 @@ void TextboundActivity::render(RenderLock&&) {
   }
 
   if (mode_ == Mode::Paused) {
+    // Title, then the rows, then the same gap under the last row as above the
+    // first one -- otherwise the bottom row sits right on the frame.
     const int popupWidth = std::min(pageWidth - 4 * metrics.contentSidePadding, 320);
-    const int popupHeight = 2 * rowStep + metrics.headerHeight;
+    const int listBlock = PAUSE_ROW_COUNT * rowStep;
+    const int popupHeight = metrics.headerHeight + listBlock + 2 * metrics.verticalSpacing;
     const Rect popup{(pageWidth - popupWidth) / 2, (pageHeight - popupHeight) / 2, popupWidth, popupHeight};
     renderer.fillRect(popup.x, popup.y, popup.width, popup.height, false);
     renderer.drawRect(popup.x, popup.y, popup.width, popup.height, 2, true);
     UITheme::drawCenteredText(renderer, popup, UI_12_FONT_ID, popup.y + metrics.verticalSpacing, tr(STR_PAUSED), true,
                               EpdFontFamily::BOLD);
-    GUI.drawList(renderer, Rect{popup.x, popup.y + metrics.headerHeight, popup.width, 2 * rowStep}, 2, pauseSelected_,
-                 [](int index) { return std::string(index == 0 ? tr(STR_RESUME) : tr(STR_TB_ABANDON)); });
+    GUI.drawList(renderer,
+                 Rect{popup.x, popup.y + metrics.headerHeight + metrics.verticalSpacing, popup.width, listBlock},
+                 PAUSE_ROW_COUNT, pauseSelected_, [](int index) {
+                   switch (index) {
+                     case PAUSE_RESUME:
+                       return std::string(tr(STR_RESUME));
+                     case PAUSE_SAVE_EXIT:
+                       return std::string(tr(STR_TB_SAVE_EXIT));
+                     default:
+                       return std::string(tr(STR_TB_ABANDON));
+                   }
+                 });
   }
 
   const char* pagePrev = pageCount() > 1 ? tr(STR_TB_PAGE_PREV) : "";

@@ -48,7 +48,8 @@ enum Field {
   F_GUARD,
   F_RALLY,
   F_STUNNED,
-  F_COUNT,
+  F_LOOT0,
+  F_COUNT = F_LOOT0 + 3,
 };
 
 std::vector<std::string> split(const std::string& text) {
@@ -98,6 +99,20 @@ Game crafted(const std::vector<std::pair<int, int>>& overrides, uint8_t classId 
   Game loaded;
   EXPECT_TRUE(loaded.fromSaveString(join(parts).c_str()));
   return loaded;
+}
+
+// The first room template whose choice `out` runs the given effect.
+int roomWithEffect(uint8_t effect, int* out) {
+  for (uint8_t i = 0; i < tb::ROOM_COUNT; i++) {
+    for (uint8_t c = 0; c < tb::kRooms[i].choiceCount; c++) {
+      if (tb::kRooms[i].choices[c].effect == effect) {
+        *out = c;
+        return i;
+      }
+    }
+  }
+  *out = 0;
+  return -1;
 }
 
 int rowWith(const Game& game, const char* prefix) {
@@ -476,39 +491,152 @@ TEST(TextboundSkills, UnburdenTradesASkillForMaxHp) {
 
 // ------------------------------------------------------------------ items
 
-TEST(TextboundItems, ChestOffersTwoAndTakesOne) {
-  Game game = crafted({{F_PHASE, Game::P_ROOM}, {F_ROOM, 3}, {F_DEPTH, 3}});
-  game.pick(0);  // "Open it"
-  ASSERT_EQ(game.phase(), Game::P_CHEST_PICK);
-  ASSERT_EQ(game.rowCount(), 3);  // two items plus "take neither"
-  game.pick(2);
-  EXPECT_EQ(game.phase(), Game::P_ROOM);
+TEST(TextboundItems, ChestHoldsBetweenNothingAndThreeDifferentThings) {
+  int empty = 0;
+  int stocked = 0;
+  int sizes[4] = {0, 0, 0, 0};
+  for (uint32_t seed = 1; seed <= 200; seed++) {
+    Game game = crafted({{F_PHASE, Game::P_ROOM}, {F_ROOM, 3}, {F_DEPTH, 3}}, 0, seed);
+    game.pick(0);  // "Open it"
+    if (game.phase() != Game::P_CHEST_PICK) {
+      EXPECT_EQ(game.phase(), Game::P_ROOM) << "an empty chest just moves on";
+      empty++;
+      continue;
+    }
+    stocked++;
+    const int items = game.rowCount() - 1;  // the last row is "take neither"
+    ASSERT_GE(items, 1);
+    ASSERT_LE(items, 3);
+    sizes[items]++;
+    for (int a = 0; a < items; a++) {
+      for (int b = a + 1; b < items; b++) {
+        EXPECT_NE(game.state().offer[a], game.state().offer[b]) << "a chest offered the same item twice";
+      }
+    }
+    game.pick(items);  // take neither
+    EXPECT_EQ(game.phase(), Game::P_ROOM);
+  }
+  EXPECT_GT(empty, 0) << "a chest should sometimes be empty";
+  EXPECT_GT(stocked, empty);
+  EXPECT_GT(sizes[1], 0);
+  EXPECT_GT(sizes[2], 0);
+  EXPECT_GT(sizes[3], 0);
+}
+
+TEST(TextboundItems, ShopStockIsThreeDifferentThings) {
+  for (uint32_t seed = 1; seed <= 60; seed++) {
+    Game game = crafted({{F_PHASE, Game::P_ROOM}, {F_ROOM, 2}, {F_DEPTH, 5}, {F_GOLD, 300}}, 0, seed);
+    game.pick(0);  // "Look over the cloth"
+    ASSERT_EQ(game.phase(), Game::P_SHOP);
+    const tb::Game::State& s = game.state();
+    EXPECT_NE(s.offer[0], s.offer[1]);
+    EXPECT_NE(s.offer[0], s.offer[2]);
+    EXPECT_NE(s.offer[1], s.offer[2]);
+  }
+}
+
+TEST(TextboundItems, LootPileHandsOverEverythingItFinds) {
+  int choice = 0;
+  const int roomIdx = roomWithEffect(tb::EF_LOOT, &choice);
+  ASSERT_GE(roomIdx, 0);
+
+  int empty = 0;
+  int multiple = 0;
+  for (uint32_t seed = 1; seed <= 120; seed++) {
+    Game game = crafted({{F_PHASE, Game::P_ROOM},
+                         {F_ROOM, roomIdx},
+                         {F_DEPTH, 4},
+                         {F_INV0, tb::NONE},
+                         {F_INV0 + 1, tb::NONE},
+                         {F_INV0 + 2, tb::NONE},
+                         {F_INV0 + 3, tb::NONE},
+                         {F_INV0 + 4, tb::NONE},
+                         {F_INV0 + 5, tb::NONE}},
+                        0, seed);
+    game.pick(choice);
+    // The pack was empty, so nothing can have stalled on the drop screen.
+    ASSERT_EQ(game.phase(), Game::P_ROOM);
+    int carried = 0;
+    for (uint8_t slot : game.state().inv)
+      if (slot != tb::NONE) carried++;
+    if (carried == 0) empty++;
+    if (carried > 1) multiple++;
+    for (uint8_t slot : game.state().loot) EXPECT_EQ(slot, tb::NONE) << "the pile should be cleared out";
+  }
+  EXPECT_GT(empty, 0) << "searching should sometimes turn up nothing";
+  EXPECT_GT(multiple, 0) << "searching should sometimes turn up more than one thing";
+}
+
+TEST(TextboundItems, LootPileResumesAfterTheDropScreen) {
+  int choice = 0;
+  const int roomIdx = roomWithEffect(tb::EF_LOOT, &choice);
+  ASSERT_GE(roomIdx, 0);
+
+  bool sawSecondDrop = false;
+  for (uint32_t seed = 1; seed <= 200 && !sawSecondDrop; seed++) {
+    Game game = crafted({{F_PHASE, Game::P_ROOM},
+                         {F_ROOM, roomIdx},
+                         {F_DEPTH, 4},
+                         {F_INV0, 0},
+                         {F_INV0 + 1, 0},
+                         {F_INV0 + 2, 0},
+                         {F_INV0 + 3, 0},
+                         {F_INV0 + 4, 0},
+                         {F_INV0 + 5, 0}},
+                        0, seed);
+    game.pick(choice);
+    if (game.phase() != Game::P_DROP_PICK) continue;
+    // Refuse the first one; whatever else was in the pile must still be offered.
+    const bool moreInThePile =
+        game.state().loot[0] != tb::NONE || game.state().loot[1] != tb::NONE || game.state().loot[2] != tb::NONE;
+    game.pick(game.rowCount() - 1);  // "keep what I have"
+    if (!moreInThePile) {
+      EXPECT_EQ(game.phase(), Game::P_ROOM);
+      continue;
+    }
+    EXPECT_TRUE(game.phase() == Game::P_DROP_PICK || game.phase() == Game::P_ROOM);
+    if (game.phase() == Game::P_DROP_PICK) sawSecondDrop = true;
+  }
+  EXPECT_TRUE(sawSecondDrop) << "a pack-filling pile should keep asking";
 }
 
 TEST(TextboundItems, FullPackAsksWhatToDrop) {
-  Game game = crafted({{F_PHASE, Game::P_ROOM},
-                       {F_ROOM, 3},
-                       {F_DEPTH, 3},
-                       {F_INV0, 0},
-                       {F_INV0 + 1, 0},
-                       {F_INV0 + 2, 0},
-                       {F_INV0 + 3, 0},
-                       {F_INV0 + 4, 0},
-                       {F_INV0 + 5, 0}});
-  game.pick(0);
-  ASSERT_EQ(game.phase(), Game::P_CHEST_PICK);
-  const uint8_t offered = game.state().offer[0];
-  game.pick(0);
-  if (tb::itemGoesInPack(tb::kItems[offered].kind)) {
+  bool checked = false;
+  for (uint32_t seed = 1; seed <= 40 && !checked; seed++) {
+    Game game = crafted({{F_PHASE, Game::P_ROOM},
+                         {F_ROOM, 3},
+                         {F_DEPTH, 3},
+                         {F_INV0, 0},
+                         {F_INV0 + 1, 0},
+                         {F_INV0 + 2, 0},
+                         {F_INV0 + 3, 0},
+                         {F_INV0 + 4, 0},
+                         {F_INV0 + 5, 0}},
+                        0, seed);
+    game.pick(0);
+    if (game.phase() != Game::P_CHEST_PICK) continue;  // this chest was empty
+    const uint8_t offered = game.state().offer[0];
+    if (!tb::itemGoesInPack(tb::kItems[offered].kind)) continue;  // tools never need a slot
+    game.pick(0);
     ASSERT_EQ(game.phase(), Game::P_DROP_PICK);
     EXPECT_EQ(game.rowCount(), 7);  // six slots plus "keep what I have"
     game.pick(0);
     EXPECT_EQ(game.state().inv[0], offered);
     EXPECT_EQ(game.phase(), Game::P_ROOM);
-  } else {
-    // Tools are used on pickup and never need a slot.
-    EXPECT_EQ(game.phase(), Game::P_ROOM);
+    checked = true;
   }
+  EXPECT_TRUE(checked);
+}
+
+TEST(TextboundSave, ARunSavedBeforeLootPilesStillLoads) {
+  const Game game = freshRun(1, 999);
+  std::vector<std::string> parts = split(saveOf(game));
+  ASSERT_EQ(parts.size(), static_cast<size_t>(F_COUNT));
+  parts.resize(F_LOOT0);  // exactly what the previous build wrote
+  Game loaded;
+  ASSERT_TRUE(loaded.fromSaveString(join(parts).c_str()));
+  EXPECT_EQ(loaded.state().depth, game.state().depth);
+  for (uint8_t slot : loaded.state().loot) EXPECT_EQ(slot, tb::NONE);
 }
 
 TEST(TextboundItems, VialIdentityIsFixedForTheWholeRun) {
@@ -643,7 +771,10 @@ TEST(TextboundContent, EveryDepthHasSomethingToDrawFrom) {
     for (uint8_t i = 0; i < tb::ROOM_COUNT; i++) {
       if (tb::kRooms[i].weight > 0 && tb::kRooms[i].minDepth <= depth && tb::kRooms[i].maxDepth >= depth) rooms++;
     }
-    EXPECT_GE(rooms, 5) << "depth " << static_cast<int>(depth);
+    // The generator remembers the last four templates, so a pool anywhere near
+    // that size turns into a forced rotation -- which is what made early depths
+    // feel repetitive.
+    EXPECT_GE(rooms, 10) << "depth " << static_cast<int>(depth);
 
     int monsters = 0;
     for (uint8_t i = 0; i < tb::MONSTER_COUNT; i++) {
