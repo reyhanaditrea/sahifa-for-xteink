@@ -146,6 +146,7 @@ class ActivityManager {
   // Apps -> News: the OPDS browser rooted at the account's feed subscriptions.
   void goToNews();
   void goToGym();
+  void goToPrayer();
   void goToDictionary();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);

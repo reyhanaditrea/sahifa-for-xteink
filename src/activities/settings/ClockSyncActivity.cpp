@@ -35,7 +35,7 @@ void ClockSyncActivity::onExit() {
   if (shouldTearDownWifiOnExit && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
+    restartOnExit();
   }
 }
 
@@ -64,7 +64,11 @@ void ClockSyncActivity::runSync() {
     return;
   }
 
-  const bool ok = halClock.syncFromNTP();
+  // Without an RTC there is nothing to write the time into, but the system
+  // clock still needs setting -- it is what dates every screen that shows a
+  // date, and on this hardware it does not survive a reboot. Reporting a
+  // failure there was wrong: the sync that matters had succeeded.
+  const bool ok = halClock.isAvailable() ? halClock.syncFromNTP() : HalClock::quickSyncSystemTime();
   if (!ok) {
     state = FAILED;
     requestUpdate();

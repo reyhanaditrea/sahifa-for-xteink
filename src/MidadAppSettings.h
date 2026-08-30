@@ -76,6 +76,31 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
   enum GYM_WEIGHT_UNIT { GYM_WEIGHT_KG = 0, GYM_WEIGHT_LB = 1, GYM_WEIGHT_UNIT_COUNT };
   uint8_t gymWeightUnit = GYM_WEIGHT_KG;
 
+  // Settings -> Apps -> Prayer Times: pins a "Prayer Times" tile that opens
+  // PrayerActivity: today's timings, computed on the device from the city.
+  uint8_t prayerEnabled = 1;
+  // Index into PrayerMethods' table; 0 = Auto (resolved from prayerCountryIso).
+  uint8_t prayerMethod = 0;
+  // Which school's Asr the app shows: 0 = Auto (Hanafi where that is the
+  // prevailing school, majority position elsewhere), 1 = Standard
+  // (Shafi/Maliki/Hanbali), 2 = Hanafi. Not part of the method: every
+  // authority in the list publishes both, and a Hanafi user in a country
+  // whose ministry prints the majority time still wants the Hanafi one.
+  uint8_t prayerAsrSchool = 0;
+  // Chosen location -- the only thing the app needs, since the timings are
+  // computed from it (src/prayer/PrayerCalc.h) rather than fetched.
+  // prayerCountryIso is "" while nothing is chosen; the
+  // custom-coordinates pseudo-country stores "XX". prayerHasCity flips once a
+  // city (or a custom coordinate pair) is set, which is what the timings need.
+  // Coordinates are hundredths of a degree, matching the city table
+  // (src/prayer/PrayerCityTable.h) so a picked city round-trips exactly.
+  char prayerCountryIso[3] = "";
+  uint8_t prayerHasCity = 0;
+  int32_t prayerLatE2 = 0;
+  int32_t prayerLngE2 = 0;
+  char prayerCityName[32] = "";
+  static constexpr const char* PRAYER_CUSTOM_ISO = "XX";
+
   // Settings -> Apps -> Debug: gates whether ANY diagnostic entries get
   // written to the single shared SD log (see src/util/DebugLogging.h). Off by
   // default. Does NOT gate crash_report.txt (HalSystem::checkPanic) -- that's

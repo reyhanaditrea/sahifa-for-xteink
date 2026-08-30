@@ -3,13 +3,63 @@
 #include <Logging.h>
 #include <WiFi.h>
 #include <esp_sntp.h>
+#include <sys/time.h>
 #include <time.h>
 
 HalClock halClock;  // Singleton instance
 
+namespace {
+// Civil date (UTC) -> Unix epoch. Howard Hinnant's days_from_civil, the same
+// public-domain algorithm src/util/TimeUtils.cpp uses -- copied rather than
+// shared because this is the HAL and must not reach up into the app.
+//
+// mktime() would read the fields through whatever TZ is set, which at this point
+// in boot is nothing in particular, and newlib here has no timegm().
+time_t epochFromUtc(const Rtc::DateTime& dt) {
+  int year = static_cast<int>(dt.year) - (dt.month <= 2 ? 1 : 0);
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(year - era * 400);
+  const unsigned doy = (153U * (dt.month + (dt.month > 2 ? -3U : 9U)) + 2U) / 5U + dt.day - 1U;
+  const unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
+  const int64_t days = static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+  return static_cast<time_t>(days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second);
+}
+}  // namespace
+
 void HalClock::begin() {
   _available = _sdkRtc.begin();
   LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
+  restoreSystemTimeFromRTC();
+}
+
+// The RTC keeps running across a reboot; the system clock does not. Without this the
+// date is back to 1970 on every boot until something reaches WiFi, which is what makes
+// a synced clock look unsynced -- and it silently fails mbedTLS certificate validation
+// on every HTTPS request until then. Cheap enough to do unconditionally at boot: one
+// I2C read of a chip we have just probed.
+void HalClock::restoreSystemTimeFromRTC() {
+  if (!_available || isSystemTimeValid()) return;
+
+  Rtc::DateTime dt;
+  if (!_sdkRtc.now(dt)) return;  // absent, or oscillator stopped -- nothing trustworthy in there
+
+  const time_t epoch = epochFromUtc(dt);
+
+  // A device last synced by firmware that wrote only hour/minute is still ticking, but
+  // stamped year 2000. Its time-of-day is right and the status bar has always shown it;
+  // its date is not, so it must not reach anything that dates a file or checks a
+  // certificate. Leaving the system clock invalid keeps the existing NTP-on-connect
+  // path firing, which repairs the RTC date on the next sync.
+  if (epoch < MIN_PLAUSIBLE_EPOCH) {
+    LOG_INF("CLK", "RTC has no calendar date (year %u), leaving system time unset", static_cast<unsigned>(dt.year));
+    return;
+  }
+
+  const timeval tv = {epoch, 0};
+  settimeofday(&tv, nullptr);
+  LOG_INF("CLK", "System time restored from RTC: %04u-%02u-%02u %02u:%02u:%02u UTC", static_cast<unsigned>(dt.year),
+          static_cast<unsigned>(dt.month), static_cast<unsigned>(dt.day), static_cast<unsigned>(dt.hour),
+          static_cast<unsigned>(dt.minute), static_cast<unsigned>(dt.second));
 }
 
 bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
@@ -75,19 +125,26 @@ bool HalClock::syncFromNTP() {
   struct tm timeinfo;
   gmtime_r(&now, &timeinfo);
 
-  if (writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
-    LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  // The whole date, not just the time of day: it is what lets the next boot restore the
+  // system clock from the RTC instead of needing WiFi again.
+  Rtc::DateTime dt;
+  dt.year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
+  dt.month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
+  dt.day = static_cast<uint8_t>(timeinfo.tm_mday);
+  dt.weekday = static_cast<uint8_t>(timeinfo.tm_wday);
+  dt.hour = static_cast<uint8_t>(timeinfo.tm_hour);
+  dt.minute = static_cast<uint8_t>(timeinfo.tm_min);
+  dt.second = static_cast<uint8_t>(timeinfo.tm_sec);
+
+  if (writeTimeToRTC(dt)) {
+    LOG_INF("CLK", "RTC set to %04d-%02d-%02d %02d:%02d:%02d UTC", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1,
+            timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     return true;
   }
   return false;
 }
 
-bool HalClock::isSystemTimeValid() {
-  // Jan 1 2024 00:00:00 UTC -- comfortably before this feature existed, comfortably
-  // after the ESP-IDF post-boot default (epoch 0) and any unsynced-clock artifact.
-  constexpr time_t MIN_PLAUSIBLE_EPOCH = 1704067200;
-  return time(nullptr) >= MIN_PLAUSIBLE_EPOCH;
-}
+bool HalClock::isSystemTimeValid() { return time(nullptr) >= MIN_PLAUSIBLE_EPOCH; }
 
 bool HalClock::quickSyncSystemTime() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -117,18 +174,11 @@ void HalClock::stopSntp() {
   }
 }
 
-bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
-  // DS3231 on this board only ever surfaces hour/minute back out (see getTime()) --
-  // the date fields keep DateTime's harmless in-struct defaults (Rtc.h) rather than
-  // being derived from the synced calendar date, since nothing here reads them back.
-  Rtc::DateTime dt;
-  dt.hour = hour;
-  dt.minute = minute;
-  dt.second = second;
+bool HalClock::writeTimeToRTC(const Rtc::DateTime& dt) {
   if (!_sdkRtc.set(dt)) return false;
   _lastPollMs = 0;
-  _cachedHour = hour;
-  _cachedMinute = minute;
+  _cachedHour = dt.hour;
+  _cachedMinute = dt.minute;
   _hasCachedTime = true;
   return true;
 }

@@ -13,6 +13,17 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
         MIDAD_APP_SETTINGS.saveToFile();
       },
       "quranEnabled", StrId::STR_CAT_APPS));
+  // Prayer Times toggle only. The calculation method and the Asr school are on
+  // the app's own screen next to the times they change -- see PrayerActivity's
+  // Row enum. Both are still written to settings.json under the same keys, so
+  // the Midad app keeps syncing them.
+  appsSettings.push_back(SettingInfo::DynamicToggle(
+      StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
+      [](uint8_t val) {
+        MIDAD_APP_SETTINGS.prayerEnabled = val;
+        MIDAD_APP_SETTINGS.saveToFile();
+      },
+      "prayerEnabled", StrId::STR_CAT_APPS));
   // Games toggle: pins a "Games" tile in My Books that opens a Snake/Tetris
   // picker. No extraction step needed -- unlike Quran, nothing but the
   // toggle itself is required.

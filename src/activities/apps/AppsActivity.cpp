@@ -14,6 +14,7 @@
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/apps/GymActivity.h"
+#include "activities/apps/PrayerActivity.h"
 #include "activities/apps/StopwatchActivity.h"
 #include "activities/apps/TasbihActivity.h"
 #include "activities/games/GamesMenuActivity.h"
@@ -24,6 +25,7 @@
 #include "components/icons/appgames72.h"
 #include "components/icons/appgym72.h"
 #include "components/icons/apppomodoro72.h"
+#include "components/icons/appprayer72.h"
 #include "components/icons/appquran72.h"
 #include "components/icons/appstopwatch72.h"
 #include "components/icons/apptasbih72.h"
@@ -53,6 +55,9 @@ constexpr int TILE_BORDER = 2;
 const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
   // Files first (it gave up its own Home slot for this screen), then the apps in
   // the order they were introduced, which is also roughly how much they get used.
+  // The exception is Prayer Times, which sits with the Quran rather than at the
+  // end: the two belong together, and Settings -> Apps lists them in this same
+  // order (see appendMidadAppSettings) so the two screens agree.
   // Quran carries no toggle here on purpose -- see launch() for why it is the one
   // app that cannot simply be switched on.
   // Setter lambdas save immediately (same convention as SettingInfo::DynamicToggle
@@ -63,6 +68,11 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
       {AppId::Quran, StrId::STR_QURAN, [] { return MIDAD_APP_SETTINGS.quranEnabled; },
        [](uint8_t v) {
          MIDAD_APP_SETTINGS.quranEnabled = v;
+         MIDAD_APP_SETTINGS.saveToFile();
+       }},
+      {AppId::Prayer, StrId::STR_PRAYER_TIMES, [] { return MIDAD_APP_SETTINGS.prayerEnabled; },
+       [](uint8_t v) {
+         MIDAD_APP_SETTINGS.prayerEnabled = v;
          MIDAD_APP_SETTINGS.saveToFile();
        }},
       {AppId::Games, StrId::STR_GAMES, [] { return MIDAD_APP_SETTINGS.gamesEnabled; },
@@ -121,6 +131,7 @@ const uint8_t* AppsActivity::iconFor(const AppId id) {
       AppPomodoro72Icon,   // Pomodoro
       AppGym72Icon,        // Gym
       AppBle72Icon,        // MidadBle
+      AppPrayer72Icon,     // Prayer
   };
   const size_t index = static_cast<size_t>(id);
   return index < std::size(ICONS) ? ICONS[index] : nullptr;
@@ -220,6 +231,9 @@ bool AppsActivity::launch(const AppEntry& entry) {
       // nothing comparable to Home's retained cover buffer. Back correctly returns
       // to Apps, not Home.
       startActivityForResult(std::make_unique<BluetoothActivity>(renderer, mappedInput), [](const ActivityResult&) {});
+      return true;
+    case AppId::Prayer:
+      startActivityForResult(std::make_unique<PrayerActivity>(renderer, mappedInput), [](const ActivityResult&) {});
       return true;
   }
   return false;
