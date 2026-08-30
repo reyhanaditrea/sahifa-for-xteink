@@ -1,0 +1,235 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, "Helvetica Neue", Arial, sans-serif; background: #e8e6e1; }
+    a { color: #000; } a:hover { color: #333; }
+    .screen { width: 480px; height: 800px; background: #fff; color: #000; position: relative; overflow: hidden; }
+    .hdr { position: absolute; top: 5px; left: 0; width: 480px; height: 45px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; }
+    .batt { position: absolute; right: 12px; top: 10px; display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
+    .status { position: absolute; top: 60px; left: 20px; width: 440px; display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; }
+    .rule { position: absolute; left: 20px; width: 440px; height: 1px; background: #000; }
+    .body { position: absolute; left: 20px; width: 440px; display: flex; flex-direction: column; gap: 10px; font-size: 15px; font-weight: 500; line-height: 1.45; text-wrap: pretty; }
+    .log { position: absolute; left: 20px; width: 440px; border: 1px solid #000; box-sizing: border-box; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; font-weight: 500; min-height: 66px; }
+    .list { position: absolute; left: 0; width: 480px; display: flex; flex-direction: column; }
+    .row { height: 30px; display: flex; align-items: center; padding: 0 20px; font-size: 16px; font-weight: 500; cursor: pointer; }
+    .row.sel { background: #000; color: #fff; }
+    .hint { position: absolute; bottom: 0; height: 40px; width: 106px; border: 1px solid #000; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; background: #fff; cursor: pointer; user-select: none; }
+    .hint:active { background: #000; color: #fff; }
+    .tag { position: absolute; top: 22px; left: 20px; font-size: 12px; font-weight: 500; }
+    .key { min-width: 44px; height: 44px; border: 1.5px solid #333; border-radius: 8px; background: #f4f2ee; display: flex; align-items: center; justify-content: center; font-size: 13px; padding: 0 12px; cursor: pointer; user-select: none; }
+    .key:active { background: #d9d6cf; }
+  </style>
+</helmet>
+<div style="display: flex; flex-direction: column; gap: 16px; padding: 24px; width: 528px; height: 920px; box-sizing: border-box; overflow: hidden;">
+  <div class="screen" style="border: 2px solid #111">
+    <div class="hdr"><span>Rogue</span>
+      <sc-if value="{{showSeed}}" hint-placeholder-val="{{true}}"><div class="tag">Seed 3F2A91C0</div></sc-if>
+      <div class="batt"><span>82%</span><svg width="15" height="12" viewBox="0 0 15 12"><rect x="0.5" y="0.5" width="12" height="11" fill="none" stroke="#000"></rect><rect x="13" y="3.5" width="2" height="5" fill="#000"></rect><rect x="2" y="2" width="8" height="8" fill="#000"></rect></svg></div>
+    </div>
+
+    <sc-if value="{{isTitle}}" hint-placeholder-val="{{true}}">
+      <div style="position: absolute; top: 120px; left: 20px; width: 440px; display: flex; flex-direction: column; gap: 14px; text-align: center;">
+        <div style="font-size: 28px; font-weight: 700; letter-spacing: 0.04em;">THE HOLLOW STAIR</div>
+        <div style="font-size: 15px; font-weight: 500; line-height: 1.45;">Every run is a new dungeon. Death is final; what you learn is not.</div>
+      </div>
+      <div style="position: absolute; left: 20px; top: 420px; width: 440px; display: flex; flex-direction: column; gap: 6px; font-size: 13px;">
+        <div style="height: 1px; background: #000"></div>
+        <div style="display: flex; justify-content: space-between"><span>Best depth</span><span>{{bestDepth}}</span></div>
+        <div style="display: flex; justify-content: space-between"><span>Runs</span><span>{{runs}}</span></div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isPlaying}}" hint-placeholder-val="{{false}}">
+      <div class="status"><span>HP {{hp}}/20</span><span>Gold {{gold}}</span><span>Depth {{depth}}</span><span>Turn {{turn}}</span></div>
+      <div class="rule" style="top: 84px"></div>
+      <div class="body" style="top: 100px">
+        <sc-for list="{{paras}}" as="p" hint-placeholder-count="2"><div>{{p.t}}</div></sc-for>
+      </div>
+      <sc-if value="{{showLog}}" hint-placeholder-val="{{false}}">
+        <div class="log" style="top: {{logTop}}px">
+          <sc-for list="{{log}}" as="l" hint-placeholder-count="3"><div>{{l.t}}</div></sc-for>
+        </div>
+      </sc-if>
+      <div class="rule" style="top: 560px"></div>
+    </sc-if>
+
+    <sc-if value="{{isDead}}" hint-placeholder-val="{{false}}">
+      <div style="position: absolute; top: 140px; left: 20px; width: 440px; display: flex; flex-direction: column; gap: 14px; text-align: center;">
+        <div style="font-size: 28px; font-weight: 700; letter-spacing: 0.04em;">YOU DIED</div>
+        <div style="font-size: 15px; font-weight: 500; line-height: 1.45;">Depth {{depth}}, turn {{turn}}. {{gold}} gold left on the stones.</div>
+      </div>
+    </sc-if>
+
+    <div class="list" style="top: {{listTop}}px">
+      <sc-for list="{{choices}}" as="c" hint-placeholder-count="3">
+        <div class="row {{c.cls}}" onClick="{{c.pick}}">{{c.label}}</div>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{isPaused}}" hint-placeholder-val="{{false}}">
+      <div style="position: absolute; top: 300px; left: 80px; width: 320px; background: #fff; border: 2px solid #000; display: flex; flex-direction: column; padding: 14px 0;">
+        <div style="font-size: 16px; font-weight: 700; text-align: center; padding: 0 0 10px;">Paused</div>
+        <sc-for list="{{pauseRows}}" as="c" hint-placeholder-count="2">
+          <div class="row {{c.cls}}" style="height: 34px;" onClick="{{c.pick}}">{{c.label}}</div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <div class="hint" style="left: 25px" onClick="{{onBack}}">{{hintBack}}</div>
+    <div class="hint" style="left: 130px" onClick="{{onConfirm}}">{{hintConfirm}}</div>
+    <div class="hint" style="left: 245px" onClick="{{onUp}}">Up</div>
+    <div class="hint" style="left: 350px" onClick="{{onDown}}">Down</div>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center; font-size: 13px; color: #333;">
+    <div class="key" onClick="{{onBack}}">Back</div>
+    <div class="key" onClick="{{onConfirm}}">Confirm</div>
+    <div class="key" onClick="{{onUp}}">Up</div>
+    <div class="key" onClick="{{onDown}}">Down</div>
+    <span style="margin-left: 8px;">Physical buttons. Rows and hint boxes are clickable too.</span>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":528,"height":920}}'>
+const ROOMS = [
+  { paras: ['The stair ends in a low chamber that smells of wet iron. Torchlight from a bracket on the far wall shows three ways on.',
+            'To the left, a rusted grate stands ajar over a shaft; a cold draught comes up it. Ahead, a corridor of cut stone runs straight and dry. To the right, you hear the slow drip of water and, under it, something breathing.'],
+    choices: [
+      { label: 'Climb down the grate', fx: 'dmg', arg: 4, text: 'You lose your grip on the wet iron and fall the last of it. -4 HP.' },
+      { label: 'Take the dry corridor', fx: 'none', text: 'The corridor runs straight for a long while, then bends back toward the sound of water.' },
+      { label: 'Go toward the breathing', fx: 'fight', mon: { name: 'Cave Rat', hp: 6, atk: 3, def: 0, gold: 8 }, text: 'A cave rat the size of a dog turns from the pool. Its eyes hold the torchlight.', after: 'You wipe the blade on its fur. In the shallows behind it, a leather purse: +8 gold.' },
+      { label: 'Rest here a moment', fx: 'heal', arg: 3, text: 'You sit with your back to the wall and let your breathing slow. +3 HP.' },
+    ] },
+  { paras: ['Past the pool the passage narrows to a crawl, then opens on a shrine: a squat stone figure, its face worn smooth, a bowl of black water at its feet.',
+            'Someone has left three copper coins in the bowl. The air here is very still.'],
+    choices: [
+      { label: 'Drink from the bowl', fx: 'heal', arg: 6, text: 'The water is bitter and very cold. Your cuts close as you watch. +6 HP.' },
+      { label: 'Take the coins', fx: 'dmg', arg: 3, gold: 3, text: 'The coins burn cold in your hand and the water goes still as glass. You feel thinner. -3 HP, +3 gold.' },
+      { label: 'Leave an offering (5 gold)', fx: 'offer', text: 'You drop five coins into the bowl. The figure does not move, but the stillness lifts. You feel steadier. +2 max HP.' },
+      { label: 'Descend the stair behind the shrine', fx: 'descend', text: 'You take the stair down.' },
+    ] },
+  { paras: ['A long hall of pillars, half of them fallen. Between two of them a merchant has set a cloth, and on it, a lamp, a short sword, and a vial that glows faintly green. He does not look up.'],
+    choices: [
+      { label: 'Short sword (10 gold)', fx: 'buy', cost: 10, atk: 2, text: 'He takes the coins without counting them. The sword is heavier than it looks. +2 ATK.' },
+      { label: 'Green vial (6 gold)', fx: 'buy', cost: 6, potion: 1, text: 'He wraps the vial in a rag. "Not here," he says. +1 potion.' },
+      { label: 'Ask what he is doing down here', fx: 'none', text: '"Same as you," he says, and finally looks up. His eyes are the colour of the vial.' },
+      { label: 'Walk on', fx: 'descend', text: 'You leave him to his cloth and take the far stair down.' },
+    ] },
+  { paras: ['The stair opens onto a landing over a black drop. Something large is coming up it, one heavy step at a time, and there is nowhere to go but through.'],
+    choices: [
+      { label: 'Stand and fight', fx: 'fight', mon: { name: 'Stair Warden', hp: 14, atk: 5, def: 1, gold: 20 }, text: 'A thing of rust and bone fills the stair below you. Stair Warden.', after: 'It comes apart on the steps. In its chest, a purse of old coin: +20 gold. The stair below is clear.' },
+      { label: 'Go back up', fx: 'none', text: 'You climb a dozen steps and it follows. There is no back up.' },
+    ] },
+  { paras: ['The stair below the warden is cut clean and dry, and lit. That is as far as this prototype goes.'],
+    choices: [ { label: 'Back to title', fx: 'title' } ] },
+];
+
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    this.state = this.fresh();
+  }
+  fresh() {
+    return { mode: 'title', sel: 0, hp: 20, maxHp: 20, atk: 4, gold: 0, depth: 1, turn: 0, room: 0, potions: 1,
+             paras: [], log: [], mon: null, monHp: 0, defending: false, bestDepth: 7, runs: 12, pauseSel: 0 };
+  }
+  startRun() {
+    const s = this.fresh();
+    s.mode = 'room'; s.turn = 1;
+    s.paras = ROOMS[0].paras.slice();
+    this.setState(s);
+  }
+  enterRoom(idx, lead) {
+    const r = ROOMS[Math.min(idx, ROOMS.length - 1)];
+    const paras = lead ? [lead].concat(r.paras) : r.paras.slice();
+    this.setState({ mode: 'room', room: idx, paras, sel: 0, log: [], mon: null });
+  }
+  choiceRows() {
+    const s = this.state;
+    if (s.mode === 'title') return ['New run', 'Stats'];
+    if (s.mode === 'room') return ROOMS[Math.min(s.room, ROOMS.length - 1)].choices.map(c => c.label);
+    if (s.mode === 'combat') return ['Attack', 'Defend', 'Item (' + s.potions + ' potion' + (s.potions === 1 ? '' : 's') + ')', 'Flee'];
+    if (s.mode === 'after') return ['Continue'];
+    if (s.mode === 'dead') return ['Back to title'];
+    return [];
+  }
+  pick(i) {
+    const s = this.state;
+    if (s.mode === 'paused') { if (i === 0) this.setState({ mode: s.resume }); else this.setState({ mode: 'title', sel: 0, runs: s.runs + 1 }); return; }
+    if (s.mode === 'title') { if (i === 0) this.startRun(); return; }
+    if (s.mode === 'dead') { this.setState({ mode: 'title', sel: 0 }); return; }
+    if (s.mode === 'after') { this.enterRoom(s.room + 1); return; }
+    if (s.mode === 'room') return this.roomPick(i);
+    if (s.mode === 'combat') return this.combatPick(i);
+  }
+  roomPick(i) {
+    const s = this.state;
+    const c = ROOMS[Math.min(s.room, ROOMS.length - 1)].choices[i];
+    const n = { turn: s.turn + 1 };
+    let lead = c.text;
+    if (c.fx === 'title') { this.setState({ mode: 'title', sel: 0, runs: s.runs + 1, bestDepth: Math.max(s.bestDepth, s.depth) }); return; }
+    if (c.fx === 'dmg') { n.hp = s.hp - c.arg; if (c.gold) n.gold = s.gold + c.gold; }
+    if (c.fx === 'heal') n.hp = Math.min(s.maxHp, s.hp + c.arg);
+    if (c.fx === 'offer') { if (s.gold < 5) { lead = 'You have no five coins to give. The figure does not care.'; } else { n.gold = s.gold - 5; n.maxHp = s.maxHp + 2; n.hp = s.hp + 2; } }
+    if (c.fx === 'buy') { if (s.gold < c.cost) { lead = 'He looks at your purse and back at the cloth, and says nothing.'; } else { n.gold = s.gold - c.cost; if (c.atk) n.atk = s.atk + c.atk; if (c.potion) n.potions = s.potions + 1; } }
+    if (c.fx === 'fight') {
+      this.setState(Object.assign(n, { mode: 'combat', mon: c.mon, monHp: c.mon.hp, after: c.after, paras: [c.text, c.mon.name + ' — HP ' + c.mon.hp + ' · ATK ' + c.mon.atk + ' · DEF ' + c.mon.def], log: ['You draw your knife.'], sel: 0 }));
+      return;
+    }
+    if (c.fx === 'descend') { n.depth = s.depth + 1; n.bestDepth = Math.max(s.bestDepth, n.depth); this.setState(n, () => this.enterRoom(s.room + 1, lead + ' Depth ' + n.depth + '.')); return; }
+    if ((n.hp !== undefined ? n.hp : s.hp) <= 0) { this.setState(Object.assign(n, { hp: 0, mode: 'dead', sel: 0, runs: s.runs + 1 })); return; }
+    this.setState(n, () => this.enterRoom(s.room + 1, lead));
+  }
+  combatPick(i) {
+    const s = this.state;
+    const log = [];
+    let monHp = s.monHp, hp = s.hp, potions = s.potions, defending = false;
+    if (i === 0) { const d = Math.max(1, s.atk - s.mon.def); monHp -= d; log.push('You hit the ' + s.mon.name.toLowerCase() + ' for ' + d + '.' + (monHp <= 0 ? ' It dies.' : ' (' + s.monHp + ' → ' + monHp + ')')); }
+    if (i === 1) { defending = true; log.push('You set your feet and raise your guard.'); }
+    if (i === 2) { if (potions > 0) { potions--; const h = Math.min(s.maxHp, hp + 8); log.push('You drink the potion. (' + hp + ' → ' + h + ')'); hp = h; } else log.push('Your pack is empty.'); }
+    if (i === 3) { if (s.turn % 2 === 0) { this.setState({ turn: s.turn + 1, log: ['You run.'] }, () => this.enterRoom(s.room + 1, 'You run until the sound of it fades. Whatever it was does not follow.')); return; } log.push('You turn to run and it is faster.'); }
+    if (monHp <= 0) {
+      this.setState({ mode: 'after', monHp: 0, turn: s.turn + 1, gold: s.gold + s.mon.gold, log, paras: [s.paras[0], s.mon.name + ' — HP 0 · ATK ' + s.mon.atk + ' · DEF ' + s.mon.def, s.after], sel: 0 });
+      return;
+    }
+    let d = s.mon.atk; if (defending) d = Math.ceil(d / 2);
+    const nh = hp - d;
+    log.push('The ' + s.mon.name.toLowerCase() + ' hits you for ' + d + '.' + (nh <= 0 ? '' : ' (' + hp + ' → ' + nh + ')'));
+    if (nh <= 0) { this.setState({ hp: 0, mode: 'dead', turn: s.turn + 1, log, sel: 0, runs: s.runs + 1, bestDepth: Math.max(s.bestDepth, s.depth) }); return; }
+    this.setState({ hp: nh, monHp, potions, turn: s.turn + 1, log: log.slice(-3), paras: [s.paras[0], s.mon.name + ' — HP ' + monHp + ' · ATK ' + s.mon.atk + ' · DEF ' + s.mon.def], sel: i });
+  }
+  renderVals() {
+    const s = this.state;
+    const rows = this.choiceRows();
+    const n = rows.length;
+    const paused = s.mode === 'paused';
+    const playing = ['room', 'combat', 'after'].includes(s.mode) || paused;
+    const move = (d) => { if (paused) this.setState({ pauseSel: (s.pauseSel + d + 2) % 2 }); else if (n) this.setState({ sel: (s.sel + d + n) % n }); };
+    return {
+      showSeed: s.mode !== 'title',
+      isTitle: s.mode === 'title', isPlaying: playing, isDead: s.mode === 'dead', isPaused: paused,
+      hp: s.hp, gold: s.gold, depth: s.depth, turn: s.turn, bestDepth: s.bestDepth, runs: s.runs,
+      paras: s.paras.map(t => ({ t })),
+      showLog: (s.mode === 'combat' || s.mode === 'after' || (paused && s.resume !== 'room')) && s.log.length > 0,
+      logTop: s.mode === 'after' ? 250 : 300,
+      log: [0, 1, 2].map(i => ({ t: s.log[i] || ' ' })),
+      listTop: s.mode === 'title' ? 300 : s.mode === 'dead' ? 300 : 576,
+      choices: rows.map((label, i) => ({ label, cls: (!paused && i === s.sel) ? 'sel' : '', pick: () => this.setState({ sel: i }, () => this.pick(i)) })),
+      pauseRows: ['Resume', 'Abandon run'].map((label, i) => ({ label, cls: i === s.pauseSel ? 'sel' : '', pick: () => this.setState({ pauseSel: i }, () => this.pick(i)) })),
+      hintBack: playing ? 'Menu' : 'Back', hintConfirm: playing ? 'Choose' : 'Select',
+      onBack: () => { if (paused) this.setState({ mode: s.resume }); else if (playing) this.setState({ mode: 'paused', resume: s.mode, pauseSel: 0 }); else this.setState({ mode: 'title', sel: 0 }); },
+      onConfirm: () => this.pick(paused ? s.pauseSel : s.sel),
+      onUp: () => move(-1), onDown: () => move(1),
+    };
+  }
+}
+</script>
+</body>
+</html>
