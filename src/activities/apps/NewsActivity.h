@@ -67,6 +67,9 @@ class NewsActivity final : public UiListActivity {
   int rowsOnPage() const;
   // Maps a cursor position to the entry it points at; -1 for non-item rows.
   int entryForCursor(int cursor) const;
+  // Puts the cursor back on one item: picks its day tab, its page, and its row.
+  // False when the item is no longer in the cache.
+  bool focusEntry(uint8_t slot, uint16_t item);
   // Next row the cursor may rest on, skipping feed headers.
   int nextSelectable(int from, int direction) const;
   void changeTab(int delta);

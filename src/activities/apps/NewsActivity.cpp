@@ -64,6 +64,12 @@ void NewsActivity::onEnter() {
   if (NEWS_FEEDS.pendingArticle(pendingSlot, pendingItem)) {
     NEWS_FEEDS.clearPendingArticle();
     if (pendingSlot < NEWS_FEEDS.slotCount()) {
+      {
+        // Point the list at that item first, so backing out of the article
+        // lands where the reader left off instead of at the top of today.
+        RenderLock lock(*this);
+        focusEntry(static_cast<uint8_t>(pendingSlot), pendingItem);
+      }
       startActivityForResult(std::make_unique<NewsArticleActivity>(renderer, mappedInput, pendingSlot, pendingItem,
                                                                    NEWS_FEEDS.slotName(pendingSlot)),
                              [](const ActivityResult&) {});
@@ -316,6 +322,31 @@ int NewsActivity::entryForCursor(const int cursor) const {
   if (offset < 0 || offset >= rowsOnPage()) return -1;
   const DayRow& row = dayRows_[pageStarts_[page_] + offset];
   return row.header ? -1 : static_cast<int>(row.entry);
+}
+
+bool NewsActivity::focusEntry(const uint8_t slot, const uint16_t item) {
+  for (size_t i = 0; i < entries_.size(); i++) {
+    if (entries_[i].slot != slot || entries_[i].item != item) continue;
+
+    // The item may belong to another day than the tab currently shows.
+    if (entries_[i].day != tab_) {
+      tab_ = entries_[i].day;
+      rebuildDayRows();
+    }
+    for (size_t row = 0; row < dayRows_.size(); row++) {
+      if (dayRows_[row].header || dayRows_[row].entry != i) continue;
+      // Which page holds that row, and where it sits inside it.
+      for (int page = 0; page < pageCount(); page++) {
+        if (static_cast<int>(row) < pageStarts_[page] || static_cast<int>(row) >= pageStarts_[page + 1]) continue;
+        page_ = page;
+        loadPageLabels();
+        nav.selected = FIXED_ROWS + (static_cast<int>(row) - pageStarts_[page]);
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
 }
 
 void NewsActivity::buildScreen(UiScreen& screen) {

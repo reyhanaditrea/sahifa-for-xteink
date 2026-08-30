@@ -118,7 +118,8 @@ void NewsArticleActivity::paginate() {
 
   // Decided once per article, not per line: a mostly-Arabic body with a Latin
   // name in it still reads right-to-left.
-  rtlBody_ = I18N.isRtl() || ScriptDetector::containsArabic(body_.c_str());
+  rtlBody_ =
+      I18N.isRtl() || ScriptDetector::containsArabic(body_.c_str()) || ScriptDetector::containsArabic(record_.title);
 
   lines_.clear();
   if (body_.empty()) {
@@ -249,6 +250,21 @@ void NewsArticleActivity::loop() {
   }
 }
 
+void NewsArticleActivity::drawAligned(const int fontId, const int y, const char* text,
+                                      const EpdFontFamily::Style style) const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int pageWidth = renderer.getScreenWidth();
+  if (!rtlBody_) {
+    renderer.drawText(fontId, metrics.contentSidePadding, y, text, true, style);
+    return;
+  }
+  // Arabic reads from the right margin, so the ragged edge belongs on the left.
+  // Anchored per article rather than per line: a Latin-only line inside an
+  // Arabic story still belongs to the right-hand column.
+  const int width = renderer.getTextWidth(fontId, text, style);
+  renderer.drawText(fontId, pageWidth - metrics.contentSidePadding - width, y, text, true, style);
+}
+
 void NewsArticleActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();
@@ -267,7 +283,14 @@ void NewsArticleActivity::render(RenderLock&&) {
   }
 
   if (currentPage_ == 0) {
-    y += renderer.drawCenteredTextWrapped(UI_12_FONT_ID, y, textWidth, record_.title, 3, true, EpdFontFamily::BOLD);
+    // Wrapped by hand rather than through drawCenteredTextWrapped: the title
+    // follows the body's alignment, and there is no centred-or-not variant.
+    const auto titleLines = renderer.wrappedText(UI_12_FONT_ID, record_.title, textWidth, 3, EpdFontFamily::BOLD);
+    const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+    for (const auto& line : titleLines) {
+      drawAligned(UI_12_FONT_ID, y, line.c_str(), EpdFontFamily::BOLD);
+      y += titleLineHeight;
+    }
     y += metrics.verticalSpacing;
     renderer.fillRect(metrics.contentSidePadding, y, textWidth, 1, true);
     y += metrics.verticalSpacing;
@@ -276,16 +299,7 @@ void NewsArticleActivity::render(RenderLock&&) {
   const int begin = pageStarts_[currentPage_];
   const int end = pageStarts_[currentPage_ + 1];
   for (int i = begin; i < end && i < static_cast<int>(lines_.size()); i++) {
-    if (!lines_[i].empty()) {
-      // Body text is centred under the centred title. Arabic is the exception:
-      // an RTL paragraph reads off the right margin, and centring every line
-      // would ragged both of its edges.
-      if (rtlBody_) {
-        renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, lines_[i].c_str());
-      } else {
-        renderer.drawCenteredText(UI_10_FONT_ID, y, lines_[i].c_str());
-      }
-    }
+    if (!lines_[i].empty()) drawAligned(UI_10_FONT_ID, y, lines_[i].c_str());
     y += lineHeight;
   }
 

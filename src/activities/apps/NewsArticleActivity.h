@@ -38,6 +38,8 @@ class NewsArticleActivity final : public Activity {
   void paginate();
   Action action() const { return action_; }
   int actionRowHeight() const;
+  // One line of article text, anchored to the margin the script reads from.
+  void drawAligned(int fontId, int y, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void openActionMenu();
   void queueForSync(bool queued);
 
@@ -52,8 +54,8 @@ class NewsArticleActivity final : public Activity {
   std::string body_;
   Action action_ = Action::None;
   OptionPopup actionPopup_;
-  // Arabic body: kept left-anchored so the RTL run reads off its own margin,
-  // while Latin bodies are centred.
+  // Arabic article: title and body hug the right margin; everything else hugs
+  // the left.
   bool rtlBody_ = false;
 
   std::vector<std::string> lines_;

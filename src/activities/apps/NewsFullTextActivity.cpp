@@ -22,8 +22,15 @@
 namespace {
 
 // Room for the longest article measured across the built-in outlets (BBC 6.5KB,
-// DW 6.1KB); past this the extractor stops with an ellipsis.
-constexpr size_t FULL_TEXT_BYTES = 12 * 1024;
+// DW 6.1KB); past this the extractor stops with an ellipsis. Kept to the same
+// budget the feed parser proved workable rather than the 12KB it started at:
+// the TLS session underneath wants every spare byte.
+constexpr size_t FULL_TEXT_BYTES = 8 * 1024;
+
+// A TLS handshake needs a large contiguous block, and the article buffer sits
+// alongside it. Below this the fetch is refused rather than risking the
+// allocator giving out mid-handshake.
+constexpr size_t MIN_FREE_BLOCK = 48 * 1024;
 
 }  // namespace
 
@@ -32,6 +39,13 @@ bool NewsFullTextActivity::fetchInto(const size_t slot, const uint16_t itemIndex
   if (!NewsIndexIo::readRecord(slot, itemIndex, record)) return false;
   record.url[NewsIndex::URL_BYTES - 1] = '\0';
   if (record.url[0] == '\0') return false;
+
+  if (ESP.getMaxAllocHeap() < MIN_FREE_BLOCK) {
+    LOG_ERR("NEWS", "full text skipped: largest block %u below %zu", ESP.getMaxAllocHeap(), MIN_FREE_BLOCK);
+    return false;
+  }
+  LOG_INF("NEWS", "full text: slot %zu item %u free=%u largest=%u url=%s", slot, itemIndex, ESP.getFreeHeap(),
+          ESP.getMaxAllocHeap(), record.url);
 
   auto buffer = makeUniqueNoThrow<char[]>(FULL_TEXT_BYTES);
   if (!buffer) {
