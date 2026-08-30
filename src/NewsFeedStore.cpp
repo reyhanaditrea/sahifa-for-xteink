@@ -35,6 +35,7 @@ void NewsFeedStore::toJson(JsonDocument& doc) const {
     doc["openSlot"] = pendingSlot_;
     doc["openItem"] = pendingItem_;
   }
+  if (fullTextPending_) doc["fetchFull"] = true;
   JsonArray arr = doc["feeds"].to<JsonArray>();
   for (uint8_t i = 0; i < userCount_; i++) {
     JsonObject obj = arr.add<JsonObject>();
@@ -49,6 +50,7 @@ bool NewsFeedStore::fromJson(JsonVariantConst doc) {
   lastSyncEpoch_ = doc["lastSync"] | static_cast<uint32_t>(0);
   pendingSlot_ = doc["openSlot"] | NO_PENDING;
   pendingItem_ = doc["openItem"] | static_cast<uint16_t>(0);
+  fullTextPending_ = doc["fetchFull"] | false;
 
   size_t builtinIndex = 0;
   for (const JsonVariantConst value : doc["builtinFullText"].as<JsonArrayConst>()) {
@@ -223,5 +225,14 @@ void NewsFeedStore::clearPendingArticle() {
   if (pendingSlot_ == NO_PENDING) return;
   pendingSlot_ = NO_PENDING;
   pendingItem_ = 0;
+  saveToFile();
+}
+
+void NewsFeedStore::setFullTextPending(const bool pending) {
+  if (fullTextPending_ == pending) return;
+  fullTextPending_ = pending;
+  // Written through immediately: the flag exists to survive the reboot that
+  // happens moments later, and it is cleared before the fetch starts so a
+  // crash inside the fetch cannot come back to the same fetch forever.
   saveToFile();
 }

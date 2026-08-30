@@ -145,6 +145,9 @@ class ActivityManager {
   void goToFouladEbooks();
   // Apps -> News: the OPDS browser rooted at the account's feed subscriptions.
   void goToNews();
+  // Boot target for a queued "Fetch now": runs the article fetch on a
+  // boot-fresh heap, then silent-restarts back into News.
+  void goToNewsFullText();
   void goToGym();
   void goToPrayer();
   void goToDictionary();

@@ -29,8 +29,12 @@ constexpr size_t FULL_TEXT_BYTES = 8 * 1024;
 
 // A TLS handshake needs a large contiguous block, and the article buffer sits
 // alongside it. Below this the fetch is refused rather than risking the
-// allocator giving out mid-handshake.
-constexpr size_t MIN_FREE_BLOCK = 48 * 1024;
+// allocator giving out mid-handshake. Measured against the real thing rather
+// than guessed: with Wi-Fi associated the device reported 49,168 bytes free
+// and a 42,996-byte largest block, and a feed sync goes through the same TLS
+// path at those numbers without trouble -- so the bar sits below them, and
+// the headroom comes from running this on a boot-fresh heap instead.
+constexpr size_t MIN_FREE_BLOCK = 32 * 1024;
 
 }  // namespace
 

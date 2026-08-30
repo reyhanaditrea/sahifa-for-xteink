@@ -12,7 +12,7 @@
 
 #include "MappedInputManager.h"
 #include "NewsFeedStore.h"
-#include "activities/apps/NewsFullTextActivity.h"
+#include "SilentRestart.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "news/NewsIndexIo.h"
@@ -171,12 +171,15 @@ void NewsArticleActivity::openActionMenu() {
   const char* options[] = {tr(STR_NEWS_FULL_NOW), tr(STR_NEWS_FULL_LATER), tr(STR_CANCEL)};
   actionPopup_.show(tr(STR_NEWS_GET_FULL), options, 3, 0, [this](const int index) {
     if (index == 0) {
-      // Remembered before the fetch, because the fetch ends in a restart: this
-      // is what brings the reader back to this article instead of the list.
+      // Recorded, then handed to a reboot rather than run here. The fetch is
+      // Wi-Fi plus a TLS session plus a 130-440KB page streaming through, and
+      // on top of the list and this screen it had ~49KB of heap and aborted
+      // out of memory inside the HTTP response parser. Booting into it first
+      // gives it a heap nothing else has touched; the pending article is what
+      // brings the reader back here when it is done.
       NEWS_FEEDS.setPendingArticle(slot_, itemIndex_);
-      startActivityForResult(
-          std::make_unique<NewsFullTextActivity>(renderer, mappedInput, slot_, itemIndex_, feedName_),
-          [](const ActivityResult&) {});
+      NEWS_FEEDS.setFullTextPending(true);
+      silentRestartToNewsFullText();
       return;
     }
     if (index == 1) queueForSync(true);

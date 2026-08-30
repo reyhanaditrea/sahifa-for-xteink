@@ -83,6 +83,16 @@ class NewsFeedStore : public PersistableStore<NewsFeedStore> {
   void setPendingArticle(size_t slot, uint16_t item);
   void clearPendingArticle();
 
+  // Set while a "Fetch now" is waiting for the reboot that runs it. The fetch
+  // is the most memory-hungry thing this app does -- Wi-Fi, a TLS session and
+  // a 440KB page streaming through -- and running it on top of the list and
+  // the article screen left roughly 49KB, which a real device ran out of
+  // mid-request. So the article screen only records the intent and reboots;
+  // the fetch itself starts from a boot-fresh heap, like OTA and the OPDS
+  // browser already do.
+  bool fullTextPending() const { return fullTextPending_; }
+  void setFullTextPending(bool pending);
+
  private:
   NewsFeedStore() = default;
   friend class PersistableStore<NewsFeedStore>;
@@ -99,6 +109,7 @@ class NewsFeedStore : public PersistableStore<NewsFeedStore> {
   static constexpr uint16_t NO_PENDING = 0xFFFF;
   uint16_t pendingSlot_ = NO_PENDING;
   uint16_t pendingItem_ = 0;
+  bool fullTextPending_ = false;
 };
 
 #define NEWS_FEEDS NewsFeedStore::getInstance()

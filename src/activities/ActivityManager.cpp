@@ -19,7 +19,9 @@
 #include "apps/AppsActivity.h"
 #include "apps/DictionaryActivity.h"
 #include "apps/GymActivity.h"
+#include "NewsFeedStore.h"
 #include "apps/NewsActivity.h"
+#include "apps/NewsFullTextActivity.h"
 #include "apps/PrayerActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -308,6 +310,23 @@ void ActivityManager::goToNews() {
   // The News reader owns its own feeds and cache on SD; nothing here needs an
   // account or a server, so this is a plain replaceActivity.
   replaceActivity(std::make_unique<NewsActivity>(renderer, mappedInput));
+}
+
+void ActivityManager::goToNewsFullText() {
+  size_t slot = 0;
+  uint16_t item = 0;
+  // Both halves of the intent have to still be there: the flag says a fetch
+  // was asked for, the pending article says which one. Either missing (a
+  // hand-edited store, a crash between the two writes) just opens the app.
+  if (!NEWS_FEEDS.fullTextPending() || !NEWS_FEEDS.pendingArticle(slot, item)) {
+    goToNews();
+    return;
+  }
+  // Cleared before the fetch runs, not after: if the fetch is what crashes,
+  // the next boot must land in the app rather than back in the same fetch.
+  NEWS_FEEDS.setFullTextPending(false);
+  replaceActivity(
+      std::make_unique<NewsFullTextActivity>(renderer, mappedInput, slot, item, NEWS_FEEDS.slotName(slot)));
 }
 
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {

@@ -33,6 +33,14 @@ void silentRestartToFileTransfer();
 void silentRestartToFouladEbooks();
 void silentRestartToNews();  // Apps -> News (EINK_NEWS_TASKS.md)
 
+// News -> "Get full text" -> "Fetch now". Same rationale as the two above,
+// and the sharpest case of it: an article page is 130-440KB streaming through
+// a TLS session, and started from the list plus the article screen it had
+// ~49KB of heap and aborted inside the HTTP response parser. The article to
+// fetch is in NEWS_FEEDS (setPendingArticle/setFullTextPending), since RTC
+// carries only the target.
+void silentRestartToNewsFullText();
+
 // Return-to-caller targets: a WiFi flow launched FROM this menu should land
 // back on it, not on Home, once its own onExit() silent-restarts to clear
 // heap fragmentation. Landing on Home instead of the caller was a real user

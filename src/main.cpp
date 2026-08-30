@@ -231,7 +231,8 @@ constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 7;
 constexpr uint32_t SILENT_REBOOT_TARGET_DICTIONARY = 8;
 constexpr uint32_t SILENT_REBOOT_TARGET_NEWS = 9;
 constexpr uint32_t SILENT_REBOOT_TARGET_PRAYER = 10;
-constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_PRAYER;
+constexpr uint32_t SILENT_REBOOT_TARGET_NEWS_FULLTEXT = 11;
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_NEWS_FULLTEXT;
 // Must always name the highest target above. The boot-time range check below uses it
 // to reject uninitialised RTC memory on a cold boot, and a target outside the range
 // is silently treated as 0 -- which is HOME. Adding a target without moving this
@@ -342,6 +343,16 @@ void silentRestartToNews() {
   silentRebootTarget = SILENT_REBOOT_TARGET_NEWS;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=news)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToNewsFullText() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_NEWS_FULLTEXT;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=news_fulltext)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
@@ -900,6 +911,13 @@ void setup() {
     // allocations for the WiFi driver and TCP buffers, and a fragmented heap
     // makes page loads crawl. Settings reboots here before starting it.
     activityManager.goToFileTransfer();
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_NEWS_FULLTEXT) {
+    // The one News flow that needs more than the app itself: fetching an
+    // article page is Wi-Fi plus a TLS session plus a 440KB stream, and run on
+    // top of the list and the reader it had ~49KB to work with and aborted
+    // out of heap mid-request. Starting it here gives it everything a boot
+    // has; it silent-restarts back to News (and to the article) when done.
+    activityManager.goToNewsFullText();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_NEWS) {
     // Same fresh-heap treatment as the catalog, for the same reasons: WiFi, feed
     // parsing and an EPUB download stacked on one session's heap.

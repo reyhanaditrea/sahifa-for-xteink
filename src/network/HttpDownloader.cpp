@@ -190,13 +190,23 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
     // append a second User-Agent header, which strict servers reject (aiohttp
     // answers 400 "Duplicate 'User-Agent' header found").
     http.setUserAgent("CrossPoint-ESP32-" CROSSPOINT_VERSION);
+    // Only these are ever read back from a response here, and keeping the rest
+    // is not free: a news article page answers with a dozen large Set-Cookie /
+    // CSP / Report-To headers, each stored as two std::strings on the ~49KB that
+    // is left once Wi-Fi and a TLS session are up. Growing that vector past what
+    // remained is what aborted a full-text fetch on device.
+    http.setResponseHeaderFilter([](const std::string& name) {
+      return name == "location" || name == "content-type" || name == "retry-after" ||
+             name == "www-authenticate";
+    });
     if (!crossOriginSeen && !username.empty() && !password.empty()) {
       const std::string credentials = username + ":" + password;
       const String encoded = base64::encode(credentials.c_str());
       http.addHeader("Authorization", std::string("Basic ") + encoded.c_str());
     }
 
-    LOG_DBG("HTTP", "wolfSSL GET: %s", url.c_str());
+    LOG_DBG("HTTP", "wolfSSL GET: %s (free %u, largest %u)", url.c_str(), ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
     const int status = http.GET(
         [&http, &sink](const uint8_t* data, size_t len) {
           if (http.getStatus() != 200) return true;
