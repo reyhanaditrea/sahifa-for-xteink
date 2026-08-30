@@ -1,0 +1,20 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 528, "h": 792, "title": "Prototype — click through", "is_interactive": true },
+    { "file": "Home.dc.html", "x": 660, "y": 0, "w": 528, "h": 792, "title": "News — synced" },
+    { "file": "NewDay.dc.html", "x": 1320, "y": 0, "w": 528, "h": 792, "title": "News — new day, not synced" },
+    { "file": "Feeds.dc.html", "x": 1980, "y": 0, "w": 528, "h": 792, "title": "Feeds" },
+    { "file": "Article.dc.html", "x": 2640, "y": 0, "w": 528, "h": 792, "title": "Article" },
+    { "file": "AddFeed.dc.html", "x": 3300, "y": 0, "w": 528, "h": 792, "title": "Add feed — keyboard" }
+  ],
+  "annotations": [
+    { "id": "brief", "x": 0, "y": -250, "w": 1188, "text": "News — same vocabulary as Prayer Times and the Apps screen: 528×792, 1-bit, Inter 500/700, 45px header, 2px rule, 40px hint bar, inverted selection.\nHome: ‘Sync news’ and ‘Feeds’ rows, rule, then a Settings-style tab bar (Today · Yesterday · <date>) over that day’s headlines grouped by feed. Side buttons page the headline list; Up/Down walk Sync → Feeds → tab bar → headlines; Confirm on the tab bar jumps to the next tab (label names it, as on the font download screen). Sync keeps the last 3 days. Feeds: user-added feeds are removable (up to 8); six built-in outlets only toggle On/Off." },
+    { "id": "flow", "x": 0, "y": 830, "w": 528, "text": "Prototype (click rows, tabs, ‹ › in the footer for side-button paging, or the hint bar):\nSync → Wi-Fi → ‘Feed k of n’ (enabled defaults + your feeds) → ‘News ready’ → restart to Today.\nFeeds → ‘+ Add feed’ → URL keyboard → Wi-Fi → discovery → ‘Feed added’. Confirm on a user feed → Remove; on a default → toggles On/Off.\n‘startState’ tweak: notSynced / synced / newDay (clock rolled to Sun 30 after a Sat 29 sync)." },
+    { "id": "home-note", "x": 660, "y": 830, "w": 528, "text": "Synced. Tab bar is drawTabBar(): 12px labels, bold + 2px underline on the active tab, inverted when the cursor sits on the tab row. Feed headers 12px uppercase 32px, headlines 40px with item time right. Rows are packed by height into pages; footer shows ‘Page 1 / 2’ when there is more than one, else ‘Offline’." },
+    { "id": "newday-note", "x": 1320, "y": 830, "w": 528, "text": "New day, not synced yet. Tabs follow the real clock, so Today (Sun 30) is empty with a hint naming the last sync; Yesterday shows what was ‘Today’ at sync time; the third tab still holds Fri 28. Sync row meta reads ‘Yesterday 08:14’ and the cursor lands on it. After a sync, items older than 3 days are dropped." },
+    { "id": "feeds-note", "x": 1980, "y": 830, "w": 528, "text": "Feeds. ‘+ Add feed’ with the user-feed count (1 / 8; built-ins don’t count). ‘Your feeds’: 52px two-line rows (name from the feed’s <title> after first sync, host before that; URL below) — Confirm asks Remove. ‘Default outlets’: BBC World, Al Jazeera, France 24, DW World, NPR World, Arab News — 40px rows with On/Off on the right; Confirm flips it. Off feeds are skipped at sync and hidden from the day tabs." },
+    { "id": "article-note", "x": 2640, "y": 830, "w": 528, "text": "Article: title 20px bold, ‘feed · date HH:MM’, rule, body at 15px/1.45 in paragraphs. Left/Right pages, footer ‘Page 1 / 2’. Only the feed’s own text — no web page fetch, so no images, no ads." },
+    { "id": "add-note", "x": 3300, "y": 830, "w": 528, "text": "Add feed reuses the existing URL keyboard. User can type just ‘news.detik.com’. After Done: Wi-Fi, then the device reads the page header for <link rel=alternate type=rss/atom>, else probes /feed, /rss.xml, /atom.xml, and stores the feed URL it found." }
+  ],
+  "launch": { "view": "canvas" }
+}

@@ -43,12 +43,16 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
         MIDAD_APP_SETTINGS.saveToFile();
       },
       "tasbihEnabled", StrId::STR_CAT_APPS));
-  // News toggle: pins a "News" tile in My Books that browses the account's feed
-  // subscriptions (EINK_NEWS_TASKS.md). Off by default, and the Midad app can turn
-  // it on remotely -- subscriptions are managed there, never here, because adding
-  // one means typing a URL on an on-screen keyboard.
-  // News toggle removed with the tile -- see AppsActivity::entries(). The
-  // rssEnabled field itself stays (settings.json + web-sync compatibility).
+  // News toggle: shows the News tile, which reads RSS/Atom feeds downloaded by the
+  // device itself. The field keeps its `rssEnabled` name and JSON key so existing
+  // settings.json files and the web sync keep working.
+  appsSettings.push_back(SettingInfo::DynamicToggle(
+      StrId::STR_NEWS, [] { return MIDAD_APP_SETTINGS.rssEnabled; },
+      [](uint8_t val) {
+        MIDAD_APP_SETTINGS.rssEnabled = val;
+        MIDAD_APP_SETTINGS.saveToFile();
+      },
+      "rssEnabled", StrId::STR_CAT_APPS));
   // Stop Watch toggle: pins a "Stop Watch" tile in My Books that opens the
   // built-in stopwatch. No extraction step needed, same as Games.
   appsSettings.push_back(SettingInfo::DynamicToggle(

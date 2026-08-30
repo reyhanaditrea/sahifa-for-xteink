@@ -1,0 +1,500 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #ffffff; color: #000000; }
+    a { color: #000000; } a:hover { color: #000000; }
+    .row { height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; box-sizing: border-box; font-size: 15px; font-weight: 500; cursor: pointer; gap: 12px; }
+    .row .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row .m { font-size: 12px; white-space: nowrap; }
+    .hdr { height: 32px; display: flex; align-items: center; padding: 0 8px; box-sizing: border-box; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+    .hint { font-size: 11px; font-weight: 500; cursor: pointer; min-width: 60px; text-align: center; }
+    .tab { font-size: 12px; padding: 0 3px; height: 20px; line-height: 20px; cursor: pointer; white-space: nowrap; }
+    .pg { cursor: pointer; font-size: 16px; line-height: 12px; padding: 0 4px; }
+    .key { width: 40px; height: 34px; border: 1.5px solid #000; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; box-sizing: border-box; }
+    .key.wide { width: 86px; }
+    .key.on { background: #000; color: #fff; cursor: pointer; }
+    .para { font-size: 15px; font-weight: 500; line-height: 1.45; margin: 0 0 12px; }
+  </style>
+</helmet>
+
+<div style="width: 528px; height: 792px; background: #ffffff; position: relative; overflow: hidden;">
+
+  <div style="position: absolute; top: 5px; left: 0; width: 528px; height: 45px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.02em;">{{ clock }}</div>
+    <div style="font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 380px;">{{ title }}</div>
+    <div style="display: flex; align-items: center; gap: 3px;">
+      <div style="width: 15px; height: 12px; border: 1.5px solid #000; box-sizing: border-box; padding: 1.5px;">
+        <div style="width: 70%; height: 100%; background: #000;"></div>
+      </div>
+      <div style="width: 2px; height: 5px; background: #000;"></div>
+    </div>
+  </div>
+  <div style="position: absolute; top: 50px; left: 0; width: 528px; height: 2px; background: #000;"></div>
+
+  <!-- ===== HOME ===== -->
+  <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 12px; box-sizing: border-box;">
+      <div class="row" style="background: {{ syncRow.bg }}; color: {{ syncRow.fg }};" onClick="{{ openSync }}">
+        <div class="l">Sync news</div><div class="m">{{ syncMeta }}</div>
+      </div>
+      <div class="row" style="background: {{ feedsRow.bg }}; color: {{ feedsRow.fg }};" onClick="{{ openFeeds }}">
+        <div class="l">Feeds</div><div class="m">{{ feedsMeta }}</div>
+      </div>
+      <div style="height: 2px; background: #000; margin: 8px 8px;"></div>
+
+      <div style="height: 40px; display: flex; align-items: flex-start; gap: 10px; padding: 6px 8px 0; box-sizing: border-box;">
+        <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="3">
+          <div class="tab" style="font-weight: {{ t.weight }}; border-bottom: {{ t.line }}; background: {{ t.bg }}; color: {{ t.fg }};" onClick="{{ t.pick }}">{{ t.label }}</div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{ dayEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 60px; font-size: 13px; font-weight: 500; line-height: 1.5; white-space: pre-line;">{{ dayEmptyText }}</div>
+      </sc-if>
+
+      <sc-if value="{{ dayHasItems }}" hint-placeholder-val="{{ true }}">
+        <div style="display: flex; flex-direction: column; overflow: hidden; margin-top: 4px;">
+          <sc-for list="{{ dayRows }}" as="r" hint-placeholder-count="12">
+            <sc-if value="{{ r.isHeader }}" hint-placeholder-val="{{ false }}">
+              <div class="hdr">{{ r.label }}</div>
+            </sc-if>
+            <sc-if value="{{ r.isItem }}" hint-placeholder-val="{{ true }}">
+              <div class="row" style="background: {{ r.bg }}; color: {{ r.fg }};" onClick="{{ r.pick }}">
+                <div class="l">{{ r.label }}</div><div class="m">{{ r.meta }}</div>
+              </div>
+            </sc-if>
+          </sc-for>
+        </div>
+      </sc-if>
+      <div style="margin-top: auto; padding: 0 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 500;">
+        <div>{{ dayFootLeft }}</div>
+        <div style="display: flex; gap: 14px; align-items: center;"><div class="pg" onClick="{{ pagePrev }}">&#8249;</div><div>{{ dayFootRight }}</div><div class="pg" onClick="{{ pageNext }}">&#8250;</div></div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== FEEDS ===== -->
+  <sc-if value="{{ isFeeds }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 12px; box-sizing: border-box;">
+      <div class="row" style="background: {{ addRow.bg }}; color: {{ addRow.fg }};" onClick="{{ openAdd }}">
+        <div class="l">+ Add feed</div><div class="m">{{ addMeta }}</div>
+      </div>
+      <sc-if value="{{ hasUserFeeds }}" hint-placeholder-val="{{ true }}">
+        <div class="hdr">Your feeds</div>
+        <sc-for list="{{ userRows }}" as="f" hint-placeholder-count="1">
+          <div style="display: flex; flex-direction: column; justify-content: center; height: 52px; padding: 0 8px; box-sizing: border-box; background: {{ f.bg }}; color: {{ f.fg }}; cursor: pointer;" onClick="{{ f.pick }}">
+            <div style="font-size: 15px; font-weight: 500;">{{ f.name }}</div>
+            <div style="font-size: 11px; font-weight: 500; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ f.url }}</div>
+          </div>
+        </sc-for>
+      </sc-if>
+      <div class="hdr">Default outlets</div>
+      <sc-for list="{{ defaultRows }}" as="d" hint-placeholder-count="6">
+        <div class="row" style="background: {{ d.bg }}; color: {{ d.fg }};" onClick="{{ d.pick }}">
+          <div class="l">{{ d.name }}</div><div class="m" style="font-weight: 700;">{{ d.state }}</div>
+        </div>
+      </sc-for>
+      <div style="margin-top: auto; padding: 0 8px 12px; font-size: 12px; font-weight: 500;">{{ feedsFoot }}</div>
+    </div>
+  </sc-if>
+
+  <!-- ===== REMOVE ===== -->
+  <sc-if value="{{ isRemove }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 0 60px; box-sizing: border-box; text-align: center;">
+      <div style="font-size: 16px; font-weight: 700;">Remove feed?</div>
+      <div style="font-size: 13px; font-weight: 500; line-height: 1.5; white-space: pre-line;">{{ removeBody }}</div>
+      <div style="display: flex; gap: 12px; margin-top: 12px;">
+        <div class="row" style="border: 2px solid #000; height: 44px; padding: 0 22px;" onClick="{{ removeNo }}">Keep</div>
+        <div class="row" style="border: 2px solid #000; height: 44px; padding: 0 22px; background: #000; color: #fff;" onClick="{{ removeYes }}">Remove</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== KEYBOARD (existing KeyboardEntryActivity, URL mode) ===== -->
+  <sc-if value="{{ isKeyboard }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 20px; box-sizing: border-box;">
+      <div style="font-size: 13px; font-weight: 500; margin: 8px 0 6px;">Site or feed URL</div>
+      <div style="height: 44px; border: 2px solid #000; display: flex; align-items: center; padding: 0 10px; font-size: 15px; font-weight: 500; box-sizing: border-box; white-space: nowrap; overflow: hidden;">{{ typed }}<span style="display: inline-block; width: 2px; height: 20px; background: #000; margin-left: 2px;"></span></div>
+      <div style="font-size: 11px; font-weight: 500; margin: 6px 0 0;">Paste the site address. The feed is found for you.</div>
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px;">
+        <div style="display: flex; gap: 6px; justify-content: center;">
+          <sc-for list="{{ kbRow1 }}" as="k" hint-placeholder-count="10"><div class="key">{{ k.c }}</div></sc-for>
+        </div>
+        <div style="display: flex; gap: 6px; justify-content: center;">
+          <sc-for list="{{ kbRow2 }}" as="k" hint-placeholder-count="9"><div class="key">{{ k.c }}</div></sc-for>
+        </div>
+        <div style="display: flex; gap: 6px; justify-content: center;">
+          <sc-for list="{{ kbRow3 }}" as="k" hint-placeholder-count="7"><div class="key">{{ k.c }}</div></sc-for>
+        </div>
+        <div style="display: flex; gap: 6px; justify-content: center;">
+          <div class="key wide">https://</div><div class="key wide">.com</div><div class="key wide">/</div><div class="key wide">Del</div><div class="key wide on" onClick="{{ kbDone }}">Done</div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== WIFI ===== -->
+  <sc-if value="{{ isWifi }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 12px; box-sizing: border-box; gap: 2px;">
+      <sc-for list="{{ wifiRows }}" as="w" hint-placeholder-count="3">
+        <div class="row" style="height: 44px; background: {{ w.bg }}; color: {{ w.fg }};" onClick="{{ w.pick }}">
+          <div class="l">{{ w.label }}</div><div class="m">{{ w.meta }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <!-- ===== STATUS ===== -->
+  <sc-if value="{{ isStatus }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 0 50px; box-sizing: border-box; text-align: center;">
+      <div style="font-size: 16px; font-weight: 700;">{{ statusTitle }}</div>
+      <div style="font-size: 13px; font-weight: 500; line-height: 1.55; white-space: pre-line;">{{ statusBody }}</div>
+      <sc-if value="{{ statusHasBar }}" hint-placeholder-val="{{ false }}">
+        <div style="width: 300px; height: 10px; border: 2px solid #000; box-sizing: border-box; margin-top: 8px;">
+          <div style="height: 100%; background: #000; width: {{ statusPct }};"></div>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <!-- ===== ARTICLE ===== -->
+  <sc-if value="{{ isArticle }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 24px; box-sizing: border-box;">
+      <sc-if value="{{ artFirstPage }}" hint-placeholder-val="{{ true }}">
+        <div style="font-size: 20px; font-weight: 700; line-height: 1.3; margin: 6px 0 4px;">{{ artTitle }}</div>
+        <div style="font-size: 12px; font-weight: 500; margin: 0 0 12px;">{{ artMeta }}</div>
+        <div style="height: 2px; background: #000; margin: 0 0 14px;"></div>
+      </sc-if>
+      <div style="overflow: hidden; flex: 1;">
+        <sc-for list="{{ artParas }}" as="p" hint-placeholder-count="4">
+          <div class="para">{{ p.t }}</div>
+        </sc-for>
+      </div>
+      <div style="padding: 0 0 12px; display: flex; justify-content: space-between; font-size: 12px; font-weight: 500;">
+        <div>{{ artFootLeft }}</div><div>{{ artFootRight }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <div style="position: absolute; bottom: 0; left: 0; width: 528px; height: 40px; border-top: 2px solid #000; display: flex; align-items: center; justify-content: space-around; padding: 0 20px; box-sizing: border-box;">
+    <div class="hint" onClick="{{ btnBack }}">{{ hint1 }}</div>
+    <div class="hint" onClick="{{ btnConfirm }}">{{ hint2 }}</div>
+    <div class="hint" onClick="{{ btnUp }}">{{ hint3 }}</div>
+    <div class="hint" onClick="{{ btnDown }}">{{ hint4 }}</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"startState":{"editor":"enum","options":["notSynced","synced","newDay"],"default":"synced"},"$preview":{"width":528,"height":792}}'>
+// Built-in outlets: fixed table in firmware, user only toggles them.
+const DEFAULTS0 = [
+  { name: 'BBC World', url: 'https://feeds.bbci.co.uk/news/world/rss.xml', on: true },
+  { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml', on: true },
+  { name: 'France 24', url: 'https://www.france24.com/en/rss', on: true },
+  { name: 'DW World', url: 'https://rss.dw.com/rdf/rss-en-world', on: false },
+  { name: 'NPR World', url: 'https://feeds.npr.org/1004/rss.xml', on: true },
+  { name: 'Arab News', url: 'https://www.arabnews.com/rss.xml', on: false },
+];
+// User-added feeds: stored on device, can be removed.
+const USER0 = [
+  { name: 'detikNews', url: 'https://news.detik.com/googlenews/rss' },
+];
+// Calendar used by the prototype. Sync happened Sat 29 Aug 08:14.
+const CAL = ['Sat 29 Aug', 'Fri 28 Aug', 'Thu 27 Aug', 'Sun 30 Aug'];
+// ITEMS[feed][d]: d = 0 Sat 29, 1 Fri 28, 2 Thu 27 (as downloaded at sync time).
+const ITEMS = {
+  'BBC World': [
+    [['Heatwave warning extended across southern Europe', '07:40'], ['Central bank holds rates as inflation cools', '06:55'], ['Airport reopens after overnight closure', '05:10']],
+    [['Rail strike called off after late-night deal', '18:10'], ['Election count enters second day', '09:30']],
+    [['Cyclone makes landfall on eastern coast', '22:05']],
+  ],
+  'Al Jazeera': [
+    [['Talks resume on regional ceasefire framework', '08:02'], ['Drought tightens grip on Horn of Africa', '04:20']],
+    [['Floods displace thousands in South Asia', '15:30'], ['Oil prices slip on supply outlook', '11:12']],
+    [['Summit ends without joint statement', '20:45']],
+  ],
+  'France 24': [
+    [['Paris transport strike enters third day', '06:20'], ['Vintage harvest starts early in Bordeaux', '05:00']],
+    [['EU ministers back new border rules', '17:00']],
+    [],
+  ],
+  'DW World': [
+    [['Berlin unveils budget for 2027', '05:50']],
+    [],
+    [['German exports fall for second month', '10:00']],
+  ],
+  'NPR World': [
+    [['Wildfires force evacuations in western Canada', '03:15'], ['Peace monitors report new violations', '02:40']],
+    [['Court weighs challenge to tariff order', '21:40']],
+    [['Aid convoy reaches besieged town', '14:25']],
+  ],
+  'Arab News': [
+    [['Riyadh hosts investment forum', '07:05']],
+    [],
+    [['Gulf airlines add summer routes', '12:30']],
+  ],
+  'detikNews': [
+    [['Pemerintah tetapkan libur cuti bersama akhir tahun', '08:11'], ['Banjir rendam sejumlah ruas jalan di Jakarta Timur', '06:40'], ['KRL tambah perjalanan pada akhir pekan', '05:30']],
+    [['KPK periksa saksi kasus pengadaan alat kesehatan', '16:20']],
+    [['Harga beras di pasar tradisional mulai turun', '09:05']],
+  ],
+};
+const BODY = [
+  'A heatwave warning has been extended across much of southern Europe as forecasters expect temperatures to stay above 40C into the weekend.',
+  'Authorities in Spain, Italy and Greece have urged people to stay indoors during the hottest hours and to check on elderly neighbours.',
+  'Wildfire risk remains very high in several regions. Rail operators have reduced speeds on some lines because of track expansion.',
+  'The warning is expected to be reviewed on Sunday, when a cooler air mass is forecast to move in from the Atlantic.',
+  'Meteorologists say this is the third prolonged heat event of the summer, and that overnight lows are the main health concern.',
+  'Schools that have already reopened are being asked to shorten outdoor activities and to keep classrooms ventilated.',
+];
+const NETS = ['Home-WiFi', 'Office-5G', 'Kopi Kenangan'];
+const KB1 = 'qwertyuiop'.split(''), KB2 = 'asdfghjkl'.split(''), KB3 = 'zxcvbnm'.split('');
+const PER_PAGE = 3;
+const USER_MAX = 8;
+// Home list area: 692 - 40 - 40 - 18 (rule) - 40 (tabs) - 4 - 30 (footer) ≈ 520px.
+const LIST_PX = 520;
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const s = props.startState ?? 'synced';
+    this.state = {
+      screen: 'home', tab: 0, cursor: 0, sel: 0, page: 0,
+      defaults: DEFAULTS0.map(d => ({ ...d })),
+      user: USER0.slice(),
+      synced: s !== 'notSynced',
+      // newDay: the device clock rolled to Sun 30 since the last sync on Sat 29.
+      dayShift: s === 'newDay' ? 1 : 0,
+      step: 0, addUrl: '', addResolved: '', pendingRemove: -1,
+      article: null, artPage: 0,
+    };
+  }
+  componentDidUpdate() {
+    const st = this.state;
+    if (this._t) return;
+    if (st.screen === 'sync' && st.step >= 1 && st.step <= this.activeFeeds().length) {
+      this._t = setTimeout(() => { this._t = null; this.setState({ step: st.step + 1, synced: true, dayShift: 0 }); }, 700);
+    } else if (st.screen === 'add' && st.step === 2) {
+      this._t = setTimeout(() => { this._t = null; this.finishAdd(); }, 1600);
+    }
+  }
+  componentWillUnmount() { if (this._t) { clearTimeout(this._t); this._t = null; } }
+  go(screen, extra) { this.setState({ screen, sel: 0, ...(extra || {}) }); }
+
+  activeFeeds() { return this.state.defaults.filter(d => d.on).concat(this.state.user); }
+  // Tab labels follow the real clock: Today, Yesterday, then the third day's date.
+  dayInfo(tab) {
+    const st = this.state;
+    const calIdx = st.dayShift ? [3, 0, 1][tab] : tab;   // newDay: Sun 30 / Sat 29 / Fri 28
+    const dataIdx = tab - st.dayShift;                  // which downloaded day feeds this tab (-1 = none yet)
+    const label = tab === 0 ? 'Today' : tab === 1 ? 'Yesterday' : CAL[calIdx].slice(0, 6);
+    return { label, long: CAL[calIdx], dataIdx };
+  }
+  dayRowsModel(tab) {
+    const st = this.state; const rows = [];
+    const { dataIdx } = this.dayInfo(tab);
+    if (!st.synced || dataIdx < 0) return rows;
+    this.activeFeeds().forEach((f) => {
+      const items = ((ITEMS[f.name] || [])[dataIdx]) || [];
+      if (!items.length) return;
+      rows.push({ isHeader: true, isItem: false, label: f.name + ' · ' + items.length, h: 32 });
+      items.forEach((it, i) => rows.push({ isHeader: false, isItem: true, label: it[0], meta: it[1], feed: f.name, idx: i, tab, h: 40 }));
+    });
+    return rows;
+  }
+  // Pack rows into pages by pixel height, like the device does with its list area.
+  pagesModel(tab) {
+    const rows = this.dayRowsModel(tab); const pages = []; let cur = [], used = 0;
+    rows.forEach(r => {
+      if (used + r.h > LIST_PX && cur.length) { pages.push(cur); cur = []; used = 0; }
+      cur.push(r); used += r.h;
+    });
+    if (cur.length) pages.push(cur);
+    return pages;
+  }
+  finishAdd() {
+    const st = this.state;
+    const host = st.addUrl.replace(/^https?:\/\//, '').split('/')[0];
+    const resolved = 'https://' + host + '/feed/';
+    this.setState({ user: st.user.concat([{ name: host, url: resolved }]), addResolved: resolved, step: 3 });
+  }
+
+  renderVals() {
+    const st = this.state; const sc = st.screen;
+    const inv = (on) => ({ bg: on ? '#000000' : '#ffffff', fg: on ? '#ffffff' : '#000000' });
+    let title = 'News', hints = ['Back', 'Select', '↑', '↓'];
+    const flags = { isHome: false, isFeeds: false, isRemove: false, isKeyboard: false, isWifi: false, isStatus: false, isArticle: false };
+    let tabs = [];
+    let syncRow = inv(false), feedsRow = inv(false), addRow = inv(false);
+    let dayRows = [], userRows = [], defaultRows = [], wifiRows = [], removeBody = '';
+    let statusTitle = '', statusBody = '', statusHasBar = false, statusPct = '0%';
+    let artTitle = '', artMeta = '', artParas = [], artFirstPage = true, artFootLeft = '', artFootRight = '';
+    let dayFootLeft = '', dayFootRight = '', dayEmpty = false, dayHasItems = false, dayEmptyText = '', feedsFoot = '';
+    const wifi = (onPick) => NETS.map((n, i) => ({ label: n, meta: i === 0 ? 'saved' : '', ...inv(i === st.sel), pick: () => onPick(i) }));
+    const nUser = st.user.length;
+    const lastSync = CAL[0] + ' 08:14';
+    const syncMeta = !st.synced ? 'Never' : st.dayShift ? 'Yesterday 08:14' : 'Today 08:14';
+
+    if (sc === 'home') {
+      flags.isHome = true;
+      const onTabs = st.cursor === 2;
+      syncRow = inv(st.cursor === 0); feedsRow = inv(st.cursor === 1);
+      tabs = [0, 1, 2].map(i => {
+        const active = i === st.tab;
+        const focus = active && onTabs;   // settings idiom: focused tab inverts, unfocused active tab underlines
+        return { label: this.dayInfo(i).label, weight: active ? 700 : 500,
+          line: active && !focus ? '2px solid #000' : '2px solid transparent', ...inv(focus),
+          pick: () => this.setState({ tab: i, page: 0, cursor: 2 }) };
+      });
+      const pages = this.pagesModel(st.tab);
+      const page = Math.min(st.page, Math.max(0, pages.length - 1));
+      const pageRows = pages[page] || [];
+      let k = 0;
+      dayRows = pageRows.map(r => {
+        if (!r.isItem) return { ...r, bg: '#ffffff', fg: '#000000', pick: () => {} };
+        const sel = inv(st.cursor === 3 + k); k++;
+        return { ...r, ...sel, pick: () => this.openArticle(r) };
+      });
+      const allItems = this.dayRowsModel(st.tab).filter(r => r.isItem).length;
+      dayHasItems = pageRows.length > 0; dayEmpty = !dayHasItems;
+      const info = this.dayInfo(st.tab);
+      dayEmptyText = !st.synced ? 'Not synced yet.\nSync to download the last 3 days of headlines.'
+        : this.activeFeeds().length === 0 ? 'No feeds enabled.\nOpen Feeds.'
+        : info.dataIdx < 0 ? 'Not synced today.\nLast sync ' + lastSync + '.\nSync to get ' + info.long + '.'
+        : 'Nothing from ' + info.long + '.';
+      dayFootLeft = allItems + ' items · ' + info.long;
+      dayFootRight = pages.length > 1 ? 'Page ' + (page + 1) + ' / ' + pages.length : (dayHasItems ? 'Offline' : '');
+      const nextTab = this.dayInfo((st.tab + 1) % 3).label;
+      hints = ['Back', st.cursor === 0 ? 'Sync' : st.cursor === 1 ? 'Open' : onTabs ? nextTab : 'Open', '↑', '↓'];
+    } else if (sc === 'feeds') {
+      flags.isFeeds = true; title = 'Feeds';
+      addRow = inv(st.cursor === 0);
+      userRows = st.user.map((f, i) => ({ ...f, ...inv(st.cursor === 1 + i), pick: () => this.askRemove(i) }));
+      defaultRows = st.defaults.map((d, i) => ({ name: d.name, state: d.on ? 'On' : 'Off', ...inv(st.cursor === 1 + nUser + i), pick: () => this.toggleDefault(i) }));
+      const onDefault = st.cursor >= 1 + nUser;
+      feedsFoot = onDefault ? 'Built-in outlets: turn on or off, no removal.' : nUser ? 'Your feeds: select to remove.' : 'Add a site address; the feed is found for you.';
+      hints = ['Back', st.cursor === 0 ? 'Add' : onDefault ? 'Toggle' : 'Remove', '↑', '↓'];
+    } else if (sc === 'remove') {
+      flags.isRemove = true; title = 'Feeds';
+      const f = st.user[st.pendingRemove];
+      removeBody = (f ? f.name + '\n' + f.url : '') + '\n\nIts downloaded news is cleared.';
+      hints = ['Keep', 'Remove', '', ''];
+    } else if (sc === 'add') {
+      title = 'Add feed';
+      if (st.step === 0) { flags.isKeyboard = true; hints = ['Cancel', 'Type', '←', '→']; }
+      else if (st.step === 1) { flags.isWifi = true; title = 'Wi-Fi'; hints = ['Cancel', 'Connect', '↑', '↓']; wifiRows = wifi((i) => this.setState({ sel: i, step: 2 })); }
+      else if (st.step === 2) { flags.isStatus = true; hints = ['', '', '', ''];
+        statusTitle = 'Looking for the feed…';
+        statusBody = st.addUrl + '\n\nReading the page header for an RSS or Atom link,\nthen trying /feed and /rss.xml.'; }
+      else { flags.isStatus = true; hints = ['Done', '', '', ''];
+        statusTitle = 'Feed added';
+        statusBody = st.addResolved + '\n\nSync news to load it.\nDevice restarts back to News.'; }
+    } else if (sc === 'sync') {
+      title = 'Sync';
+      const feeds = this.activeFeeds(); const n = feeds.length;
+      if (st.step === 0) { flags.isWifi = true; title = 'Wi-Fi'; hints = ['Cancel', 'Connect', '↑', '↓']; wifiRows = wifi((i) => this.setState({ sel: i, step: 1 })); }
+      else if (st.step <= n) { flags.isStatus = true; hints = ['', '', '', ''];
+        const k = st.step;
+        statusTitle = 'Feed ' + k + ' of ' + n;
+        statusBody = feeds[k - 1].name + '\n\nDownloading, keeping items from the last 3 days.\nOlder items are removed.';
+        statusHasBar = true; statusPct = Math.round(100 * k / Math.max(n, 1)) + '%'; }
+      else { flags.isStatus = true; hints = ['Done', '', '', ''];
+        let total = 0; for (let d = 0; d < 3; d++) total += this.dayRowsModel(d).filter(r => r.isItem).length;
+        statusTitle = 'News ready';
+        statusBody = total + ' items from ' + n + ' feeds, 3 days.\nSaturday, 29 Aug 2026 · 08:14\n\nRead offline anytime.\nDevice restarts back to News.'; }
+    } else if (sc === 'article') {
+      flags.isArticle = true; const a = st.article;
+      title = a.feed;
+      artTitle = a.title; artMeta = a.feed + ' · ' + a.long + ' ' + a.time;
+      const pages = Math.ceil(BODY.length / PER_PAGE);
+      artFirstPage = st.artPage === 0;
+      artParas = BODY.slice(st.artPage * PER_PAGE, st.artPage * PER_PAGE + PER_PAGE).map(t => ({ t }));
+      artFootLeft = 'Page ' + (st.artPage + 1) + ' / ' + pages; artFootRight = artFirstPage ? '' : a.title;
+      hints = ['Back', '', '←', '→'];
+    }
+
+    return {
+      clock: '08:14', title,
+      ...flags, tabs,
+      syncRow, feedsRow, syncMeta, feedsMeta: String(this.activeFeeds().length),
+      dayEmpty, dayHasItems, dayEmptyText, dayRows, dayFootLeft, dayFootRight,
+      pagePrev: () => this.pageBy(-1), pageNext: () => this.pageBy(1),
+      openSync: () => this.startSync(), openFeeds: () => this.go('feeds', { cursor: 0 }),
+      addRow, addMeta: nUser + ' / ' + USER_MAX, hasUserFeeds: nUser > 0, userRows, defaultRows, feedsFoot,
+      openAdd: () => this.startAdd(),
+      removeBody, removeNo: () => this.go('feeds'), removeYes: () => this.doRemove(),
+      typed: st.addUrl, kbRow1: KB1.map(c => ({ c })), kbRow2: KB2.map(c => ({ c })), kbRow3: KB3.map(c => ({ c })),
+      kbDone: () => this.setState({ step: 1, sel: 0 }),
+      wifiRows,
+      statusTitle, statusBody, statusHasBar, statusPct,
+      artTitle, artMeta, artParas, artFirstPage, artFootLeft, artFootRight,
+      hint1: hints[0], hint2: hints[1], hint3: hints[2], hint4: hints[3],
+      btnBack: () => this.back(), btnConfirm: () => this.confirm(), btnUp: () => this.move(-1), btnDown: () => this.move(1),
+    };
+  }
+
+  // Side buttons: page the headline list under the tabs.
+  pageBy(d) {
+    const st = this.state; if (st.screen !== 'home') return;
+    const n = this.pagesModel(st.tab).length; if (n < 2) return;
+    this.setState({ page: Math.max(0, Math.min(n - 1, st.page + d)), cursor: st.cursor >= 3 ? 3 : st.cursor });
+  }
+  startSync() { if (this.activeFeeds().length) this.go('sync', { step: 0, cursor: 0 }); else this.go('feeds', { cursor: 0 }); }
+  startAdd() { this.go('add', { step: 0, addUrl: 'blog.arduino.cc', cursor: 0 }); }
+  openArticle(r) { this.go('article', { article: { feed: r.feed, title: r.label, time: r.meta, long: this.dayInfo(r.tab).long }, artPage: 0 }); }
+  askRemove(i) { this.setState({ cursor: i + 1 }); this.go('remove', { pendingRemove: i }); }
+  toggleDefault(i) { const defaults = this.state.defaults.map((d, j) => j === i ? { ...d, on: !d.on } : d); this.setState({ defaults, cursor: 1 + this.state.user.length + i }); }
+  doRemove() { const st = this.state; const user = st.user.slice(); user.splice(st.pendingRemove, 1); this.setState({ user }); this.go('feeds', { cursor: 0 }); }
+  busy() { const st = this.state; return (st.screen === 'sync' && st.step >= 1 && st.step <= this.activeFeeds().length) || (st.screen === 'add' && st.step === 2); }
+  back() {
+    const st = this.state;
+    if (st.screen === 'home' || this.busy()) return;
+    if (st.screen === 'article') return this.go('home');
+    if (st.screen === 'remove') return this.go('feeds');
+    if (st.screen === 'add' && st.step === 0) return this.go('feeds', { cursor: 0 });
+    this.go('home', { tab: 0, page: 0, cursor: 0 });
+  }
+  confirm() {
+    const st = this.state;
+    if (this.busy()) return;
+    if (st.screen === 'home') {
+      if (st.cursor === 0) return this.startSync();
+      if (st.cursor === 1) return this.go('feeds', { cursor: 0 });
+      if (st.cursor === 2) return this.setState({ tab: (st.tab + 1) % 3, page: 0 });
+      const pages = this.pagesModel(st.tab); const page = Math.min(st.page, Math.max(0, pages.length - 1));
+      const r = (pages[page] || []).filter(x => x.isItem)[st.cursor - 3]; if (r) return this.openArticle(r);
+      return;
+    }
+    if (st.screen === 'feeds') {
+      if (st.cursor === 0) return this.startAdd();
+      if (st.cursor <= st.user.length) return this.askRemove(st.cursor - 1);
+      return this.toggleDefault(st.cursor - 1 - st.user.length);
+    }
+    if (st.screen === 'remove') return this.doRemove();
+    if (st.screen === 'add') { if (st.step === 0) return this.setState({ step: 1, sel: 0 }); if (st.step === 1) return this.setState({ step: 2 }); if (st.step === 3) return this.go('home', { tab: 0, page: 0, cursor: 0 }); return; }
+    if (st.screen === 'sync') { if (st.step === 0) return this.setState({ step: 1 }); if (st.step > this.activeFeeds().length) return this.go('home', { tab: 0, page: 0, cursor: 0 }); return; }
+  }
+  move(d) {
+    const st = this.state;
+    if (st.screen === 'home') {
+      const pages = this.pagesModel(st.tab); const page = Math.min(st.page, Math.max(0, pages.length - 1));
+      const n = 3 + (pages[page] || []).filter(r => r.isItem).length;
+      return this.setState({ cursor: (st.cursor + d + n) % n });
+    }
+    if (st.screen === 'feeds') { const n = 1 + st.user.length + st.defaults.length; return this.setState({ cursor: (st.cursor + d + n) % n }); }
+    if (st.screen === 'article') { const pages = Math.ceil(BODY.length / PER_PAGE); return this.setState({ artPage: Math.max(0, Math.min(pages - 1, st.artPage + d)) }); }
+    const onWifi = (st.screen === 'sync' && st.step === 0) || (st.screen === 'add' && st.step === 1);
+    if (onWifi) return this.setState({ sel: (st.sel + d + NETS.length) % NETS.length });
+  }
+}
+</script>
+</body>
+</html>

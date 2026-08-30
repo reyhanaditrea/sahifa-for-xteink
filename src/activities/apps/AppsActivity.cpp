@@ -24,6 +24,7 @@
 #include "components/icons/appfiles72.h"
 #include "components/icons/appgames72.h"
 #include "components/icons/appgym72.h"
+#include "components/icons/appnews72.h"
 #include "components/icons/apppomodoro72.h"
 #include "components/icons/appprayer72.h"
 #include "components/icons/appquran72.h"
@@ -85,12 +86,14 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
          MIDAD_APP_SETTINGS.tasbihEnabled = v;
          MIDAD_APP_SETTINGS.saveToFile();
        }},
-      // News is deliberately absent: the server removed /opds/news (foulad-ebooks
-      // PR #113, live 2026-08-05) after News-as-EPUB kept producing on-device parse
-      // crashes -- News is an app-only feature now (the phone app renders native
-      // article cards). A tile here would only ever reach a permanent 404. The
-      // launch plumbing (AppId::News, goToNews) stays for a possible future
-      // device-facing endpoint, but nothing routes to it.
+      // News reads RSS/Atom feeds the device downloads itself, so it no longer
+      // depends on the server endpoint that was removed in 2026. The setting keeps
+      // its old `rssEnabled` name and JSON key for settings.json/web-sync.
+      {AppId::News, StrId::STR_NEWS, [] { return MIDAD_APP_SETTINGS.rssEnabled; },
+       [](uint8_t v) {
+         MIDAD_APP_SETTINGS.rssEnabled = v;
+         MIDAD_APP_SETTINGS.saveToFile();
+       }},
       {AppId::Stopwatch, StrId::STR_STOPWATCH, [] { return MIDAD_APP_SETTINGS.stopwatchEnabled; },
        [](uint8_t v) {
          MIDAD_APP_SETTINGS.stopwatchEnabled = v;
@@ -118,15 +121,14 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
 
 const uint8_t* AppsActivity::iconFor(const AppId id) {
   // Indexed by AppId, which is a plain contiguous enum, so this stays a load rather
-  // than a nine-way branch. News holds the slot it still occupies in the enum after
-  // its tile was removed (see entries()); nullptr there means "label only" to the
-  // tile renderer, which is also what any AppId added without an icon would get.
+  // than a nine-way branch. An AppId added without an icon gets nullptr here, which
+  // the tile renderer reads as "label only".
   static const uint8_t* const ICONS[] = {
       AppFiles72Icon,      // Files
       AppQuran72Icon,      // Quran
       AppGames72Icon,      // Games
       AppTasbih72Icon,     // Tasbih
-      nullptr,             // News -- no tile
+      AppNews72Icon,       // News
       AppStopwatch72Icon,  // Stopwatch
       AppPomodoro72Icon,   // Pomodoro
       AppGym72Icon,        // Gym
@@ -205,9 +207,8 @@ bool AppsActivity::launch(const AppEntry& entry) {
       startActivityForResult(std::make_unique<TasbihActivity>(renderer, mappedInput), [](const ActivityResult&) {});
       return true;
     case AppId::News:
-      // Reboots in, like the Library does: News browses OPDS over WiFi and then
-      // downloads an EPUB, the same stack of allocations that made
-      // goToFouladEbooks() restart first. Does not return.
+      // Reboots in the way the Library does: a sync brings up WiFi, streams feeds
+      // to SD and runs expat over them, so News wants a fresh heap. Does not return.
       silentRestartToNews();
       return true;
     case AppId::Stopwatch:

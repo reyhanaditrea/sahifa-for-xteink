@@ -43,3 +43,7 @@ flake.*
 *.signing-key.pem
 devkey-*.pem
 midad-ota-signing-key-production.pem
+
+# Build and serial-monitor logs: local scratch, regenerated on demand.
+*.log
+logs/
