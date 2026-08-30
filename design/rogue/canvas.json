@@ -1,0 +1,102 @@
+{
+  "artboards": [
+    {
+      "file": "Prototype.dc.html",
+      "x": -720,
+      "y": 0,
+      "w": 528,
+      "h": 920,
+      "title": "Clickable prototype",
+      "is_interactive": true
+    },
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 528,
+      "h": 852,
+      "title": "0 \u00e2\u20ac\u201d Title"
+    },
+    {
+      "file": "Round1Room.dc.html",
+      "x": 640,
+      "y": 0,
+      "w": 528,
+      "h": 852,
+      "title": "1 \u00e2\u20ac\u201d Room, depth 1"
+    },
+    {
+      "file": "Round1Combat.dc.html",
+      "x": 1280,
+      "y": 0,
+      "w": 528,
+      "h": 852,
+      "title": "1b \u00e2\u20ac\u201d Combat starts"
+    },
+    {
+      "file": "Round1Resolve.dc.html",
+      "x": 1920,
+      "y": 0,
+      "w": 528,
+      "h": 852,
+      "title": "1c \u00e2\u20ac\u201d Combat resolved"
+    },
+    {
+      "file": "Round2Room.dc.html",
+      "x": 0,
+      "y": 1000,
+      "w": 528,
+      "h": 852,
+      "title": "2 \u00e2\u20ac\u201d Shrine event"
+    },
+    {
+      "file": "Round3Room.dc.html",
+      "x": 640,
+      "y": 1000,
+      "w": 528,
+      "h": 852,
+      "title": "3 \u00e2\u20ac\u201d Depth 2, merchant"
+    },
+    {
+      "file": "Pause.dc.html",
+      "x": 1280,
+      "y": 1000,
+      "w": 528,
+      "h": 852,
+      "title": "Back \u00e2\u20ac\u201d Pause menu"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": 0,
+      "y": -170,
+      "w": 1100,
+      "text": "Text roguelite \u00e2\u20ac\u201d three rounds, left to right then next row. 480\u00c3\u2014800 portrait, same header / 30px inverted list rows / 106px hint boxes as the chess canvas.\nOne redraw per Confirm. Narrative on top, choices pinned above the hints so the cursor is always in the same place."
+    },
+    {
+      "id": "loop",
+      "x": 1920,
+      "y": 1000,
+      "w": 528,
+      "text": "The loop:\n1. Room \u00e2\u20ac\u201d narrative + 2-4 choices. Up/Down move, Confirm picks.\n2. A choice either resolves inline (event), opens Combat, or Descends (depth+1, new room).\n3. Combat \u00e2\u20ac\u201d Attack / Defend / Item / Flee, one turn per Confirm, 3-line log. Ends in loot + Continue, or death.\n4. Back opens Pause; Abandon ends the run. Power-off mid-run resumes from the same screen.\nTurn counter ticks on every action; seed in the header so a run can be retold."
+    },
+    {
+      "id": "n1",
+      "x": 1280,
+      "y": 880,
+      "w": 528,
+      "text": "Combat log is a fixed 3-line box so the layout never shifts between turns \u00e2\u20ac\u201d only the numbers change, so a fast (partial) refresh is enough."
+    },
+    {
+      "id": "proto",
+      "x": -720,
+      "y": -170,
+      "w": 528,
+      "text": "Clickable. Play it with the four buttons under the screen (or click rows / hint boxes). Same three rounds as the storyboard, plus a fourth room with a boss; combat math is fixed for the prototype, not random."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

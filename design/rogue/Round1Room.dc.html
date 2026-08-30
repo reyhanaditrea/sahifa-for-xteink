@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, "Helvetica Neue", Arial, sans-serif; background: #e8e6e1; }
+    a { color: #000; } a:hover { color: #333; }
+    .screen { width: 480px; height: 800px; background: #fff; color: #000; position: relative; overflow: hidden; }
+    .hdr { position: absolute; top: 5px; left: 0; width: 480px; height: 45px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; }
+    .batt { position: absolute; right: 12px; top: 10px; display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
+    .status { position: absolute; top: 60px; left: 20px; width: 440px; display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; }
+    .rule { position: absolute; left: 20px; width: 440px; height: 1px; background: #000; }
+    .body { position: absolute; left: 20px; width: 440px; display: flex; flex-direction: column; gap: 10px; font-size: 15px; font-weight: 500; line-height: 1.45; text-wrap: pretty; }
+    .log { position: absolute; left: 20px; width: 440px; border: 1px solid #000; box-sizing: border-box; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; font-weight: 500; }
+    .list { position: absolute; left: 0; width: 480px; display: flex; flex-direction: column; }
+    .row { height: 30px; display: flex; align-items: center; padding: 0 20px; font-size: 16px; font-weight: 500; }
+    .row.sel { background: #000; color: #fff; }
+    .hint { position: absolute; bottom: 0; height: 40px; width: 106px; border: 1px solid #000; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; background: #fff; }
+    .tag { position: absolute; top: 22px; left: 20px; font-size: 12px; font-weight: 500; }
+  </style>
+</helmet>
+<div style="padding: 24px; width: 528px; height: 852px; box-sizing: border-box; overflow: hidden;">
+  <div class="screen" style="border: 2px solid #111">
+    <div class="hdr"><span>Rogue</span>
+      <div class="tag">Seed 3F2A91C0</div>
+      <div class="batt"><span>82%</span><svg width="15" height="12" viewBox="0 0 15 12"><rect x="0.5" y="0.5" width="12" height="11" fill="none" stroke="#000"></rect><rect x="13" y="3.5" width="2" height="5" fill="#000"></rect><rect x="2" y="2" width="8" height="8" fill="#000"></rect></svg></div>
+    </div>
+    <div class="status"><span>HP 20/20</span><span>Gold 0</span><span>Depth 1</span><span>Turn 1</span></div>
+    <div class="rule" style="top: 84px"></div>
+    <div class="body" style="top: 100px">
+      <div>The stair ends in a low chamber that smells of wet iron. Torchlight from a bracket on the far wall shows three ways on.</div>
+      <div>To the left, a rusted grate stands ajar over a shaft; a cold draught comes up it. Ahead, a corridor of cut stone runs straight and dry. To the right, you hear the slow drip of water and, under it, something breathing.</div>
+    </div>
+    <div class="rule" style="top: 560px"></div>
+    <div class="list" style="top: 576px">
+      <div class="row">Climb down the grate</div>
+      <div class="row">Take the dry corridor</div>
+      <div class="row sel">Go toward the breathing</div>
+      <div class="row">Rest here a moment</div>
+    </div>
+    <div class="hint" style="left: 25px">Menu</div>
+    <div class="hint" style="left: 130px">Choose</div>
+    <div class="hint" style="left: 245px">Up</div>
+    <div class="hint" style="left: 350px">Down</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
