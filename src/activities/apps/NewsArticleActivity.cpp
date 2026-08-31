@@ -275,8 +275,19 @@ void NewsArticleActivity::render(RenderLock&&) {
   const int textWidth = pageWidth - 2 * metrics.contentSidePadding;
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
 
+  const int pageCount = static_cast<int>(pageStarts_.size()) - 1;
+
   renderer.clearScreen();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, feedName_.c_str());
+  // The page count rides in the header, the way the headline list carries its
+  // own: the hints row can only show it while the Confirm slot is free, and a
+  // fetched article gives no other clue that the text runs past this screen.
+  char headerTitle[48];
+  if (pageCount > 1) {
+    snprintf(headerTitle, sizeof(headerTitle), "%s  %d/%d", feedName_.c_str(), currentPage_ + 1, pageCount);
+  } else {
+    snprintf(headerTitle, sizeof(headerTitle), "%s", feedName_.c_str());
+  }
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, headerTitle);
 
   int y = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   if (!loaded_) {
@@ -306,7 +317,6 @@ void NewsArticleActivity::render(RenderLock&&) {
     y += lineHeight;
   }
 
-  const int pageCount = static_cast<int>(pageStarts_.size()) - 1;
   const bool lastPage = currentPage_ + 1 >= pageCount;
 
   // The offer sits at the foot of the last page, where the summary runs out and
@@ -332,11 +342,9 @@ void NewsArticleActivity::render(RenderLock&&) {
                               actionable ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
   }
 
-  char pageLabel[24] = {};
-  if (pageCount > 1) {
-    snprintf(pageLabel, sizeof(pageLabel), "%d / %d", currentPage_ + 1, pageCount);
-  }
-  const char* confirmLabel = pageLabel;
+  // Confirm only ever does something on the last page; anywhere else the slot
+  // stays empty rather than wearing the page count, which read as a button.
+  const char* confirmLabel = "";
   if (lastPage && action_ == Action::Fetch) {
     confirmLabel = tr(STR_NEWS_GET_FULL);
   } else if (lastPage && action_ == Action::Queued) {
