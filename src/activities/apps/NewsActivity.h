@@ -45,7 +45,8 @@ class NewsActivity final : public UiListActivity {
   struct Entry {
     uint8_t slot;
     uint16_t item;
-    uint8_t day;  // 0 today, 1 yesterday, 2 the day before
+    uint8_t day;         // 0 the newest tab, 1 the one before it, 2 the one before that
+    uint32_t ordinal;    // local day the item belongs to; 0 when nothing dated it
     uint32_t epoch;
   };
   // A row of the day list: either a feed header or one of that feed's items.
@@ -90,6 +91,10 @@ class NewsActivity final : public UiListActivity {
   const char* topLabels_[2] = {nullptr, nullptr};
 
   uint32_t todayOrdinal_ = 0;
+  // The day the tabs count back from: today when the clock is set, otherwise the
+  // newest day the cache holds, so a device that lost its clock shows dated tabs
+  // rather than filing week-old headlines under "Today".
+  uint32_t anchorOrdinal_ = 0;
   int32_t localOffsetSec_ = 0;
   int tab_ = 0;
   int page_ = 0;

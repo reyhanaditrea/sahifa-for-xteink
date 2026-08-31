@@ -80,6 +80,7 @@ void NewsActivity::onEnter() {
 void NewsActivity::loadIndexes() {
   entries_.clear();
   synced_ = false;
+  anchorOrdinal_ = todayOrdinal_;
 
   const size_t slots = NEWS_FEEDS.slotCount();
   for (size_t slot = 0; slot < slots; slot++) {
@@ -100,21 +101,31 @@ void NewsActivity::loadIndexes() {
       NewsIndex::Record record{};
       if (index.read(&record, sizeof(record)) != static_cast<int>(sizeof(record))) break;
 
-      uint8_t day = DAY_UNKNOWN_FALLBACK;
-      if (record.dayOrdinal != 0 && todayOrdinal_ != 0) {
-        if (record.dayOrdinal > todayOrdinal_) continue;  // clock moved backwards
-        const uint32_t age = todayOrdinal_ - record.dayOrdinal;
-        if (age >= NewsIndex::DAY_COUNT) continue;  // older than the window we keep
-        day = static_cast<uint8_t>(age);
-      } else if (header.syncOrdinal != 0 && todayOrdinal_ != 0) {
-        // Undated item: it belongs to whichever day the sync itself ran on.
-        const uint32_t age = (todayOrdinal_ >= header.syncOrdinal) ? todayOrdinal_ - header.syncOrdinal : 0;
-        if (age >= NewsIndex::DAY_COUNT) continue;
-        day = static_cast<uint8_t>(age);
-      }
-      entries_.push_back(Entry{static_cast<uint8_t>(slot), i, day, record.epoch});
+      // An undated item belongs to whichever day the sync itself ran on. The
+      // bucketing waits until every slot is in, because without a clock the
+      // newest of these ordinals is the only thing that can anchor the tabs.
+      const uint32_t ordinal = (record.dayOrdinal != 0) ? record.dayOrdinal : header.syncOrdinal;
+      entries_.push_back(Entry{static_cast<uint8_t>(slot), i, DAY_UNKNOWN_FALLBACK, ordinal, record.epoch});
     }
   }
+
+  if (anchorOrdinal_ == 0) {
+    for (const Entry& entry : entries_) {
+      if (entry.ordinal > anchorOrdinal_) anchorOrdinal_ = entry.ordinal;
+    }
+  }
+
+  size_t kept = 0;
+  for (Entry& entry : entries_) {
+    if (entry.ordinal != 0 && anchorOrdinal_ != 0) {
+      if (entry.ordinal > anchorOrdinal_) continue;  // clock moved backwards
+      const uint32_t age = anchorOrdinal_ - entry.ordinal;
+      if (age >= NewsIndex::DAY_COUNT) continue;  // older than the window we keep
+      entry.day = static_cast<uint8_t>(age);
+    }
+    entries_[kept++] = entry;
+  }
+  entries_.resize(kept);
   // Merged storage lists this sync's items before the carried-over ones, so
   // order by feed, then day, then newest first to read chronologically.
   std::sort(entries_.begin(), entries_.end(), [](const Entry& a, const Entry& b) {
@@ -150,15 +161,17 @@ void NewsActivity::refreshTopRows() {
   feedsValue_ = buf;
 
   // Tab labels track the real clock: Today, Yesterday, then a bare date, since
-  // "the day before yesterday" does not fit a tab.
+  // "the day before yesterday" does not fit a tab. With no clock to speak of
+  // every tab falls back to its own date -- "Today" over a cache the device
+  // cannot date is the one label that would be a lie.
   for (size_t i = 0; i < NewsIndex::DAY_COUNT; i++) {
-    if (i == 0) {
+    if (i == 0 && todayOrdinal_ != 0) {
       tabLabels_[i] = tr(STR_NEWS_TODAY);
-    } else if (i == 1) {
+    } else if (i == 1 && todayOrdinal_ != 0) {
       tabLabels_[i] = tr(STR_NEWS_YESTERDAY);
-    } else if (todayOrdinal_ > i) {
+    } else if (anchorOrdinal_ > i) {
       char date[28];
-      TimeUtils::formatDayOrdinal(todayOrdinal_ - static_cast<uint32_t>(i), date, sizeof(date));
+      TimeUtils::formatDayOrdinal(anchorOrdinal_ - static_cast<uint32_t>(i), date, sizeof(date));
       // "27 Aug 2026" -> "27 Aug": the year is noise on a three-day window.
       char* lastSpace = strrchr(date, ' ');
       if (lastSpace) *lastSpace = '\0';
