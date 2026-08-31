@@ -38,7 +38,8 @@ void HalClock::begin() {
 // on every HTTPS request until then. Cheap enough to do unconditionally at boot: one
 // I2C read of a chip we have just probed.
 void HalClock::restoreSystemTimeFromRTC() {
-  if (!_available || isSystemTimeValid()) return;
+  _rtcHasDate = false;
+  if (!_available) return;
 
   Rtc::DateTime dt;
   if (!_sdkRtc.now(dt)) return;  // absent, or oscillator stopped -- nothing trustworthy in there
@@ -54,6 +55,10 @@ void HalClock::restoreSystemTimeFromRTC() {
     LOG_INF("CLK", "RTC has no calendar date (year %u), leaving system time unset", static_cast<unsigned>(dt.year));
     return;
   }
+  // Recorded even when the system clock is already set, because it is what tells
+  // the WiFi path whether this chip can carry the date across the next reboot.
+  _rtcHasDate = true;
+  if (isSystemTimeValid()) return;
 
   const timeval tv = {epoch, 0};
   settimeofday(&tv, nullptr);
@@ -137,6 +142,7 @@ bool HalClock::syncFromNTP() {
   dt.second = static_cast<uint8_t>(timeinfo.tm_sec);
 
   if (writeTimeToRTC(dt)) {
+    _rtcHasDate = true;
     LOG_INF("CLK", "RTC set to %04d-%02d-%02d %02d:%02d:%02d UTC", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1,
             timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     return true;

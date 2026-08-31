@@ -443,7 +443,14 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
     // drifts ~2 ppm so one sync is enough; users can force a re-sync from
     // Settings > Customise Status Bar > Sync clock now.
-    if (halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
+    //
+    // The flag alone is not enough: a device synced by firmware that wrote no
+    // calendar date carries clockHasBeenSynced=1 over a year-2000 RTC, and this
+    // is the only path that writes the date. Without the second test that device
+    // is locked out of it forever -- the boot restore keeps refusing the stamp,
+    // so every reboot starts with an invalid clock again and anything that dates
+    // its data (News day tabs, reading stats) reads as if no time had passed.
+    if (halClock.isAvailable() && (!SETTINGS.clockHasBeenSynced || !halClock.rtcHasCalendarDate())) {
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();

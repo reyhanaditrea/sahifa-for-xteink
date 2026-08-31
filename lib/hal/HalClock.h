@@ -14,6 +14,7 @@ class HalClock {
   mutable uint8_t _cachedMinute = 0;
   mutable bool _hasCachedTime = false;
   mutable unsigned long _lastPollMs = 0;
+  bool _rtcHasDate = false;
 
   static constexpr unsigned long CLOCK_POLL_MS = 10000;  // 10 seconds
 
@@ -23,6 +24,12 @@ class HalClock {
 
   // True if an RTC is present on this device
   bool isAvailable() const { return _available; }
+
+  // True if the RTC holds a plausible calendar date, not just a time of day.
+  // Firmware before the date was written left the chip ticking on a year-2000
+  // stamp, so a device can be "synced" and still have nothing to restore from.
+  // Read once at begin() and updated by syncFromNTP().
+  bool rtcHasCalendarDate() const { return _rtcHasDate; }
 
   // Get current hour (0-23) and minute (0-59).
   // Returns false if RTC is not available.
