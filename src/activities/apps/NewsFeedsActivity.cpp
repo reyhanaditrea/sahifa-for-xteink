@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <cstdio>
 
@@ -15,6 +16,12 @@
 #include "news/NewsPaths.h"
 
 namespace fui = freeink::ui;
+
+namespace {
+// What a menu entry does. Which entries are offered depends on the row, so the
+// popup's index means nothing on its own and is mapped back through this.
+enum MenuAction : uint8_t { ACTION_TOGGLE, ACTION_MOVE_UP, ACTION_MOVE_DOWN, ACTION_REMOVE };
+}  // namespace
 
 NewsFeedsActivity::NewsFeedsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : UiListActivity("NewsFeeds", renderer, mappedInput) {}
@@ -62,7 +69,9 @@ void NewsFeedsActivity::rebuildRows() {
   labels_.emplace_back(tr(STR_NEWS_DEFAULT_OUTLETS));
   rows_.push_back({RowKind::SectionHeader, 0});
   for (size_t i = 0; i < builtinCount; i++) {
-    labels_.emplace_back(NewsBuiltins::FEEDS[i].name);
+    // i is the position on screen; the outlet it shows is whatever the store's
+    // order puts there.
+    labels_.emplace_back(NewsBuiltins::FEEDS[NEWS_FEEDS.builtinAt(i)].name);
     rows_.push_back({RowKind::Builtin, i});
   }
 
@@ -81,10 +90,12 @@ void NewsFeedsActivity::rebuildRows() {
         break;
       case RowKind::UserFeed:
         item.subtitle = subtitles_[subtitleIndex++].c_str();
+        item.toggle = true;
+        item.toggleChecked = NEWS_FEEDS.userFeedEnabled(rows_[i].index);
         break;
       case RowKind::Builtin:
         item.toggle = true;
-        item.toggleChecked = NEWS_FEEDS.builtinEnabled(rows_[i].index);
+        item.toggleChecked = NEWS_FEEDS.builtinEnabled(NEWS_FEEDS.builtinAt(rows_[i].index));
         break;
     }
     items_.push_back(item);
@@ -125,6 +136,15 @@ int NewsFeedsActivity::nextSelectable(const int from, const int direction) const
     if (rows_[index].kind != RowKind::SectionHeader) break;
   }
   return index;
+}
+
+bool NewsFeedsActivity::handleCustomInput() {
+  return menuPopup_.handleInput(mappedInput, [this] { requestUpdate(); });
+}
+
+void NewsFeedsActivity::render(RenderLock&& lock) {
+  if (menuPopup_.processRender(renderer, mappedInput)) return;
+  UiListActivity::render(std::move(lock));
 }
 
 void NewsFeedsActivity::navigateButtons() {
@@ -172,6 +192,160 @@ void NewsFeedsActivity::promptRemove(const size_t userIndex) {
                          });
 }
 
+size_t NewsFeedsActivity::slotForRow(const Row& row) const {
+  return (row.kind == RowKind::UserFeed) ? NEWS_FEEDS.builtinCount() + row.index : row.index;
+}
+
+bool NewsFeedsActivity::swapCachedFeeds(const size_t slotA, const size_t slotB) {
+  bool ok = true;
+  for (int pass = 0; pass < 2; pass++) {
+    char a[64];
+    char b[64];
+    char tmp[64];
+    if (pass == 0) {
+      NewsPaths::indexPath(slotA, a, sizeof(a));
+      NewsPaths::indexPath(slotB, b, sizeof(b));
+      NewsPaths::indexTempPath(slotA, tmp, sizeof(tmp));
+    } else {
+      NewsPaths::bodyPath(slotA, a, sizeof(a));
+      NewsPaths::bodyPath(slotB, b, sizeof(b));
+      NewsPaths::bodyTempPath(slotA, tmp, sizeof(tmp));
+    }
+    // Either side may have nothing cached -- a feed that has never synced, or
+    // one that was off during the last sync -- so a missing file is not a
+    // failure, it just makes that half of the swap a plain rename.
+    const bool haveA = Storage.exists(a);
+    const bool haveB = Storage.exists(b);
+    if (!haveA && !haveB) continue;
+    if (haveA && !Storage.rename(a, tmp)) {
+      ok = false;
+      continue;
+    }
+    if (haveB && !Storage.rename(b, a)) {
+      ok = false;
+      continue;
+    }
+    if (haveA && !Storage.rename(tmp, b)) ok = false;
+  }
+  return ok;
+}
+
+void NewsFeedsActivity::moveRow(const int index, const int delta) {
+  if (index < 0 || index >= listCount()) return;
+  const Row row = rows_[index];
+  if (row.kind != RowKind::UserFeed && row.kind != RowKind::Builtin) return;
+  const bool isUser = row.kind == RowKind::UserFeed;
+
+  const size_t sectionCount = isUser ? NEWS_FEEDS.userCount() : NEWS_FEEDS.builtinCount();
+  const size_t target = static_cast<size_t>(static_cast<int>(row.index) + delta);
+  if (target >= sectionCount) return;
+
+  const size_t slotA = slotForRow(row);
+  const size_t slotB = slotForRow(Row{row.kind, target});
+
+  // The in-memory move is what the rest of this pass reads, so it stands even
+  // if persisting it failed; the cache has to follow it either way.
+  if (isUser) {
+    (void)NEWS_FEEDS.moveUserFeed(row.index, delta);
+  } else {
+    (void)NEWS_FEEDS.moveBuiltin(row.index, delta);
+  }
+  if (!swapCachedFeeds(slotA, slotB)) {
+    LOG_ERR("NEWS", "slot %zu/%zu cache swap failed, clearing", slotA, slotB);
+    invalidateCache();
+  }
+  // "Reopen this article after the restart" is a slot number, and both slots
+  // just changed hands.
+  NEWS_FEEDS.clearPendingArticle();
+
+  {
+    RenderLock lock(*this);
+    // A section is contiguous, so the row that moved is exactly one list
+    // position away -- follow it rather than leaving the cursor behind.
+    nav.selected = index + delta;
+    rebuildRows();
+  }
+  requestUpdate();
+}
+
+void NewsFeedsActivity::toggleRow(const Row& row) {
+  if (row.kind == RowKind::UserFeed) {
+    NEWS_FEEDS.setUserFeedEnabled(row.index, !NEWS_FEEDS.userFeedEnabled(row.index));
+  } else if (row.kind == RowKind::Builtin) {
+    const size_t table = NEWS_FEEDS.builtinAt(row.index);
+    NEWS_FEEDS.setBuiltinEnabled(table, !NEWS_FEEDS.builtinEnabled(table));
+  } else {
+    return;
+  }
+  // Only changes what the next sync downloads; items already downloaded for a
+  // feed switched off simply stop being listed.
+  NEWS_FEEDS.saveToFile();
+  {
+    RenderLock lock(*this);
+    rebuildRows();
+  }
+  requestUpdate();
+}
+
+int NewsFeedsActivity::rowIndexOf(const Row& row) const {
+  for (size_t i = 0; i < rows_.size(); i++) {
+    if (rows_[i].kind == row.kind && rows_[i].index == row.index) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+void NewsFeedsActivity::showFeedMenu(const int index) {
+  const Row row = rows_[index];
+  const bool isUser = row.kind == RowKind::UserFeed;
+  const size_t sectionCount = isUser ? NEWS_FEEDS.userCount() : NEWS_FEEDS.builtinCount();
+  const bool enabled =
+      isUser ? NEWS_FEEDS.userFeedEnabled(row.index) : NEWS_FEEDS.builtinEnabled(NEWS_FEEDS.builtinAt(row.index));
+
+  // Entries are added only where they apply, so the popup's index means
+  // nothing without the parallel action list.
+  std::vector<const char*> options;
+  std::vector<uint8_t> actions;
+  options.push_back(enabled ? tr(STR_NEWS_DISABLE) : tr(STR_NEWS_ENABLE));
+  actions.push_back(ACTION_TOGGLE);
+  if (row.index > 0) {
+    options.push_back(tr(STR_NEWS_MOVE_UP));
+    actions.push_back(ACTION_MOVE_UP);
+  }
+  if (row.index + 1 < sectionCount) {
+    options.push_back(tr(STR_NEWS_MOVE_DOWN));
+    actions.push_back(ACTION_MOVE_DOWN);
+  }
+  if (isUser) {
+    options.push_back(tr(STR_NEWS_REMOVE));
+    actions.push_back(ACTION_REMOVE);
+  }
+
+  // Titled with the feed's own name: the popup covers the list, so nothing
+  // else on screen would say which row is about to change. The row is captured
+  // by value and looked up again on use -- a move rebuilds the list under it.
+  menuPopup_.show(labels_[index].c_str(), options.data(), static_cast<int>(options.size()), 0,
+                  [this, row, actions](const int choice) {
+                    if (choice < 0 || choice >= static_cast<int>(actions.size())) return;
+                    switch (actions[choice]) {
+                      case ACTION_TOGGLE:
+                        toggleRow(row);
+                        break;
+                      case ACTION_MOVE_UP:
+                        moveRow(rowIndexOf(row), -1);
+                        break;
+                      case ACTION_MOVE_DOWN:
+                        moveRow(rowIndexOf(row), 1);
+                        break;
+                      case ACTION_REMOVE:
+                        promptRemove(row.index);
+                        break;
+                      default:
+                        break;
+                    }
+                  });
+  requestUpdate();
+}
+
 void NewsFeedsActivity::activateIndex(const int index) {
   if (index < 0 || index >= listCount()) return;
   app.clearTapFlash();
@@ -183,21 +357,9 @@ void NewsFeedsActivity::activateIndex(const int index) {
     case RowKind::SectionHeader:
       break;
     case RowKind::UserFeed:
-      promptRemove(row.index);
+    case RowKind::Builtin:
+      showFeedMenu(index);
       break;
-    case RowKind::Builtin: {
-      // Toggling only changes what the next sync downloads; already-downloaded
-      // items for a disabled outlet simply stop being listed.
-      const bool enabled = !NEWS_FEEDS.builtinEnabled(row.index);
-      NEWS_FEEDS.setBuiltinEnabled(row.index, enabled);
-      NEWS_FEEDS.saveToFile();
-      {
-        RenderLock lock(*this);
-        items_[index].toggleChecked = enabled;
-      }
-      requestUpdate();
-      break;
-    }
   }
 }
 
@@ -209,10 +371,8 @@ void NewsFeedsActivity::drawFooter() {
         confirmLabel = tr(STR_ADD);
         break;
       case RowKind::UserFeed:
-        confirmLabel = tr(STR_NEWS_REMOVE);
-        break;
       case RowKind::Builtin:
-        confirmLabel = tr(STR_NEWS_TOGGLE);
+        confirmLabel = tr(STR_NEWS_OPTIONS);
         break;
       case RowKind::SectionHeader:
         break;

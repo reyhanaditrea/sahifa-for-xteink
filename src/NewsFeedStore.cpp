@@ -31,6 +31,10 @@ void NewsFeedStore::toJson(JsonDocument& doc) const {
   for (size_t i = 0; i < NewsBuiltins::COUNT; i++) {
     full.add(builtinFullText_[i]);
   }
+  JsonArray order = doc["builtinOrder"].to<JsonArray>();
+  for (size_t i = 0; i < NewsBuiltins::COUNT; i++) {
+    order.add(builtinOrder_[i]);
+  }
   if (pendingSlot_ != NO_PENDING) {
     doc["openSlot"] = pendingSlot_;
     doc["openItem"] = pendingItem_;
@@ -42,6 +46,7 @@ void NewsFeedStore::toJson(JsonDocument& doc) const {
     obj["name"] = userFeeds_[i].name;
     obj["url"] = userFeeds_[i].url;
     obj["fullText"] = userFeeds_[i].fullText;
+    obj["enabled"] = userFeeds_[i].enabled != 0;
   }
 }
 
@@ -61,6 +66,22 @@ bool NewsFeedStore::fromJson(JsonVariantConst doc) {
     builtinFullText_[builtinIndex] = 0;
   }
 
+  // Rebuilt rather than trusted: a hand-edited file, or an outlet a later
+  // firmware added, must still leave a permutation. Anything unusable is
+  // dropped and whatever the stored order left out is appended in table order,
+  // so a new outlet joins at the end instead of displacing the user's layout.
+  bool seen[NewsBuiltins::COUNT] = {};
+  size_t orderCount = 0;
+  for (const JsonVariantConst value : doc["builtinOrder"].as<JsonArrayConst>()) {
+    const size_t index = value | static_cast<size_t>(NewsBuiltins::COUNT);
+    if (index >= NewsBuiltins::COUNT || seen[index]) continue;
+    seen[index] = true;
+    builtinOrder_[orderCount++] = static_cast<uint8_t>(index);
+  }
+  for (size_t i = 0; i < NewsBuiltins::COUNT; i++) {
+    if (!seen[i]) builtinOrder_[orderCount++] = static_cast<uint8_t>(i);
+  }
+
   userCount_ = 0;
   for (JsonObjectConst obj : doc["feeds"].as<JsonArrayConst>()) {
     if (userCount_ >= MAX_USER_FEEDS) break;
@@ -69,6 +90,7 @@ bool NewsFeedStore::fromJson(JsonVariantConst doc) {
     copyBounded(userFeeds_[userCount_].url, sizeof(userFeeds_[0].url), url);
     copyBounded(userFeeds_[userCount_].name, sizeof(userFeeds_[0].name), obj["name"] | url);
     userFeeds_[userCount_].fullText = obj["fullText"] | static_cast<uint8_t>(0);
+    userFeeds_[userCount_].enabled = (obj["enabled"] | true) ? 1 : 0;
     userCount_++;
   }
   LOG_DBG("NEWS", "Loaded %u user feeds, builtins disabled mask 0x%04X", userCount_, builtinsDisabled_);
@@ -91,6 +113,37 @@ void NewsFeedStore::setBuiltinEnabled(const size_t index, const bool enabled) {
   } else {
     builtinsDisabled_ |= bit;
   }
+}
+
+void NewsFeedStore::resetBuiltinOrder() {
+  for (size_t i = 0; i < NewsBuiltins::COUNT; i++) {
+    builtinOrder_[i] = static_cast<uint8_t>(i);
+  }
+}
+
+size_t NewsFeedStore::builtinAt(const size_t position) const {
+  if (position >= NewsBuiltins::COUNT) return 0;
+  return builtinOrder_[position];
+}
+
+bool NewsFeedStore::moveBuiltin(const size_t position, const int delta) {
+  if (position >= NewsBuiltins::COUNT || (delta != 1 && delta != -1)) return false;
+  const size_t target = static_cast<size_t>(static_cast<int>(position) + delta);
+  if (target >= NewsBuiltins::COUNT) return false;
+  const uint8_t moved = builtinOrder_[position];
+  builtinOrder_[position] = builtinOrder_[target];
+  builtinOrder_[target] = moved;
+  return saveToFile();
+}
+
+bool NewsFeedStore::moveUserFeed(const size_t index, const int delta) {
+  if (index >= userCount_ || (delta != 1 && delta != -1)) return false;
+  const size_t target = static_cast<size_t>(static_cast<int>(index) + delta);
+  if (target >= userCount_) return false;
+  const NewsUserFeed moved = userFeeds_[index];
+  userFeeds_[index] = userFeeds_[target];
+  userFeeds_[target] = moved;
+  return saveToFile();
 }
 
 size_t NewsFeedStore::enabledBuiltinCount() const {
@@ -129,6 +182,8 @@ bool NewsFeedStore::addUserFeed(const char* name, const char* url) {
   }
   copyBounded(userFeeds_[userCount_].url, sizeof(userFeeds_[0].url), url);
   copyBounded(userFeeds_[userCount_].name, sizeof(userFeeds_[0].name), (name && name[0]) ? name : url);
+  userFeeds_[userCount_].fullText = static_cast<uint8_t>(FullText::Unknown);
+  userFeeds_[userCount_].enabled = 1;
   userCount_++;
   return saveToFile();
 }
@@ -143,34 +198,53 @@ bool NewsFeedStore::removeUserFeed(const size_t index) {
   return saveToFile();
 }
 
+bool NewsFeedStore::userFeedEnabled(const size_t index) const {
+  if (index >= userCount_) return false;
+  return userFeeds_[index].enabled != 0;
+}
+
+void NewsFeedStore::setUserFeedEnabled(const size_t index, const bool enabled) {
+  if (index >= userCount_) return;
+  userFeeds_[index].enabled = enabled ? 1 : 0;
+  // Same reasoning as the built-ins: switching a feed back on is the user
+  // asking for its pages to be tried again.
+  userFeeds_[index].fullText = static_cast<uint8_t>(FullText::Unknown);
+}
+
 void NewsFeedStore::setUserFeedName(const size_t index, const char* name) {
   if (index >= userCount_ || !name || name[0] == '\0') return;
   copyBounded(userFeeds_[index].name, sizeof(userFeeds_[0].name), name);
 }
 
 const char* NewsFeedStore::slotName(const size_t slot) const {
-  if (slot < NewsBuiltins::COUNT) return NewsBuiltins::FEEDS[slot].name;
+  if (slot < NewsBuiltins::COUNT) return NewsBuiltins::FEEDS[builtinAt(slot)].name;
   const size_t userIndex = slot - NewsBuiltins::COUNT;
   if (userIndex >= userCount_) return "";
   return userFeeds_[userIndex].name;
 }
 
 const char* NewsFeedStore::slotUrl(const size_t slot) const {
-  if (slot < NewsBuiltins::COUNT) return NewsBuiltins::FEEDS[slot].url;
+  if (slot < NewsBuiltins::COUNT) return NewsBuiltins::FEEDS[builtinAt(slot)].url;
   const size_t userIndex = slot - NewsBuiltins::COUNT;
   if (userIndex >= userCount_) return "";
   return userFeeds_[userIndex].url;
 }
 
 bool NewsFeedStore::slotEnabled(const size_t slot) const {
-  if (slot < NewsBuiltins::COUNT) return builtinEnabled(slot);
-  return slot - NewsBuiltins::COUNT < userCount_;
+  if (slot < NewsBuiltins::COUNT) return builtinEnabled(builtinAt(slot));
+  return userFeedEnabled(slot - NewsBuiltins::COUNT);
 }
 
-size_t NewsFeedStore::enabledSlotCount() const { return enabledBuiltinCount() + userCount_; }
+size_t NewsFeedStore::enabledSlotCount() const {
+  size_t count = enabledBuiltinCount();
+  for (uint8_t i = 0; i < userCount_; i++) {
+    if (userFeeds_[i].enabled != 0) count++;
+  }
+  return count;
+}
 
 NewsFeedStore::FullText NewsFeedStore::fullTextState(const size_t slot) const {
-  if (slot < NewsBuiltins::COUNT) return static_cast<FullText>(builtinFullText_[slot]);
+  if (slot < NewsBuiltins::COUNT) return static_cast<FullText>(builtinFullText_[builtinAt(slot)]);
   const size_t userIndex = slot - NewsBuiltins::COUNT;
   if (userIndex >= userCount_) return FullText::Unknown;
   return static_cast<FullText>(userFeeds_[userIndex].fullText);
@@ -185,7 +259,7 @@ void NewsFeedStore::noteFullTextResult(const size_t slot, const bool ok) {
   }
   if (next == previous) return;
   if (slot < NewsBuiltins::COUNT) {
-    builtinFullText_[slot] = static_cast<uint8_t>(next);
+    builtinFullText_[builtinAt(slot)] = static_cast<uint8_t>(next);
   } else {
     const size_t userIndex = slot - NewsBuiltins::COUNT;
     if (userIndex >= userCount_) return;
@@ -196,7 +270,7 @@ void NewsFeedStore::noteFullTextResult(const size_t slot, const bool ok) {
 
 void NewsFeedStore::clearFullTextState(const size_t slot) {
   if (slot < NewsBuiltins::COUNT) {
-    builtinFullText_[slot] = static_cast<uint8_t>(FullText::Unknown);
+    builtinFullText_[builtinAt(slot)] = static_cast<uint8_t>(FullText::Unknown);
     saveToFile();
     return;
   }

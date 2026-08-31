@@ -17,6 +17,7 @@ struct NewsUserFeed {
   char name[32];
   char url[128];
   uint8_t fullText;  // NewsFeedStore::FullText, as a byte so the struct is POD
+  uint8_t enabled;   // a feed saved before this field existed loads as enabled
 };
 
 class NewsFeedStore : public PersistableStore<NewsFeedStore> {
@@ -30,10 +31,24 @@ class NewsFeedStore : public PersistableStore<NewsFeedStore> {
   bool fromJson(JsonVariantConst doc);
 
   // --- built-in outlets ---
+  // Indices here are into the flash table, not into the displayed order. The
+  // two differ once the user has moved an outlet, so anything that remembers
+  // something about an outlet -- the disabled bit, the learned full-text state
+  // -- stays keyed by the table and survives both a move and a later firmware
+  // adding an outlet in the middle.
   static size_t builtinCount() { return NewsBuiltins::COUNT; }
   bool builtinEnabled(size_t index) const;
   void setBuiltinEnabled(size_t index, bool enabled);
   size_t enabledBuiltinCount() const;
+  // The table index shown at `position` of the built-in section.
+  size_t builtinAt(size_t position) const;
+
+  // --- ordering ---
+  // Moves stay inside their own section: the two are drawn under separate
+  // headings, so there is no position for a built-in above "Your feeds" to
+  // land on. False when the row is already at that end of its section.
+  bool moveBuiltin(size_t position, int delta);
+  bool moveUserFeed(size_t index, int delta);
 
   // --- user feeds ---
   size_t userCount() const { return userCount_; }
@@ -41,6 +56,8 @@ class NewsFeedStore : public PersistableStore<NewsFeedStore> {
   // False when the list is full or the URL is already present.
   bool addUserFeed(const char* name, const char* url);
   bool removeUserFeed(size_t index);
+  bool userFeedEnabled(size_t index) const;
+  void setUserFeedEnabled(size_t index, bool enabled);
   bool hasUrl(const char* url) const;
   // Replaces a user feed's display name once a sync has read the feed's own
   // <title>; the host name is only a placeholder until then.
@@ -94,8 +111,11 @@ class NewsFeedStore : public PersistableStore<NewsFeedStore> {
   void setFullTextPending(bool pending);
 
  private:
-  NewsFeedStore() = default;
+  NewsFeedStore() { resetBuiltinOrder(); }
   friend class PersistableStore<NewsFeedStore>;
+
+  // Fills builtinOrder_ with the flash table's own order.
+  void resetBuiltinOrder();
 
   NewsUserFeed userFeeds_[MAX_USER_FEEDS] = {};
   uint8_t userCount_ = 0;
@@ -106,6 +126,9 @@ class NewsFeedStore : public PersistableStore<NewsFeedStore> {
   // Keyed by the built-in's index in the flash table, so it survives the user
   // adding or removing feeds of their own.
   uint8_t builtinFullText_[NewsBuiltins::COUNT] = {};
+  // Display and sync order of the built-in section: each entry is a table
+  // index. A permutation of 0..COUNT-1 at all times, repaired on load.
+  uint8_t builtinOrder_[NewsBuiltins::COUNT] = {};
   static constexpr uint16_t NO_PENDING = 0xFFFF;
   uint16_t pendingSlot_ = NO_PENDING;
   uint16_t pendingItem_ = 0;
