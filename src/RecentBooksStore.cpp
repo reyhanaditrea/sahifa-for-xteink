@@ -19,6 +19,8 @@ void RecentBooksStore::toJson(JsonDocument& doc) const {
     obj["coverBmpPath"] = book.coverBmpPath;
     obj["fouladBookId"] = book.fouladBookId;
   }
+  JsonArray hidden = doc["hidden"].to<JsonArray>();
+  for (const auto& path : hiddenPaths) hidden.add(path);
 }
 
 bool RecentBooksStore::fromJson(JsonVariantConst doc) {
@@ -38,7 +40,16 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc) {
     recentBooks.push_back(book);
   }
 
-  LOG_DBG("RBS", "Recent books loaded from file (%d entries)", getCount());
+  // Absent in files written before Hide from Recents existed; a null array
+  // iterates zero times, which is the right answer for those.
+  hiddenPaths.clear();
+  for (JsonVariantConst entry : doc["hidden"].as<JsonArrayConst>()) {
+    if (hiddenPaths.size() >= MAX_HIDDEN_BOOKS) break;
+    const std::string path = entry.as<const char*>() ? entry.as<const char*>() : "";
+    if (!path.empty()) hiddenPaths.push_back(path);
+  }
+
+  LOG_DBG("RBS", "Recent books loaded from file (%d entries, %u hidden)", getCount(), (unsigned)hiddenPaths.size());
   return true;
 }
 
@@ -46,6 +57,12 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
                                const std::string& coverBmpPath, const std::string& fouladBookId) {
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
+
+  // Opening a book unhides it -- the one way back from Hide from Recents, and the
+  // reason hiding is offered without a confirmation. Every route into a reader
+  // lands here (file browser, OPDS download, resume), so this is the single place
+  // it has to be undone.
+  hiddenPaths.erase(std::remove(hiddenPaths.begin(), hiddenPaths.end(), path), hiddenPaths.end());
 
   // Remove existing entry if present, but keep its fouladBookId if this call
   // didn't specify one -- the reader's own addBook() call (title/author/cover
@@ -86,6 +103,36 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
     book.coverBmpPath = coverBmpPath;
     saveToFile();
   }
+}
+
+void RecentBooksStore::setHiddenFromRecents(const std::string& path, const bool hidden) {
+  if (path.empty()) return;
+  const auto it = std::find(hiddenPaths.begin(), hiddenPaths.end(), path);
+  if (hidden) {
+    if (it != hiddenPaths.end()) return;
+    if (hiddenPaths.size() >= MAX_HIDDEN_BOOKS) {
+      LOG_ERR("RBS", "Hidden-book list full, not hiding: %s", path.c_str());
+      return;
+    }
+    hiddenPaths.push_back(path);
+    // Not removeByPath(): that saves too, and the book is usually open right now,
+    // so this is one write rather than two.
+    recentBooks.erase(
+        std::remove_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& b) { return b.path == path; }),
+        recentBooks.end());
+  } else {
+    if (it == hiddenPaths.end()) return;
+    hiddenPaths.erase(it);
+    // No recents entry is restored: hiding threw it away. The card scan finds the
+    // file again, which is the same state a never-opened book is in.
+  }
+  if (!saveToFile()) {
+    LOG_ERR("RBS", "Failed to persist hidden state for: %s", path.c_str());
+  }
+}
+
+bool RecentBooksStore::isHiddenFromRecents(const std::string& path) const {
+  return std::find(hiddenPaths.begin(), hiddenPaths.end(), path) != hiddenPaths.end();
 }
 
 bool RecentBooksStore::removeByPath(const std::string& path) {

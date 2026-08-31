@@ -53,6 +53,11 @@ class EpubReaderMenuActivity final : public Activity {
     RESET_BOOK_SETTINGS,
     NIGHT_MODE,
     FRONTLIGHT,
+    // Takes this book off the My Books screen and keeps it off, card scan
+    // included -- see RecentBooksStore::setHiddenFromRecents. A toggle rather
+    // than a one-shot action: the value column is the only feedback there is
+    // from inside the book, since the screen it changes isn't on screen.
+    HIDE_FROM_RECENTS,
     // Opens the installed-dictionary list as a drill-down; picking a row calls
     // DICTIONARIES.setActiveIndex() and returns to the Dictionary tab.
     ACTIVE_DICTIONARY,

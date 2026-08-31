@@ -17,8 +17,10 @@
 #include "MappedInputManager.h"
 #include "MidadAppSettings.h"
 #include "OpdsServerStore.h"
+#include "QuranBook.h"
 #include "ReaderFontSizes.h"
 #include "ReaderPomodoro.h"
+#include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -237,6 +239,12 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildSetti
   items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
   items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  // Not offered for the pinned Quran: My Books re-inserts that one at the front
+  // unconditionally (see RecentBooksActivity::loadRecentBooks), so the row would
+  // flip to "ON" and change nothing. Same guard the long-press remove already has.
+  if (epub && epub->getPath() != QuranBook::PATH) {
+    items.push_back({MenuAction::HIDE_FROM_RECENTS, StrId::STR_HIDE_FROM_RECENTS});
+  }
   items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   return items;
 }
@@ -363,6 +371,9 @@ std::string EpubReaderMenuActivity::valueLabel(const MenuAction action) const {
       return I18N.get(SETTINGS.screenInverted ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
     case MenuAction::FRONTLIGHT:
       return I18N.get(Frontlight.isOn() ? StrId::STR_STATE_ON : StrId::STR_STATE_OFF);
+    case MenuAction::HIDE_FROM_RECENTS:
+      return I18N.get(epub && RECENT_BOOKS.isHiddenFromRecents(epub->getPath()) ? StrId::STR_STATE_ON
+                                                                                : StrId::STR_STATE_OFF);
     case MenuAction::POMODORO: {
       // The row doubles as the session's readout, so the value column says what pressing
       // it will do AND where the session is: "Start Session" when idle, the live
@@ -672,6 +683,13 @@ void EpubReaderMenuActivity::handleListConfirm() {
       Frontlight.setOn(lightOn);
       SETTINGS.frontlightOn = lightOn ? 1 : 0;
       SETTINGS.saveToFile();
+      requestUpdate();
+      return;
+    }
+    case MenuAction::HIDE_FROM_RECENTS: {
+      if (!epub) return;
+      const std::string& path = epub->getPath();
+      RECENT_BOOKS.setHiddenFromRecents(path, !RECENT_BOOKS.isHiddenFromRecents(path));
       requestUpdate();
       return;
     }

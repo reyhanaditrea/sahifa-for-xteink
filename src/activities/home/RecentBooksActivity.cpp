@@ -114,6 +114,14 @@ void RecentBooksActivity::loadRecentBooks() {
         continue;
       }
 
+      // Hidden books are gone from the recents list already; without this the scan
+      // below would find the file and re-list it as a never-opened book, which is
+      // exactly the reappearance Hide from Recents exists to stop.
+      if (RECENT_BOOKS.isHiddenFromRecents(entryPath)) {
+        report += "  skip(hidden) " + std::string(nameBuf) + "\n";
+        continue;
+      }
+
       const bool inRecents = std::any_of(recentBooks.begin(), recentBooks.end(),
                                          [&entryPath](const RecentBook& b) { return b.path == entryPath; });
       if (inRecents) {
