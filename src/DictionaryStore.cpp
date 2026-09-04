@@ -231,6 +231,21 @@ std::string normalizeArabicHamza(const std::string& s) {
   return out;
 }
 
+// Cuts accusative tanween's epenthetic alif carrier -- alef(D8A7) + fathatan(D98B)
+// -- off the end of the word, but only while the fathatan itself is still there to
+// prove it: ...alan names no root letter, it is a case marker written on a bare
+// alef that stripArabicMarks() alone would leave indistinguishable from a genuine
+// final-alef root (da'a). An undiacriticized word never carries this mark, so this
+// never fires on one -- it can only recover what the diacritic itself reveals.
+std::string stripArabicTanweenAlif(const std::string& s) {
+  if (s.size() >= 4 && static_cast<unsigned char>(s[s.size() - 4]) == 0xD8 &&
+      static_cast<unsigned char>(s[s.size() - 3]) == 0xA7 && static_cast<unsigned char>(s[s.size() - 2]) == 0xD9 &&
+      static_cast<unsigned char>(s[s.size() - 1]) == 0x8B) {
+    return s.substr(0, s.size() - 4);
+  }
+  return s;
+}
+
 // Exchanges alef maqsura and yaa: ى(D989) <-> ي(D98A). Egyptian typesetting writes a
 // final yaa as ى, and dictionary keys are inconsistent about which one they carry --
 // ours holds both راعي and راعى, both عالى and عالي -- so neither spelling can be the
@@ -2137,15 +2152,30 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
     // everything derived after that strip is built on a mangled stem and the form
     // actually wanted -- the same word minus only its pronoun -- would never be
     // generated at all.
-    addStemAndSuffixStrips(folded);
-    const std::string stem = stripProclitics(folded);  // suffixes each strip it makes
-    // A conjugated verb carries both ends at once: ya-...-un is one word, and the
-    // headword is what is left after both come off. So the suffix pass runs again
-    // over each verb-prefix-stripped stem rather than only over the bare one.
-    for (const char* verbPrefix : VERB_PREFIXES) {
-      const size_t n = strlen(verbPrefix);
-      if (hasPrefix(stem, verbPrefix, n)) addStemAndSuffixStrips(stem.substr(n));
-    }
+    auto derive = [&](const std::string& stemFolded) {
+      addStemAndSuffixStrips(stemFolded);
+      const std::string stem = stripProclitics(stemFolded);  // suffixes each strip it makes
+      // A conjugated verb carries both ends at once: ya-...-un is one word, and the
+      // headword is what is left after both come off. So the suffix pass runs again
+      // over each verb-prefix-stripped stem rather than only over the bare one.
+      for (const char* verbPrefix : VERB_PREFIXES) {
+        const size_t n = strlen(verbPrefix);
+        if (hasPrefix(stem, verbPrefix, n)) addStemAndSuffixStrips(stem.substr(n));
+      }
+    };
+    derive(folded);
+
+    // A second full pass, over the word with accusative tanween's alif carrier cut
+    // off, and only after the first: the mark's alif might mask a proclitic or an
+    // enclitic of its own ("wa-kitaban", and a book), and appending here can only add
+    // candidates, never take one away -- unlike running the derivation on this form
+    // alone, which would silently lose every word this detection is wrong about (an
+    // OCR-mangled hamza-final noun, not a case marker, looks identical once the mark
+    // is gone). Checked on the untouched word, before stripArabicMarks(), because that
+    // is the only place the fathatan -- the signal this is tanween at all, not a root
+    // letter -- still survives.
+    const std::string detanweened = stripArabicTanweenAlif(word);
+    if (detanweened != word) derive(normalizeArabicHamza(stripArabicMarks(detanweened)));
 
     // The other spelling of every form, and only after all of them: a maqsura swap is
     // a guess about the typesetter, not about the word, so it must not outrank a form
