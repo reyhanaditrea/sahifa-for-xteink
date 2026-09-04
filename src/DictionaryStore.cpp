@@ -2081,24 +2081,6 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
         "\xD8\xA7",          // a (folded from hamza)
     };
 
-    // Proclitics stack -- "wa-" + "bil-" + stem is ordinary Arabic -- so this strips
-    // repeatedly instead of once, and offers every intermediate as a candidate: the
-    // dictionary may hold the partly-clitic form even when it lacks the bare stem.
-    auto stripProclitics = [&](std::string base) {
-      for (bool changed = true; changed;) {
-        changed = false;
-        for (const char* proclitic : ARABIC_PROCLITICS) {
-          const size_t n = strlen(proclitic);
-          if (!hasPrefix(base, proclitic, n)) continue;
-          base = base.substr(n);
-          arabicAdd(base);
-          changed = true;
-          break;
-        }
-      }
-      return base;
-    };
-
     // The stem itself, then the same stem with one attached pronoun or plural ending
     // removed. One suffix, not repeated: two stacked enclitics do not occur.
     auto addStemAndSuffixStrips = [&](const std::string& stem) {
@@ -2109,14 +2091,38 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
       }
     };
 
+    // Proclitics stack -- "wa-" + "bil-" + stem is ordinary Arabic -- so this strips
+    // repeatedly instead of once, and offers every intermediate as a candidate: the
+    // dictionary may hold the partly-clitic form even when it lacks the bare stem.
+    // Each intermediate gets the suffix pass too, not just the fully stripped one at
+    // the end. The loop cannot tell a proclitic from a root letter that looks like
+    // one, so it keeps eating: "walafzhuhu" (and its wording) loses its waw to reach
+    // "lafzhuhu", then loses the lam of the root LFZH itself to reach a dead
+    // "fzhuhu". The headword wanted -- "lafzh", that first intermediate minus only
+    // its pronoun -- exists in the dictionary, and suffixing only the final stem
+    // would never ask for it.
+    auto stripProclitics = [&](std::string base) {
+      for (bool changed = true; changed;) {
+        changed = false;
+        for (const char* proclitic : ARABIC_PROCLITICS) {
+          const size_t n = strlen(proclitic);
+          if (!hasPrefix(base, proclitic, n)) continue;
+          base = base.substr(n);
+          addStemAndSuffixStrips(base);
+          changed = true;
+          break;
+        }
+      }
+      return base;
+    };
+
     // Suffixes first, on the word as it stands. A proclitic strip is a guess and it
     // is destructive: "kitabuhu" (his book) starts with the kaf that "ka-" claims, so
     // everything derived after that strip is built on a mangled stem and the form
     // actually wanted -- the same word minus only its pronoun -- would never be
     // generated at all.
     addStemAndSuffixStrips(folded);
-    const std::string stem = stripProclitics(folded);
-    if (stem != folded) addStemAndSuffixStrips(stem);
+    const std::string stem = stripProclitics(folded);  // suffixes each strip it makes
     // A conjugated verb carries both ends at once: ya-...-un is one word, and the
     // headword is what is left after both come off. So the suffix pass runs again
     // over each verb-prefix-stripped stem rather than only over the bare one.
