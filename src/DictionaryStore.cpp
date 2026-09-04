@@ -2133,7 +2133,18 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
       arabicAdd(stem);
       for (const char* enclitic : ENCLITICS) {
         const size_t n = strlen(enclitic);
-        if (hasSuffix(stem, enclitic, n)) arabicAdd(stem.substr(0, stem.size() - n));
+        if (!hasSuffix(stem, enclitic, n)) continue;
+        std::string peeled = stem.substr(0, stem.size() - n);
+        arabicAdd(peeled);
+        // A noun ending in taa marbuta writes it as a plain taa the moment anything
+        // follows it: dhurriya + -hu is dhurriyatuhu, and peeling just the pronoun
+        // leaves "dhurriyat", which is not how the noun is ever written alone. Hand
+        // the taa marbuta back, or the headword is never asked for.
+        if (peeled.size() >= 2 && static_cast<unsigned char>(peeled[peeled.size() - 2]) == 0xD8 &&
+            static_cast<unsigned char>(peeled[peeled.size() - 1]) == 0xAA) {
+          peeled[peeled.size() - 1] = static_cast<char>(0xA9);
+          arabicAdd(std::move(peeled));
+        }
       }
     };
 
