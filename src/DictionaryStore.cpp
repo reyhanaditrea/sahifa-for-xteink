@@ -231,6 +231,21 @@ std::string normalizeArabicHamza(const std::string& s) {
   return out;
 }
 
+// Exchanges alef maqsura and yaa: ى(D989) <-> ي(D98A). Egyptian typesetting writes a
+// final yaa as ى, and dictionary keys are inconsistent about which one they carry --
+// ours holds both راعي and راعى, both عالى and عالي -- so neither spelling can be the
+// canonical one to fold toward. A lookup simply tries the word both ways.
+std::string swapArabicMaqsura(const std::string& s) {
+  std::string out(s);
+  for (size_t i = 0; i + 1 < out.size(); ++i) {
+    if (static_cast<unsigned char>(out[i]) != 0xD9) continue;
+    const unsigned char n = static_cast<unsigned char>(out[i + 1]);
+    if (n == 0x89 || n == 0x8A) out[i + 1] = static_cast<char>(n ^ 0x03);
+    ++i;  // the pair is consumed either way -- never rescan a trail byte as a lead
+  }
+  return out;
+}
+
 // Proclitics that attach to the front of an Arabic word, longest first so "wal-" is
 // taken whole rather than read as "wa-" + "al-". Shared by the two callers on purpose:
 // they take different slices of the SAME list, and one copy is what stops the slices
@@ -2063,6 +2078,7 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
         "\xD8\xA7\xD9\x86",          // -an (dual)
         "\xD8\xA7\xD8\xAA",          // -at (pl)
         "\xD9\x88\xD8\xA7",          // -u (verb)
+        "\xD8\xA9",                  // -a (feminine, taa marbuta)
         "\xD9\x87",                  // -hu
         "\xD9\x83",                  // -ka
         "\xD9\x8A",                  // -i
@@ -2129,6 +2145,19 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
     for (const char* verbPrefix : VERB_PREFIXES) {
       const size_t n = strlen(verbPrefix);
       if (hasPrefix(stem, verbPrefix, n)) addStemAndSuffixStrips(stem.substr(n));
+    }
+
+    // The other spelling of every form, and only after all of them: a maqsura swap is
+    // a guess about the typesetter, not about the word, so it must not outrank a form
+    // derived from the word as written. "al-bayt" suffix-strips to "al-bay", whose twin
+    // is a real key and the wrong answer, while the "al-" it has not shed yet still
+    // leads to the right one.
+    const std::vector<std::string> natural(forms);
+    std::string swappedFolded = swapArabicMaqsura(folded);
+    if (swappedFolded != folded) arabicAdd(std::move(swappedFolded));
+    for (const std::string& form : natural) {
+      std::string swapped = swapArabicMaqsura(form);
+      if (swapped != form) arabicAdd(std::move(swapped));
     }
 
     // Single-letter prefixes and suffixes are also ordinary root letters, so a good
