@@ -2102,14 +2102,29 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
     };
     // Imperfect verb prefixes. The last of these is alef because normalizeArabicHamza()
     // has already folded the first-person hamza onto it.
+    //
+    // Every entry here is tried independently against the same stem, not chained, so
+    // the four Form X (istaf3ala) entries below are just more literal prefixes, not a
+    // second pass -- each fires alongside, never instead of, a shorter one that also
+    // matches. Form X stacks its person marker directly on the measure's own "ist-",
+    // so peeling only "ya-"/"ta-"/"na-"/"a-" leaves "ist-" still attached and the
+    // measure's root never surfaces (yastaf-dilu never reaches FDL). But "-st-" is
+    // also just three ordinary root letters (yastur-ha, he covers her, root S-T-R), so
+    // these four are placed LAST: list order is the order lookup() sees the resulting
+    // forms in, and the double strip must only get to answer for a stem the shorter,
+    // safer guess above it couldn't.
     static constexpr const char* VERB_PREFIXES[] = {
-        "\xD8\xB3\xD9\x8A",  // sa-ya
-        "\xD8\xB3\xD8\xAA",  // sa-ta
-        "\xD8\xB3\xD9\x86",  // sa-na
-        "\xD9\x8A",          // ya
-        "\xD8\xAA",          // ta
-        "\xD9\x86",          // na
-        "\xD8\xA7",          // a (folded from hamza)
+        "\xD8\xB3\xD9\x8A",          // sa-ya
+        "\xD8\xB3\xD8\xAA",          // sa-ta
+        "\xD8\xB3\xD9\x86",          // sa-na
+        "\xD9\x8A",                  // ya
+        "\xD8\xAA",                  // ta
+        "\xD9\x86",                  // na
+        "\xD8\xA7",                  // a (folded from hamza)
+        "\xD9\x8A\xD8\xB3\xD8\xAA",  // ya-st- (Form X imperfect, 3rd m.)
+        "\xD8\xAA\xD8\xB3\xD8\xAA",  // ta-st- (Form X imperfect, 3rd f. / 2nd)
+        "\xD9\x86\xD8\xB3\xD8\xAA",  // na-st- (Form X imperfect, 1st pl.)
+        "\xD8\xA7\xD8\xB3\xD8\xAA",  // a-st- (Form X past, folded hamza)
     };
 
     // The stem itself, then the same stem with one attached pronoun or plural ending
