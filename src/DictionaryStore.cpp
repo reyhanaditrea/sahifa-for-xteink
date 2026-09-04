@@ -2216,6 +2216,42 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
       if (swapped != form) arabicAdd(std::move(swapped));
     }
 
+    // The dual's noon drops in idafa, so what is left against the noun in front of an
+    // attached pronoun is a bare yaa: rijl + -ayn + -ha is rijlayha, and peeling only
+    // the pronoun stops at "rijlay", one letter short of the headword.
+    //
+    // Only in front of a pronoun, and only dead last. A trailing yaa with nothing
+    // after it is usually the word's own -- a nisba (al-Bukhari is a name, not
+    // bukhar, steam; al-Dhahabi is not dhahab, gold) -- and stripping those turns an
+    // honest miss into a confident wrong answer on every scholar's name in a chain of
+    // transmission. Earlier in the order it is worse still: "al-bayt" suffix-strips
+    // to "al-bay", whose yaa this would then eat down to a dead "al-b", while the
+    // "al-" it has not shed yet still leads to bayt.
+    static constexpr const char* PRONOUN_ENCLITICS[] = {
+        "\xD9\x87\xD9\x85\xD8\xA7",  // -huma
+        "\xD9\x83\xD9\x85\xD8\xA7",  // -kuma
+        "\xD9\x87\xD9\x85",          // -hum
+        "\xD9\x87\xD9\x86",          // -hunna
+        "\xD9\x83\xD9\x85",          // -kum
+        "\xD9\x83\xD9\x86",          // -kunna
+        "\xD9\x87\xD8\xA7",          // -ha
+        "\xD9\x86\xD8\xA7",          // -na
+        "\xD9\x87",                  // -hu
+        "\xD9\x83",                  // -ka
+    };
+    for (const char* pronoun : PRONOUN_ENCLITICS) {
+      const size_t n = strlen(pronoun);
+      // one letter past the floor: the yaa still has to come off after the pronoun
+      if (folded.size() < n + MIN_ARABIC_STEM_BYTES + 2 || !folded.ends_with(pronoun)) continue;
+      std::string stem = folded.substr(0, folded.size() - n);
+      if (stem.size() >= 2 && static_cast<unsigned char>(stem[stem.size() - 2]) == 0xD9 &&
+          static_cast<unsigned char>(stem[stem.size() - 1]) == 0x8A) {
+        stem.resize(stem.size() - 2);
+        arabicAdd(std::move(stem));
+      }
+      break;
+    }
+
     // Single-letter prefixes and suffixes are also ordinary root letters, so a good
     // number of these forms are wrong. That is affordable HERE and nowhere else: each
     // is one index probe that misses before the next is tried, and lookup() returns on
