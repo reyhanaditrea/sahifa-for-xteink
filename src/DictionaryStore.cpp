@@ -193,7 +193,14 @@ bool containsArabicUtf8(const std::string& s) {
 }
 
 // Removes tashkeel (U+064B-U+065F), tatweel (U+0640), and dagger alef (U+0670).
-std::string stripArabicMarks(const std::string& s) {
+//
+// keepShadda spares U+0651 alone. Every other mark is a vowel a writer may or
+// may not have written, so stripping them is what makes a headword findable;
+// the shadda is not one of those. It doubles a consonant, and that is a
+// different word: عَلَّمَ (measure II, "he taught") against the root عَلِمَ ("he
+// knew"). Folding it away is what forced every doubled measure to answer with
+// its whole root's merged article instead of its own.
+std::string stripArabicMarks(const std::string& s, const bool keepShadda = false) {
   std::string out;
   out.reserve(s.size());
   for (size_t i = 0; i < s.size();) {
@@ -201,7 +208,8 @@ std::string stripArabicMarks(const std::string& s) {
     if (c == 0xD9 && i + 1 < s.size()) {
       const unsigned char n = static_cast<unsigned char>(s[i + 1]);
       // U+0640 tatweel = D9 80; U+064B..U+065F marks = D9 8B..D9 9F; U+0670 = D9 B0
-      if (n == 0x80 || (n >= 0x8B && n <= 0x9F) || n == 0xB0) {
+      // U+0651 shadda = D9 91, inside that mark range.
+      if ((n == 0x80 || (n >= 0x8B && n <= 0x9F) || n == 0xB0) && !(keepShadda && n == 0x91)) {
         i += 2;
         continue;
       }
@@ -290,6 +298,38 @@ constexpr size_t MULTI_LETTER_PROCLITICS = 6;
 // candidate: "كتاب" (book) would otherwise lose its first root letter to the "ك"
 // proclitic and offer up a two-letter remainder.
 constexpr size_t MIN_ARABIC_STEM_BYTES = 6;
+
+// Imperfect verb prefixes. The last of these is alef because normalizeArabicHamza()
+// has already folded the first-person hamza onto it.
+//
+// Every entry here is tried independently against the same stem, not chained, so
+// the four Form X (istaf3ala) entries below are just more literal prefixes, not a
+// second pass -- each fires alongside, never instead of, a shorter one that also
+// matches. Form X stacks its person marker directly on the measure's own "ist-",
+// so peeling only "ya-"/"ta-"/"na-"/"a-" leaves "ist-" still attached and the
+// measure's root never surfaces (yastaf-dilu never reaches FDL). But "-st-" is
+// also just three ordinary root letters (yastur-ha, he covers her, root S-T-R), so
+// these four are placed LAST: list order is the order lookup() sees the resulting
+// forms in, and the double strip must only get to answer for a stem the shorter,
+// safer guess above it couldn't.
+//
+// File scope (not local to getFallbackForms(), where every other prefix/suffix
+// table lives) because the geminate-key probe needs it too: a doubled measure's
+// imperfect always carries one of these, unlike its past tense, which carries
+// none on the 3rd-person-masculine form the geminate key already matches as-is.
+constexpr const char* VERB_PREFIXES[] = {
+    "\xD8\xB3\xD9\x8A",          // sa-ya
+    "\xD8\xB3\xD8\xAA",          // sa-ta
+    "\xD8\xB3\xD9\x86",          // sa-na
+    "\xD9\x8A",                  // ya
+    "\xD8\xAA",                  // ta
+    "\xD9\x86",                  // na
+    "\xD8\xA7",                  // a (folded from hamza)
+    "\xD9\x8A\xD8\xB3\xD8\xAA",  // ya-st- (Form X imperfect, 3rd m.)
+    "\xD8\xAA\xD8\xB3\xD8\xAA",  // ta-st- (Form X imperfect, 3rd f. / 2nd)
+    "\xD9\x86\xD8\xB3\xD8\xAA",  // na-st- (Form X imperfect, 1st pl.)
+    "\xD8\xA7\xD8\xB3\xD8\xAA",  // a-st- (Form X past, folded hamza)
+};
 
 std::string lowercaseLatinUtf8(const std::string& input) {
   std::string out;
@@ -2041,8 +2081,90 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
   // worst surface a related headword instead of NotFound. Latin/Spanish
   // stemming below is meaningless for Arabic -- return early.
   if (containsArabicUtf8(word)) {
+    // A selection can arrive as more than one word: "و علّم", where the book set
+    // the conjunction off from the verb it belongs to. cleanWord() only trims the
+    // ends of the query, so that space survives into it, and no index key can
+    // contain one -- the lookup was dead before any rule below got to run.
+    //
+    // Page selection is per-word and can never produce this; a typed query can,
+    // and does -- "و علّم" is what a reader types when the book spaced the
+    // conjunction off the verb.
+    //
+    // Which token is meant is not fixed by position: the particle can lead
+    // ("و علّم") or the object trail ("علّم الناس"). What is reliable is that a
+    // particle is short and a content word is not, so tokens shorter than a
+    // triliteral root go last while the rest keep the order they were typed in.
+    // They still go in -- a query of "من" alone is a real word with a curated
+    // entry -- they just stop outranking the word next to them. Capped, so a
+    // pasted sentence cannot turn one miss into hundreds of SD reads.
+    if (word.find_first_of(" \t\r\n") != std::string::npos) {
+      constexpr size_t MAX_SELECTION_TOKENS = 4;
+      std::vector<std::string> tokens;
+      for (size_t i = 0; i < word.size();) {
+        const size_t start = word.find_first_not_of(" \t\r\n", i);
+        if (start == std::string::npos) break;
+        const size_t end = word.find_first_of(" \t\r\n", start);
+        tokens.push_back(word.substr(start, end == std::string::npos ? end : end - start));
+        i = (end == std::string::npos) ? word.size() : end;
+      }
+      std::stable_partition(tokens.begin(), tokens.end(),
+                            [](const std::string& t) { return t.size() >= MIN_ARABIC_STEM_BYTES; });
+      if (tokens.size() > MAX_SELECTION_TOKENS) tokens.resize(MAX_SELECTION_TOKENS);
+      for (const std::string& token : tokens) {
+        add(token);
+        for (std::string& form : getFallbackForms(entry, token)) add(std::move(form));
+      }
+      // Nothing below could have used the spaced string: every rule there is a
+      // letter-level edit on a single word.
+      return forms;
+    }
+
     const std::string bare = stripArabicMarks(word);
     const std::string folded = normalizeArabicHamza(bare);
+
+    // Ahead of the bare form, and only for a word that actually carries a
+    // shadda: the same word with that one mark kept. The dictionary keys its
+    // doubled headwords under this shape as well as under the bare skeleton
+    // they share with their root, so عَلَّمَ answers with عَلَّمَ instead of with
+    // the whole root article -- 29KB of it for علم, of which readDefinition()
+    // reads the first 16KB, so the block wanted was not merely buried but
+    // unreachable. Strictly the more specific answer, so it is probed first;
+    // a word with no shadda leaves geminate == folded and this whole branch is
+    // skipped, so no existing lookup changes.
+    const std::string geminate = normalizeArabicHamza(stripArabicMarks(word, true));
+    if (geminate != folded) {
+      add(geminate);
+      // Running text writes the proclitics onto the word ("wa-'allama"), and
+      // the general derivation below only ever sees the bare form, so the
+      // shadda-bearing stem has to shed them here or it is never asked for.
+      // Just the proclitics: the suffix and verb-prefix passes below are about
+      // reaching a root from an inflected form, and the root is exactly what
+      // this key exists to avoid falling back to.
+      std::string stem = geminate;
+      for (bool changed = true; changed;) {
+        changed = false;
+        for (const char* proclitic : ARABIC_PROCLITICS) {
+          const size_t n = strlen(proclitic);
+          if (stem.size() < n + MIN_ARABIC_STEM_BYTES || !stem.starts_with(proclitic)) continue;
+          stem = stem.substr(n);
+          add(stem);
+          changed = true;
+          break;
+        }
+      }
+      // A doubled measure conjugated in the imperfect always carries a subject
+      // prefix (ya-/ta-/na-/a-) -- unlike the past tense just handled above, which
+      // carries none on the 3rd-person-masculine form the bare geminate key
+      // already matches. Without this, "يفسّد" never reaches "فسّد" at all: it
+      // falls straight through to derive() below, which strips the prefix but
+      // only off the bare (shadda-less) form, landing on the root "فسد" and
+      // silently losing the shadda this whole branch exists to keep.
+      for (const char* verbPrefix : VERB_PREFIXES) {
+        const size_t n = strlen(verbPrefix);
+        if (stem.size() >= n + MIN_ARABIC_STEM_BYTES && stem.starts_with(verbPrefix)) add(stem.substr(n));
+      }
+    }
+
     if (bare != word) add(bare);
     if (folded != bare) add(folded);
 
@@ -2100,33 +2222,6 @@ std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry
         "\xD8\xAA",                  // -tu / -ta / -ti
         "\xD9\x86",                  // -na (3fp)
     };
-    // Imperfect verb prefixes. The last of these is alef because normalizeArabicHamza()
-    // has already folded the first-person hamza onto it.
-    //
-    // Every entry here is tried independently against the same stem, not chained, so
-    // the four Form X (istaf3ala) entries below are just more literal prefixes, not a
-    // second pass -- each fires alongside, never instead of, a shorter one that also
-    // matches. Form X stacks its person marker directly on the measure's own "ist-",
-    // so peeling only "ya-"/"ta-"/"na-"/"a-" leaves "ist-" still attached and the
-    // measure's root never surfaces (yastaf-dilu never reaches FDL). But "-st-" is
-    // also just three ordinary root letters (yastur-ha, he covers her, root S-T-R), so
-    // these four are placed LAST: list order is the order lookup() sees the resulting
-    // forms in, and the double strip must only get to answer for a stem the shorter,
-    // safer guess above it couldn't.
-    static constexpr const char* VERB_PREFIXES[] = {
-        "\xD8\xB3\xD9\x8A",          // sa-ya
-        "\xD8\xB3\xD8\xAA",          // sa-ta
-        "\xD8\xB3\xD9\x86",          // sa-na
-        "\xD9\x8A",                  // ya
-        "\xD8\xAA",                  // ta
-        "\xD9\x86",                  // na
-        "\xD8\xA7",                  // a (folded from hamza)
-        "\xD9\x8A\xD8\xB3\xD8\xAA",  // ya-st- (Form X imperfect, 3rd m.)
-        "\xD8\xAA\xD8\xB3\xD8\xAA",  // ta-st- (Form X imperfect, 3rd f. / 2nd)
-        "\xD9\x86\xD8\xB3\xD8\xAA",  // na-st- (Form X imperfect, 1st pl.)
-        "\xD8\xA7\xD8\xB3\xD8\xAA",  // a-st- (Form X past, folded hamza)
-    };
-
     // The stem itself, then the same stem with one attached pronoun or plural ending
     // removed. One suffix, not repeated: two stacked enclitics do not occur.
     auto addStemAndSuffixStrips = [&](const std::string& stem) {
