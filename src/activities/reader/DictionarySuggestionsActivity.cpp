@@ -93,6 +93,7 @@ void DictionarySuggestionsActivity::loop() {
 void DictionarySuggestionsActivity::drawSuggestionList(const Rect& rect) const {
   const int fontId = DICTIONARIES.getDefinitionFontId(readerFontId);
   const int lineHeight = std::max(1, renderer.getLineHeight(fontId));
+  const int uiLineHeight = std::max(1, renderer.getLineHeight(UI_10_FONT_ID));
   // Same 8px of breathing room BaseMetrics gives a UI_10 list row, kept
   // proportional to whatever face is actually in use.
   const int rowHeight = lineHeight + 8;
@@ -122,8 +123,12 @@ void DictionarySuggestionsActivity::drawSuggestionList(const Rect& rect) const {
     if (i == selectedIndex) {
       // Arabic descends further below the shared baseline than Latin does, so the
       // highlight grows downward or the tails get sliced -- the same correction the
-      // theme's own drawList applies, for the same reason.
-      renderer.fillRect(rect.x, rowY - 2, rect.width, rowHeight + (arabic ? 4 : 0));
+      // theme's own drawList applies, for the same reason. drawList's own +4 is
+      // calibrated for its one fixed row font (UI_10_FONT_ID); this list follows the
+      // user's Dictionary text size setting instead, so the same correction has to
+      // scale with lineHeight or a Large-font selection clips its descenders again.
+      const int descenderPad = arabic ? (lineHeight * 4 + uiLineHeight - 1) / uiLineHeight : 0;
+      renderer.fillRect(rect.x, rowY - 2, rect.width, rowHeight + descenderPad);
     }
     // Arabic anchors right whatever the UI language is: an English-UI device still
     // shows an Arabic candidate list. Glyph ordering is drawText's job; this is layout.
