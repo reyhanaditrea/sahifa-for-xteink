@@ -47,6 +47,12 @@ class ChapterHtmlSlimParser {
   std::string rubyTextBuffer;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+  // The just-finished block's marginBottom, held back so the next block's
+  // marginTop can collapse against it (CSS sibling margin collapsing) instead
+  // of both being added in full. Reset everywhere currentPageNextY is, since
+  // a fresh vertical position (new page, new chapter) has nothing to collapse
+  // against either.
+  int16_t pendingBottomMargin = 0;
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;

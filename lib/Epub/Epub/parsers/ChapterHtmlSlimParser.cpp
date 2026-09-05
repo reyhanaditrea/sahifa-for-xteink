@@ -294,6 +294,7 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
         return;
       }
       currentPageNextY = 0;
+      pendingBottomMargin = 0;
       currentPageVisibleOffsetSet = false;
     }
   }
@@ -422,6 +423,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
       return;
     }
     currentPageNextY = 0;
+    pendingBottomMargin = 0;
   }
 
   const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
@@ -449,6 +451,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
       return;
     }
     currentPageNextY = 0;
+    pendingBottomMargin = 0;
     currentPageVisibleOffsetSet = false;
   }
 
@@ -631,6 +634,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
         return;
       }
       currentPageNextY = 0;
+      pendingBottomMargin = 0;
       currentPageVisibleOffsetSet = false;
     }
 
@@ -1120,6 +1124,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     return;
                   }
                   self->currentPageNextY = 0;
+                  self->pendingBottomMargin = 0;
                   self->currentPageVisibleOffsetSet = false;
                 } else if (!self->currentPage) {
                   self->currentPage.reset(new (std::nothrow) Page());
@@ -1128,6 +1133,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     return;
                   }
                   self->currentPageNextY = 0;
+                  self->pendingBottomMargin = 0;
                   self->currentPageVisibleOffsetSet = false;
                 }
 
@@ -2127,6 +2133,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
       return;
     }
     currentPageNextY = 0;
+    pendingBottomMargin = 0;
     currentPageVisibleOffsetSet = false;
   }
 
@@ -2140,6 +2147,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
       return;
     }
     currentPageNextY = 0;
+    pendingBottomMargin = 0;
     currentPageVisibleOffsetSet = false;
   }
   setCurrentPageVisibleOffset(visibleOffset);
@@ -2172,16 +2180,24 @@ void ChapterHtmlSlimParser::makePages() {
       return;
     }
     currentPageNextY = 0;
+    pendingBottomMargin = 0;
     currentPageVisibleOffsetSet = false;
   }
 
   const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
 
-  // Apply top spacing before the paragraph (stored in pixels)
+  // Apply top spacing before the paragraph (stored in pixels). marginTop
+  // collapses against the previous block's held-back marginBottom rather than
+  // adding to it -- CSS sibling margin collapsing. Without this, a book whose
+  // stylesheet sets both margin-top and margin-bottom on paragraphs (rather
+  // than relying on the app's own single default) gets literally double the
+  // gap a browser or other reader would show for the same markup.
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
-  if (blockStyle.marginTop > 0) {
-    currentPageNextY += blockStyle.marginTop;
+  const int16_t collapsedTop = std::max(pendingBottomMargin, blockStyle.marginTop);
+  if (collapsedTop > 0) {
+    currentPageNextY += collapsedTop;
   }
+  pendingBottomMargin = 0;
   if (blockStyle.paddingTop > 0) {
     currentPageNextY += blockStyle.paddingTop;
   }
@@ -2205,9 +2221,10 @@ void ChapterHtmlSlimParser::makePages() {
     pendingFootnotes.clear();
   }
 
-  // Apply bottom spacing after the paragraph (stored in pixels)
+  // Apply bottom spacing after the paragraph (stored in pixels). marginBottom
+  // is held back rather than applied here -- see the collapsing comment above.
   if (blockStyle.marginBottom > 0) {
-    currentPageNextY += blockStyle.marginBottom;
+    pendingBottomMargin = blockStyle.marginBottom;
   }
   if (blockStyle.paddingBottom > 0) {
     currentPageNextY += blockStyle.paddingBottom;
