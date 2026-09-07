@@ -3,6 +3,7 @@
 #include <ArabicSegments.h>
 #include <ArabicStem.h>
 #include <ArduinoJson.h>
+#include <DictGloss.h>
 #include <Epub/htmlEntities.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -1490,7 +1491,8 @@ std::string DictionaryStore::readDefinition(const DictionaryEntry& entry, const 
   return stripHtmlAndEntities(decoded);
 }
 
-DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const bool includeSuggestions) {
+DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const std::string& previousWord,
+                                               const bool includeSuggestions) {
   DictionaryLookupResult result;
   ensureActiveEntryLoaded();
   result.query = cleanWord(rawWord);
@@ -1539,18 +1541,12 @@ DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const
       return false;
     }
     result.status = DictionaryLookupResult::Status::Found;
+    // Layer 1's text. Cheap here (the article is already in hand and this is
+    // string work) and impossible later without reading it back off the card.
+    result.gloss = DictGloss::gloss(result.definition);
     addHistory(result.headword.empty() ? result.query : result.headword);
     return true;
   };
-
-  IndexHit hit;
-  if (findIndexHit(*entry, result.query, hit) && finishFound(hit)) return result;
-
-  std::string canonical;
-  if (!lowMemoryAbort && lookupSynonym(*entry, result.query, canonical) && findIndexHit(*entry, canonical, hit) &&
-      finishFound(hit)) {
-    return result;
-  }
 
   // The candidate that answers carries the cut that made it, so the definition
   // screen can show which parts of the word were set aside to find it.
@@ -1560,16 +1556,80 @@ DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const
     if (count > 1) result.decomposition = ArabicStem::joinSegments(segments, count);
   };
 
-  for (const ArabicStem::Candidate& fallback :
-       ArabicStem::fallbackCandidates(result.query, isSpanishLanguage(*entry))) {
+  // A reading is one candidate that reached an entry. `candidate` is null for the
+  // word as written, which was cut nowhere and has nothing to name.
+  const auto rememberReading = [&](const IndexHit& found, const ArabicStem::Candidate* candidate) {
+    if (result.readings.size() >= MAX_READINGS) return;
+    for (const DictionaryReading& seen : result.readings) {
+      if (seen.headword == found.headword) return;
+    }
+    DictionaryReading reading;
+    reading.headword = found.headword;
+    reading.dictOffset = found.dictOffset;
+    reading.dictSize = found.dictSize;
+    if (candidate) {
+      ArabicStem::Segment segments[ArabicStem::MAX_SEGMENTS];
+      const size_t count = ArabicStem::segments(result.query, *candidate, segments, ArabicStem::MAX_SEGMENTS);
+      if (count > 1) reading.decomposition = ArabicStem::joinSegments(segments, count);
+      reading.standing = ArabicStem::standingLabel(ArabicStem::standing(result.query, *candidate));
+    } else {
+      reading.standing = ArabicStem::standingLabel(ArabicStem::Standing::AsWritten);
+    }
+    result.readings.push_back(std::move(reading));
+  };
+
+  // The word before this one is evidence about this one: لم governs a مضارع
+  // مجزوم, so أَقُل behind it is أقول written contracted rather than the noun.
+  const std::vector<ArabicStem::Candidate> candidates =
+      ArabicStem::fallbackCandidates(result.query, isSpanishLanguage(*entry), ArabicStem::governs(previousWord));
+
+  // Index searches only -- no definition is read until the reader opens one -- and
+  // bounded, because these are probes nobody is waiting on: the answer is already
+  // on screen by the time they matter.
+  const auto collectOtherReadings = [&](const size_t from) {
+    IndexHit other;
+    std::string otherCanonical;
+    const size_t limit = std::min(candidates.size(), from + MAX_READING_PROBES);
+    for (size_t i = from; i < limit && result.readings.size() < MAX_READINGS; ++i) {
+      if (findIndexHit(*entry, candidates[i].form, other)) {
+        rememberReading(other, &candidates[i]);
+        continue;
+      }
+      if (lookupSynonym(*entry, candidates[i].form, otherCanonical) && findIndexHit(*entry, otherCanonical, other)) {
+        rememberReading(other, &candidates[i]);
+      }
+    }
+  };
+
+  IndexHit hit;
+  if (findIndexHit(*entry, result.query, hit) && finishFound(hit)) {
+    rememberReading(hit, nullptr);
+    collectOtherReadings(0);
+    return result;
+  }
+
+  std::string canonical;
+  if (!lowMemoryAbort && lookupSynonym(*entry, result.query, canonical) && findIndexHit(*entry, canonical, hit) &&
+      finishFound(hit)) {
+    rememberReading(hit, nullptr);
+    collectOtherReadings(0);
+    return result;
+  }
+
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    const ArabicStem::Candidate& fallback = candidates[i];
     if (lowMemoryAbort) break;
     if (findIndexHit(*entry, fallback.form, hit) && finishFound(hit)) {
       describe(fallback);
+      rememberReading(hit, &fallback);
+      collectOtherReadings(i + 1);
       return result;
     }
     if (lowMemoryAbort) break;
     if (lookupSynonym(*entry, fallback.form, canonical) && findIndexHit(*entry, canonical, hit) && finishFound(hit)) {
       describe(fallback);
+      rememberReading(hit, &fallback);
+      collectOtherReadings(i + 1);
       return result;
     }
   }
@@ -1584,6 +1644,23 @@ DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const
     result.suggestions = findSuggestions(*entry, result.query, 8);
   }
   return result;
+}
+
+bool DictionaryStore::readReading(const DictionaryReading& reading, std::string& definition, bool& truncated) {
+  ensureActiveEntryLoaded();
+  DictionaryEntry* entry = activeEntry();
+  if (!entry || !ensurePrepared(*entry)) return false;
+
+  // The reading was found by an index search this lookup already paid for, so the
+  // article is a seek and a read rather than a second search.
+  IndexHit hit;
+  hit.headword = reading.headword;
+  hit.dictOffset = reading.dictOffset;
+  hit.dictSize = reading.dictSize;
+  definition = readDefinition(*entry, hit, truncated, nullptr);
+  if (definition.empty()) return false;
+  addHistory(reading.headword);
+  return true;
 }
 
 std::vector<std::string> DictionaryStore::findSuggestions(const DictionaryEntry& entry, const std::string& word,

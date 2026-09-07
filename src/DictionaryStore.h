@@ -34,6 +34,23 @@ struct DictionaryEntry {
   mutable StarDictIndex::CheckpointTable synTable;
 };
 
+// One reading of the word that reached an entry of its own.
+//
+// The stemmer's candidate order is a ranking, and lookup() takes the first
+// candidate that hits -- but three letters can be two different words and the
+// marks do not always say which, so the reader is shown the others and can open
+// one. Each carries where its article lives, so opening it is a read rather than
+// a second lookup.
+struct DictionaryReading {
+  std::string headword;
+  // "عرض + هم", or empty when this reading is the word as written.
+  std::string decomposition;
+  // What kind of evidence this reading rests on: ArabicStem::standingLabel.
+  std::string standing;
+  uint32_t dictOffset = 0;
+  uint32_t dictSize = 0;
+};
+
 struct DictionaryLookupResult {
   // A headword was located in the index but its definition could not be
   // read back -- distinct from NotFound (the word genuinely isn't in the
@@ -57,6 +74,12 @@ struct DictionaryLookupResult {
   // ArabicStem::segments on the candidate that answered.
   std::string decomposition;
   std::string definition;
+  // The one plain sentence the article can be reduced to, for layer 1. Empty when
+  // nothing in it reads as a meaning.
+  std::string gloss;
+  // Every reading that reached an entry, the answering one first. At most
+  // MAX_READINGS; empty when the word was found as written and nothing else was.
+  std::vector<DictionaryReading> readings;
   std::string dictionaryName;
   bool truncated = false;
   std::vector<std::string> suggestions;
@@ -114,7 +137,15 @@ class DictionaryStore {
   bool prepareActive(const std::function<void(int percent)>& onProgress = nullptr);
   bool hasActiveDictionary() const;
 
-  DictionaryLookupResult lookup(const std::string& rawWord, bool includeSuggestions = true);
+  // `previousWord` is the token in front of this one on the page, unedited. It is
+  // evidence, not context: لم governs a مضارع مجزوم, so أَقُل behind it is أقول
+  // contracted rather than the noun أقل, and the stemmer orders its candidates
+  // accordingly. Empty when the word did not come off a page.
+  DictionaryLookupResult lookup(const std::string& rawWord, const std::string& previousWord = std::string(),
+                                bool includeSuggestions = true);
+  // The article behind a reading the caller already holds, read without searching
+  // the index again. Returns false when the bytes could not be read back.
+  bool readReading(const DictionaryReading& reading, std::string& definition, bool& truncated);
   std::vector<std::string> getHistory();
   void addHistory(const std::string& word);
   void clearHistory();
@@ -136,6 +167,12 @@ class DictionaryStore {
   static constexpr size_t MAX_DEFINITION_BYTES = 16384;
   static constexpr size_t MIN_DEFINITION_BYTES = 1024;
   static constexpr size_t MAX_HISTORY_ITEMS = 15;
+  // What the "See also" line can hold and how far down the candidate list it is
+  // worth looking for one. Every probe past the answer is an index search the
+  // reader is not waiting for a result from, so the walk stops early rather than
+  // running the whole chain on the card.
+  static constexpr size_t MAX_READINGS = 6;
+  static constexpr size_t MAX_READING_PROBES = 14;
 
   std::vector<DictionaryEntry> entries;
   DictionaryEntry activeOnlyEntry;
