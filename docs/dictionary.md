@@ -36,14 +36,25 @@ One word on the page becomes highlighted:
 2. Press **Confirm** to look up the highlighted word.
 3. Press **Back** to return to the reader.
 
-On the very first lookup with a dictionary (and again whenever the `.idx` or `.syn` source file changes), the reader shows *"Indexing dictionary…"* while it builds small sidecar files next to them — a `.qidx` for the word index, and a `.sidx` when a `.syn` synonym file is present. Each sidecar is rebuilt independently, only when its own source changes. This takes a few seconds for large dictionaries and makes all subsequent lookups fast. The sidecars can be deleted safely at any time — they will simply be rebuilt.
+On the very first lookup with a dictionary (and again whenever the `.idx` or `.syn` file changes size), the reader shows *"Indexing dictionary…"* while it scans both files and writes a small sidecar next to the dictionary holding one checkpoint per 1024 entries of each. This takes a few seconds for large dictionaries and makes all subsequent lookups fast. The sidecar can be deleted safely at any time — it will simply be rebuilt.
 
 ### How Lookup Works
 
 1. **Direct match** — the word is found as-is (case-insensitive) in the dictionary index. Surrounding punctuation is ignored.
-2. **Synonyms** — on a miss, if the dictionary ships a `.syn` file, alternate spellings and irregular forms recorded there are resolved to their headword (e.g. `oxen` → `ox`, `colour` → `color`). This step is skipped if the `.sidx` sidecar could not be built (e.g. transient low memory during indexing); the dictionary otherwise stays usable, and the build is retried the next time it is opened.
-3. **Stemming** — still no match: common English word forms are retried automatically: possessives and plurals (`dogs` → `dog`, `stories` → `story`) and verb endings (`walked` → `walk`, `running` → `run`, `making` → `make`).
+2. **Synonyms** — on a miss, if the dictionary ships a `.syn` file, alternate spellings and irregular forms recorded there are resolved to their headword (e.g. `oxen` → `ox`, `colour` → `color`). This step is skipped if the synonym file could not be indexed (e.g. transient low memory); the dictionary otherwise stays usable, and the build is retried the next time it is opened.
+3. **Stemming** — still no match, so word forms are retried in turn, each against the index and then the synonyms. English: possessives and plurals (`dogs` → `dog`, `stories` → `story`) and verb endings (`walked` → `walk`, `running` → `run`, `making` → `make`). Arabic: see below.
 4. **Not found** — a short popup appears and you return to word selection.
+
+### Arabic lookup
+
+Arabic words in a book rarely look like the headword that defines them, so a miss is retried against a series of forms, in this order:
+
+1. **The word as written**, then with its diacritics removed and its hamza-seat alefs folded to a bare alef.
+2. **The measure its diacritics identify.** A derived verb is listed under a past tense the present tense does not spell — يَسْتَخْلِفُ belongs to استخلف, يَنْطَلِقُ to انطلق — and reaching it means putting a letter back rather than taking one away. The vowel written on the subject prefix is what says which letter, so a vowelled word is read before anything strips those marks off. An unvowelled word skips this step.
+3. **Affix stripping**: attached particles (وال، بال، ال، و، ب، ك، ل...), attached pronouns and plural endings, and the present-tense prefixes, in every combination that leaves a three-letter stem standing.
+4. **The same reconstructions as step 2, guessed**, for a word that carried no marks to prove them. These come last, so an unvowelled word still answers with the root it always did, and only reaches the derived form if that missed.
+
+Each form costs one index probe and one synonym probe, and the first hit wins, so an over-strip surfaces a related headword rather than nothing at all.
 
 ## The Definition Screen
 
