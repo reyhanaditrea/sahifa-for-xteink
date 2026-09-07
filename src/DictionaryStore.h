@@ -1,5 +1,7 @@
 #pragma once
 
+#include <StarDictIndex.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -19,15 +21,17 @@ struct DictionaryEntry {
   std::string sameTypeSequence;
   uint32_t wordCount = 0;
   uint32_t idxFileSize = 0;
+  uint32_t synFileSize = 0;
   bool compressed = false;
   bool missingFiles = false;
   // .ifo declared idxoffsetbits=64 (12-byte index records instead of 8). Every
   // index reader here hardcodes the 8-byte layout, so such a dictionary must be
   // refused outright rather than silently parsed into garbage offsets.
   bool unsupportedFormat = false;
-  mutable std::vector<uint32_t> checkpoints;
-  mutable std::vector<uint32_t> ordinals;
-  mutable uint32_t totalWords = 0;
+  // Built on first use and cached on SD next to the dictionary. The .syn table
+  // is empty when the dictionary ships no synonym file.
+  mutable StarDictIndex::CheckpointTable idxTable;
+  mutable StarDictIndex::CheckpointTable synTable;
 };
 
 struct DictionaryLookupResult {
@@ -47,6 +51,11 @@ struct DictionaryLookupResult {
   Status status = Status::NotFound;
   std::string query;
   std::string headword;
+  // How the word was cut up to reach the headword: "عرض + هم". Empty when the
+  // query was found as written, or when nothing came off it. The same string
+  // tools/dictprobe prints and the browser simulator shows -- both call
+  // ArabicStem::segments on the candidate that answered.
+  std::string decomposition;
   std::string definition;
   std::string dictionaryName;
   bool truncated = false;
@@ -123,8 +132,6 @@ class DictionaryStore {
 
   static constexpr const char* CONFIG_PATH = "/.crosspoint/dictionary_config.json";
   static constexpr const char* HISTORY_PATH = "/.crosspoint/dictionary_history.txt";
-  static constexpr int CHECKPOINT_INTERVAL = 1024;
-  static constexpr size_t MAX_CHECKPOINT_COUNT = 4096;
   static constexpr size_t MAX_SCAN_ENTRIES = 64;
   static constexpr size_t MAX_DEFINITION_BYTES = 16384;
   static constexpr size_t MIN_DEFINITION_BYTES = 1024;
@@ -153,10 +160,6 @@ class DictionaryStore {
   std::string readDefinition(const DictionaryEntry& entry, const IndexHit& hit, bool& truncated,
                              DictionaryLookupResult::Status* outFailureStatus = nullptr) const;
   std::vector<std::string> findSuggestions(const DictionaryEntry& entry, const std::string& word, int maxResults) const;
-  std::vector<std::string> getFallbackForms(const DictionaryEntry& entry, const std::string& word) const;
-  // The form findSuggestions() anchors its neighbourhood scan on. Deliberately
-  // NOT the most-stripped entry of getFallbackForms(): see the definition.
-  static std::string getSuggestionAnchor(const std::string& word);
 };
 
 #define DICTIONARIES DictionaryStore::getInstance()

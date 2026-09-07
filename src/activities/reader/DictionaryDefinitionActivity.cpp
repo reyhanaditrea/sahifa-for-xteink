@@ -7,8 +7,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -17,7 +21,127 @@
 
 namespace {
 constexpr size_t MAX_WRAPPED_DEFINITION_LINES = 384;
+
+// drawText routes a whole string to the Arabic path as soon as it holds one Arabic
+// codepoint: every glyph comes from the Arabic face and the line is laid out RTL.
+// A line that mixes scripts therefore cannot be drawn in one call -- an English
+// sentence quoting an Arabic word came out in the Arabic face, backwards.
+//
+// So a line is drawn as runs instead: each run is single-script and goes to the
+// renderer on its own, and the paragraph's direction decides the order they are
+// placed in. That is the part of the bidi algorithm this screen actually needs --
+// within a run the renderer already does the right thing (the Arabic path shapes
+// and reverses; the Latin path runs left to right), and the dictionary never nests
+// a direction deeper than one level.
+//
+// NEUTRAL tokens -- bare punctuation, digits, reference numbers, the "·" between
+// the principal parts -- carry no direction of their own and join whichever run is
+// open, so "ذهب, he went" is two runs rather than three.
+enum class TokenScript { NEUTRAL, ARABIC, LATIN };
+
+// Only a letter gives a token a direction. Treating every byte over 0x7F as Latin
+// made the separators the dictionary itself uses -- "·", en/em dashes, curly quotes
+// -- break the Arabic run they sit in, so one headword line came out as five.
+bool isLatinLetter(const uint32_t cp) {
+  if (cp < 0x80) return std::isalpha(static_cast<int>(cp)) != 0;
+  if (cp == 0x00D7 || cp == 0x00F7) return false;  // multiplication/division signs
+  return (cp >= 0x00C0 && cp <= 0x024F) ||         // Latin-1 letters + Latin Extended-A/B
+         (cp >= 0x0370 && cp <= 0x03FF) ||         // Greek
+         (cp >= 0x0400 && cp <= 0x04FF);           // Cyrillic
 }
+
+TokenScript tokenScript(const std::string& token) {
+  if (ScriptDetector::containsArabic(token.c_str())) return TokenScript::ARABIC;
+  const unsigned char* p = reinterpret_cast<const unsigned char*>(token.c_str());
+  while (*p) {
+    uint32_t cp = *p;
+    size_t extra = 0;
+    if (cp >= 0xF0) {
+      cp &= 0x07;
+      extra = 3;
+    } else if (cp >= 0xE0) {
+      cp &= 0x0F;
+      extra = 2;
+    } else if (cp >= 0xC0) {
+      cp &= 0x1F;
+      extra = 1;
+    }
+    ++p;
+    for (size_t i = 0; i < extra && (*p & 0xC0) == 0x80; ++i, ++p) cp = (cp << 6) | (*p & 0x3F);
+    if (isLatinLetter(cp)) return TokenScript::LATIN;
+  }
+  return TokenScript::NEUTRAL;
+}
+
+// The direction of a paragraph is the direction of its first letter that has one
+// (Unicode's own rule, UBA P2/P3), and every line the paragraph wraps to keeps it.
+bool paragraphIsRtl(const std::string& line) {
+  size_t pos = 0;
+  while (pos < line.size()) {
+    while (pos < line.size() && line[pos] == ' ') ++pos;
+    const size_t start = pos;
+    while (pos < line.size() && line[pos] != ' ') ++pos;
+    if (start == pos) break;
+    const TokenScript script = tokenScript(line.substr(start, pos - start));
+    if (script != TokenScript::NEUTRAL) return script == TokenScript::ARABIC;
+  }
+  return false;
+}
+
+// U+2022, and the gap the dictionary writes after it.
+constexpr const char* BULLET = "\xE2\x80\xA2";
+constexpr const char* BULLET_PREFIX = "\xE2\x80\xA2  ";
+
+// "• text" -> "•  text". One space sets the marker too close to read as a marker;
+// the wrap keeps a double space (a run carries its own spaces), so widening it here
+// is enough and the continuation indent is measured from the same string.
+std::string openBulletGap(const std::string& line) {
+  size_t pos = 0;
+  while (pos < line.size() && line[pos] == ' ') ++pos;
+  const size_t bulletLen = std::strlen(BULLET);
+  if (line.compare(pos, bulletLen, BULLET) != 0) return line;
+  const size_t after = pos + bulletLen;
+  if (after >= line.size() || line[after] != ' ') return line;
+  if (after + 1 < line.size() && line[after + 1] == ' ') return line;
+  return line.substr(0, after) + ' ' + line.substr(after);
+}
+
+struct TextRun {
+  std::string text;
+  int leadingSpaces = 0;  // spaces between this run and the one before it
+};
+
+// One wrapped line -> the single-script pieces it is drawn from, in logical order.
+// The line's own indent stays inside the first run so it still indents; every other
+// gap becomes leadingSpaces, because the space between two runs belongs to neither
+// and has to be measured in the Latin face whichever scripts it separates.
+std::vector<TextRun> splitRuns(const std::string& line) {
+  std::vector<TextRun> runs;
+  TokenScript runScript = TokenScript::NEUTRAL;
+  size_t pos = 0;
+  while (pos < line.size()) {
+    const size_t spaceStart = pos;
+    while (pos < line.size() && line[pos] == ' ') ++pos;
+    const int spaces = static_cast<int>(pos - spaceStart);
+    const size_t start = pos;
+    while (pos < line.size() && line[pos] != ' ') ++pos;
+    if (start == pos) break;
+    const std::string token = line.substr(start, pos - start);
+    const TokenScript script = tokenScript(token);
+    const bool breaks =
+        !runs.empty() && script != TokenScript::NEUTRAL && runScript != TokenScript::NEUTRAL && script != runScript;
+    if (runs.empty() || breaks) {
+      runs.push_back(TextRun{runs.empty() ? line.substr(0, start) + token : token, runs.empty() ? 0 : spaces});
+      runScript = script;
+      continue;
+    }
+    runs.back().text.append(static_cast<size_t>(spaces), ' ');
+    runs.back().text += token;
+    if (script != TokenScript::NEUTRAL) runScript = script;
+  }
+  return runs;
+}
+}  // namespace
 
 void DictionaryDefinitionActivity::onEnter() {
   Activity::onEnter();
@@ -55,8 +179,25 @@ void DictionaryDefinitionActivity::prepareDefinitionFontMetrics() {
   }
 }
 
+int DictionaryDefinitionActivity::decompositionHeight() const {
+  if (decomposition.empty()) return 0;
+  // Arabic is drawn from its own resolved face, which runs taller than the Latin
+  // font the row is nominally sized from.
+  const int latin = renderer.getLineHeight(SMALL_FONT_ID);
+  return std::max(latin, renderer.getLineHeight(renderer.getResolvedArabicFontId(SMALL_FONT_ID))) + 4;
+}
+
 int DictionaryDefinitionActivity::measureDefinitionText(const char* text) const {
-  return renderer.getTextAdvanceX(definitionFontId, text, EpdFontFamily::REGULAR);
+  // Each run is measured in the face it will be drawn from -- measuring a mixed
+  // string in one call puts the whole thing through the Arabic face and the wrap
+  // then fills lines against a width no line actually has.
+  int width = 0;
+  const int space = renderer.getTextAdvanceX(definitionFontId, " ", EpdFontFamily::REGULAR);
+  for (const auto& run : splitRuns(text == nullptr ? std::string() : std::string(text))) {
+    width += run.leadingSpaces * space;
+    width += renderer.getTextAdvanceX(definitionFontId, run.text.c_str(), EpdFontFamily::REGULAR);
+  }
+  return width;
 }
 
 int DictionaryDefinitionActivity::lineHeightFor(const std::string& line) const {
@@ -144,11 +285,12 @@ void DictionaryDefinitionActivity::prewarmVisibleDefinitionText() const {
 
 void DictionaryDefinitionActivity::wrapText() {
   wrappedLines.clear();
+  lineRtl.clear();
   bool wrapLimitReached = false;
   const Rect rect = overlayRect();
   const int padding = 10;
   const int maxWidth = std::max(80, rect.width - padding * 2);
-  const int headerHeight = renderer.getLineHeight(UI_10_FONT_ID) + 20;
+  const int headerHeight = renderer.getLineHeight(UI_10_FONT_ID) + 20 + decompositionHeight();
   const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 8;
   const int bodyHeight = std::max(1, rect.height - headerHeight - footerHeight - padding);
 
@@ -164,12 +306,21 @@ void DictionaryDefinitionActivity::wrapText() {
     while (!line.empty() && line.back() == ' ') line.pop_back();
   };
 
+  // Which side of the box the paragraph hangs off. Splitting a mixed line by script
+  // keeps each line drawable, but it also lets an English sentence quoting Arabic
+  // alternate sides down the page -- the English flush left, the quoted words flush
+  // right, the rest left again. Unicode settles this the same way for a paragraph
+  // (UBA P2/P3): the first letter with a direction of its own decides, and every
+  // line the paragraph wraps to keeps that side. So a bullet reads as one block.
+  bool paragraphRtl = false;
+
   auto appendWrappedLine = [&](std::string line) {
     if (wrappedLines.size() >= MAX_WRAPPED_DEFINITION_LINES) {
       wrapLimitReached = true;
       return false;
     }
     wrappedLines.push_back(std::move(line));
+    lineRtl.push_back(paragraphRtl ? 1 : 0);
     return true;
   };
 
@@ -186,10 +337,21 @@ void DictionaryDefinitionActivity::wrapText() {
     return expanded;
   };
 
-  auto continuationPrefixFor = [](const std::string& line, const std::string& prefix) {
+  // How many spaces stand in for the bullet and the gap after it. Measured rather
+  // than guessed: the bullet is drawn from whichever face the line resolves to, and
+  // a space is a good deal narrower than it at every definition size.
+  const int spaceAdvance = std::max(1, renderer.getTextAdvanceX(definitionFontId, " ", EpdFontFamily::REGULAR));
+  const int bulletAdvance = renderer.getTextAdvanceX(definitionFontId, BULLET_PREFIX, EpdFontFamily::REGULAR);
+  const size_t bulletIndent = std::max<size_t>(3, (bulletAdvance + spaceAdvance - 1) / spaceAdvance);
+
+  auto continuationPrefixFor = [bulletIndent](const std::string& line, const std::string& prefix) {
     size_t pos = prefix.size();
     if (pos + 1 < line.size() && (line[pos] == '-' || line[pos] == '*' || line[pos] == '+') && line[pos + 1] == ' ') {
       return prefix + "  ";
+    }
+    // A wrapped sense hangs under its own text, not under the bullet.
+    if (line.compare(pos, std::strlen(BULLET), BULLET) == 0) {
+      return prefix + std::string(bulletIndent, ' ');
     }
 
     const size_t numberStart = pos;
@@ -220,30 +382,10 @@ void DictionaryDefinitionActivity::wrapText() {
     }
   };
 
-  // A definition line that mixes scripts cannot be rendered correctly: drawText
-  // routes the WHOLE string to the Arabic path as soon as it holds one Arabic
-  // codepoint, and that path draws every glyph from the Arabic face and assumes
-  // an RTL base direction for the entire line. So an English sentence quoting an
-  // Arabic word came out in the Arabic face with its runs in reverse order.
-  // Rather than teach the renderer real bidi, keep each wrapped line to a single
-  // script and let the existing per-line dispatch stay correct: an Arabic line
-  // shapes and right-aligns, a Latin line draws left-aligned in the Latin font.
-  //
-  // NEUTRAL tokens -- bare punctuation, digits, reference numbers -- carry no
-  // direction of their own and join whichever run is already open, so
-  // "ذهب, he went" breaks once rather than three times.
-  enum class TokenScript { NEUTRAL, ARABIC, LATIN };
-  auto tokenScript = [](const std::string& token) {
-    if (ScriptDetector::containsArabic(token.c_str())) return TokenScript::ARABIC;
-    for (const unsigned char c : token) {
-      if (std::isalpha(c) || c >= 0x80) return TokenScript::LATIN;
-    }
-    return TokenScript::NEUTRAL;
-  };
-
   auto wrapSourceLine = [&](std::string sourceLine) {
     if (wrapLimitReached) return;
     sourceLine = expandTabs(sourceLine);
+    sourceLine = openBulletGap(sourceLine);
     trimTrailingSpaces(sourceLine);
     if (sourceLine.empty()) {
       appendWrappedLine(std::string());
@@ -255,9 +397,10 @@ void DictionaryDefinitionActivity::wrapText() {
     const std::string firstPrefix = sourceLine.substr(0, std::min<size_t>(firstText, 4));
     const std::string continuationPrefix = continuationPrefixFor(sourceLine, firstPrefix);
 
+    paragraphRtl = paragraphIsRtl(sourceLine);
+
     std::string currentLine = firstPrefix;
     bool hasContent = false;
-    TokenScript lineScript = TokenScript::NEUTRAL;
     size_t pos = firstText;
     while (pos < sourceLine.size()) {
       size_t spaces = 0;
@@ -271,24 +414,11 @@ void DictionaryDefinitionActivity::wrapText() {
       while (pos < sourceLine.size() && sourceLine[pos] != ' ') ++pos;
       const std::string token = sourceLine.substr(tokenStart, pos - tokenStart);
 
-      // Script change on a line that already has directional content: break here
-      // even though the token would still fit, so neither run has to share a line
-      // with the other.
-      const TokenScript script = tokenScript(token);
-      if (hasContent && script != TokenScript::NEUTRAL && lineScript != TokenScript::NEUTRAL && script != lineScript) {
-        trimTrailingSpaces(currentLine);
-        if (!appendWrappedLine(currentLine)) return;
-        currentLine = continuationPrefix;
-        hasContent = false;
-        lineScript = TokenScript::NEUTRAL;
-      }
-
       const std::string separator = hasContent ? (spaces > 1 ? "  " : " ") : "";
       const std::string test = currentLine + separator + token;
       if (measureDefinitionText(test.c_str()) <= maxWidth) {
         currentLine = test;
         hasContent = true;
-        if (script != TokenScript::NEUTRAL) lineScript = script;
         continue;
       }
 
@@ -297,7 +427,6 @@ void DictionaryDefinitionActivity::wrapText() {
         if (!appendWrappedLine(currentLine)) return;
         currentLine = continuationPrefix;
         hasContent = false;
-        lineScript = TokenScript::NEUTRAL;
       }
 
       const std::string prefixedToken = currentLine + token;
@@ -305,11 +434,8 @@ void DictionaryDefinitionActivity::wrapText() {
         currentLine = prefixedToken;
         hasContent = true;
       } else {
-        // Every continuation line appendLongToken emits carries the same token,
-        // so the line script is unchanged by where it chose to split.
         appendLongToken(token, currentLine, currentLine, continuationPrefix, hasContent);
       }
-      if (script != TokenScript::NEUTRAL) lineScript = script;
     }
 
     trimTrailingSpaces(currentLine);
@@ -333,8 +459,10 @@ void DictionaryDefinitionActivity::wrapText() {
     const std::string marker = std::string("[") + tr(STR_DEFINITION_TRUNCATED) + "]";
     if (wrappedLines.size() < MAX_WRAPPED_DEFINITION_LINES) {
       wrappedLines.push_back(marker);
+      lineRtl.push_back(0);
     } else if (!wrappedLines.empty()) {
       wrappedLines.back() = marker;
+      lineRtl.back() = 0;
     }
   }
   paginate(bodyHeight);
@@ -407,7 +535,17 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - padding - pageWidth, titleY + 2, pageText.c_str());
   }
 
-  const int separatorY = titleY + renderer.getLineHeight(UI_10_FONT_ID) + 12;
+  if (!decomposition.empty()) {
+    // Layer 1 of the lookup, under the headword it produced: the reader sees that
+    // عَرَضَهُمۡ was read as عرض plus a pronoun, so a surprising article is traceable
+    // to the split rather than a mystery.
+    const std::string line =
+        renderer.truncatedText(SMALL_FONT_ID, decomposition.c_str(), rect.width - padding * 2, EpdFontFamily::REGULAR);
+    renderer.drawTextInWidth(SMALL_FONT_ID, rect.x + padding, titleY + renderer.getLineHeight(UI_10_FONT_ID) + 2,
+                             rect.width - padding * 2, line.c_str());
+  }
+
+  const int separatorY = titleY + renderer.getLineHeight(UI_10_FONT_ID) + 12 + decompositionHeight();
   renderer.drawLine(rect.x + padding, separatorY, rect.x + rect.width - padding - 1, separatorY, true);
 
   const int bodyY = separatorY + 10;
@@ -417,10 +555,25 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   prewarmVisibleDefinitionText();
   int y = bodyY;
   for (int i = begin; i < end; ++i) {
-    // drawTextInWidth right-aligns a line only when it contains Arabic. Every wrapped
-    // line is single-script (see wrapSourceLine's script break), so that test now
-    // decides the whole line instead of being outvoted by one word in the other script.
-    renderer.drawTextInWidth(definitionFontId, rect.x + padding, y, bodyWidth, wrappedLines[i].c_str());
+    // Not drawTextInWidth: that draws the line in one call and aligns it by its own
+    // script, which put an English bullet quoting Arabic in the Arabic face and hung
+    // consecutive lines of one bullet off opposite edges. Each run goes to the
+    // renderer on its own instead, placed in the paragraph's direction: logical
+    // order from the left edge, or the same order laid down from the right.
+    const bool rtl = i < static_cast<int>(lineRtl.size()) && lineRtl[i] != 0;
+    const int space = renderer.getTextAdvanceX(definitionFontId, " ", EpdFontFamily::REGULAR);
+    int cursor = rtl ? rect.x + padding + bodyWidth : rect.x + padding;
+    for (const auto& run : splitRuns(wrappedLines[i])) {
+      const int runWidth = renderer.getTextAdvanceX(definitionFontId, run.text.c_str(), EpdFontFamily::REGULAR);
+      if (rtl) {
+        cursor -= run.leadingSpaces * space + runWidth;
+        renderer.drawText(definitionFontId, cursor, y, run.text.c_str());
+      } else {
+        cursor += run.leadingSpaces * space;
+        renderer.drawText(definitionFontId, cursor, y, run.text.c_str());
+        cursor += runWidth;
+      }
+    }
     y += lineHeights[i];
   }
 

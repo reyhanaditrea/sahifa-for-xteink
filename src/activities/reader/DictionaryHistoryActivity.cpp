@@ -37,14 +37,15 @@ void DictionaryHistoryActivity::lookupSelected() {
     return;
   }
 
-  startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
-                             renderer, mappedInput, page, lookup.headword, lookup.definition, lookup.truncated,
-                             readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
-                         [this](const ActivityResult&) {
-                           history = DICTIONARIES.getHistory();
-                           selectedIndex = std::min(selectedIndex, std::max(0, static_cast<int>(history.size()) - 1));
-                           requestUpdate();
-                         });
+  startActivityForResult(
+      std::make_unique<DictionaryDefinitionActivity>(
+          renderer, mappedInput, page, lookup.headword, lookup.decomposition, lookup.definition, lookup.truncated,
+          readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
+      [this](const ActivityResult&) {
+        history = DICTIONARIES.getHistory();
+        selectedIndex = std::min(selectedIndex, std::max(0, static_cast<int>(history.size()) - 1));
+        requestUpdate();
+      });
 }
 
 void DictionaryHistoryActivity::loop() {

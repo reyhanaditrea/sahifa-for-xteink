@@ -1,5 +1,7 @@
 #include "DictionaryStore.h"
 
+#include <ArabicSegments.h>
+#include <ArabicStem.h>
 #include <ArduinoJson.h>
 #include <Epub/htmlEntities.h>
 #include <FsHelpers.h>
@@ -7,6 +9,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <StarDictIndex.h>
 
 #include <algorithm>
 #include <cctype>
@@ -18,7 +21,9 @@
 #include "util/DictZip.h"
 
 namespace {
-constexpr uint32_t CACHE_MAGIC = 0x44435458;  // DCTX
+// Bumped when the layout changed to carry the .syn table as well; an older
+// file is simply not recognised and gets rebuilt once.
+constexpr uint32_t CACHE_MAGIC = 0x44435459;  // DCTY
 constexpr uint8_t NULL_TERMINATED_TYPES[] = {'m', 'l', 'g', 't', 'x', 'y', 'k', 'w', 'h', 'n', 'r'};
 constexpr uint8_t DEFINITION_TEXT_SIZE_CONFIG_VERSION = 4;
 constexpr size_t MAX_METADATA_TEXT_BYTES = 96;
@@ -91,11 +96,6 @@ std::string limitMetadataText(std::string value, const size_t maxBytes = MAX_MET
   return value;
 }
 
-uint32_t readBE32(const uint8_t* buf) {
-  return (static_cast<uint32_t>(buf[0]) << 24) | (static_cast<uint32_t>(buf[1]) << 16) |
-         (static_cast<uint32_t>(buf[2]) << 8) | static_cast<uint32_t>(buf[3]);
-}
-
 void writeU32(uint8_t* buf, uint32_t value) {
   buf[0] = static_cast<uint8_t>(value >> 24);
   buf[1] = static_cast<uint8_t>(value >> 16);
@@ -103,7 +103,7 @@ void writeU32(uint8_t* buf, uint32_t value) {
   buf[3] = static_cast<uint8_t>(value);
 }
 
-uint32_t readU32(const uint8_t* buf) { return readBE32(buf); }
+uint32_t readU32(const uint8_t* buf) { return StarDictIndex::readBE32(buf); }
 
 bool readLine(HalFile& file, char* buf, size_t len) {
   if (len == 0) return false;
@@ -132,290 +132,21 @@ bool parseIfoField(const char* line, const char* key, std::string& out) {
   return true;
 }
 
-// Reads one NUL-terminated headword, leaving the stream positioned on the byte
-// AFTER the terminator so the caller can read the 8-byte (offset, size) record
-// that follows.
-//
-// Two things here are deliberate:
-//  - Over-long words are truncated but the stream is still drained to the NUL.
-//    The previous version just broke out of the loop, leaving the file parked
-//    mid-word; the caller then read 8 bytes of headword text as the offset/size
-//    pair and every subsequent entry in that scan window was garbage. Headwords
-//    past this cap are rare but do occur (phrase entries in Wiktionary-derived
-//    and idiom dictionaries), and the failure was silent.
-//  - The reserve(32) is gone. It forced a heap allocation on EVERY call, because
-//    reserving past libstdc++'s 15-char SSO buffer always allocates -- yet most
-//    headwords fit in SSO. findSuggestions() calls this thousands of times per
-//    not-found lookup, so that was thousands of malloc/free pairs per lookup for
-//    nothing: exactly the fragmentation pattern CLAUDE.md warns about on a 380KB
-//    no-PSRAM heap. Without it, typical headwords cost zero heap. A stack buffer
-//    was the other option but wants 256 bytes, over the per-frame budget.
-std::string readIndexWord(HalFile& file) {
-  constexpr size_t MAX_HEADWORD_BYTES = 255;
-  std::string word;
-  while (true) {
-    const int c = file.read();
-    if (c <= 0) break;  // EOF/error, or the NUL terminator
-    if (word.size() < MAX_HEADWORD_BYTES) word.push_back(static_cast<char>(c));
-    // else: keep consuming to stay in sync, just stop storing.
-  }
-  return word;
-}
+// The device backend for the index reader: every call still goes through
+// HalFile, so SD access stays serialized behind storageMutex.
+class HalFileReader : public StarDictIndex::Reader {
+ public:
+  explicit HalFileReader(HalFile& file) : file(file) {}
 
-int compareWords(const std::string& lhs, const std::string& rhs) {
-  const unsigned char* a = reinterpret_cast<const unsigned char*>(lhs.c_str());
-  const unsigned char* b = reinterpret_cast<const unsigned char*>(rhs.c_str());
-  while (*a && *b) {
-    const int ca = (*a < 0x80) ? std::tolower(*a) : *a;
-    const int cb = (*b < 0x80) ? std::tolower(*b) : *b;
-    if (ca != cb) return ca - cb;
-    ++a;
-    ++b;
-  }
-  const int ca = (*a < 0x80) ? std::tolower(*a) : *a;
-  const int cb = (*b < 0x80) ? std::tolower(*b) : *b;
-  return ca - cb;
-}
+  bool seekSet(size_t pos) override { return file.seekSet(pos); }
+  int read(void* buf, size_t bytes) override { return file.read(buf, bytes); }
+  int read() override { return file.read(); }
+  size_t position() const override { return file.position(); }
+  size_t fileSize() override { return file.fileSize(); }
 
-// --- Arabic lookup normalization (Foulad eInk addition) ---
-// StarDict lookup is exact-match; Arabic words in books carry tashkeel,
-// tatweel, hamza-seat variants, and proclitics (ال، و، ب...) that dictionary
-// headwords usually lack (FreeDict ara-eng headwords are bare). These helpers
-// generate bare fallback forms. UTF-8 walker: Arabic block chars are 2-byte
-// sequences (0xD8/0xD9 lead).
-
-bool containsArabicUtf8(const std::string& s) {
-  for (size_t i = 0; i + 1 < s.size(); ++i) {
-    const unsigned char c = static_cast<unsigned char>(s[i]);
-    if (c == 0xD8 || c == 0xD9 || c == 0xDA || c == 0xDB) return true;
-  }
-  return false;
-}
-
-// Removes tashkeel (U+064B-U+065F), tatweel (U+0640), and dagger alef (U+0670).
-//
-// keepShadda spares U+0651 alone. Every other mark is a vowel a writer may or
-// may not have written, so stripping them is what makes a headword findable;
-// the shadda is not one of those. It doubles a consonant, and that is a
-// different word: عَلَّمَ (measure II, "he taught") against the root عَلِمَ ("he
-// knew"). Folding it away is what forced every doubled measure to answer with
-// its whole root's merged article instead of its own.
-std::string stripArabicMarks(const std::string& s, const bool keepShadda = false) {
-  std::string out;
-  out.reserve(s.size());
-  for (size_t i = 0; i < s.size();) {
-    const unsigned char c = static_cast<unsigned char>(s[i]);
-    if (c == 0xD9 && i + 1 < s.size()) {
-      const unsigned char n = static_cast<unsigned char>(s[i + 1]);
-      // U+0640 tatweel = D9 80; U+064B..U+065F marks = D9 8B..D9 9F; U+0670 = D9 B0
-      // U+0651 shadda = D9 91, inside that mark range.
-      if ((n == 0x80 || (n >= 0x8B && n <= 0x9F) || n == 0xB0) && !(keepShadda && n == 0x91)) {
-        i += 2;
-        continue;
-      }
-    }
-    out.push_back(s[i]);
-    ++i;
-  }
-  return out;
-}
-
-// Folds hamza-seat variants of alef to bare alef: أ(D8A3) إ(D8A5) آ(D8A2) ٱ(D9B1) -> ا(D8A7)
-std::string normalizeArabicHamza(const std::string& s) {
-  std::string out;
-  out.reserve(s.size());
-  for (size_t i = 0; i < s.size();) {
-    const unsigned char c = static_cast<unsigned char>(s[i]);
-    const unsigned char n = (i + 1 < s.size()) ? static_cast<unsigned char>(s[i + 1]) : 0;
-    if ((c == 0xD8 && (n == 0xA2 || n == 0xA3 || n == 0xA5)) || (c == 0xD9 && n == 0xB1)) {
-      out.push_back(static_cast<char>(0xD8));
-      out.push_back(static_cast<char>(0xA7));
-      i += 2;
-      continue;
-    }
-    out.push_back(s[i]);
-    ++i;
-  }
-  return out;
-}
-
-// Cuts accusative tanween's epenthetic alif carrier -- alef(D8A7) + fathatan(D98B)
-// -- off the end of the word, but only while the fathatan itself is still there to
-// prove it: ...alan names no root letter, it is a case marker written on a bare
-// alef that stripArabicMarks() alone would leave indistinguishable from a genuine
-// final-alef root (da'a). An undiacriticized word never carries this mark, so this
-// never fires on one -- it can only recover what the diacritic itself reveals.
-std::string stripArabicTanweenAlif(const std::string& s) {
-  if (s.size() >= 4 && static_cast<unsigned char>(s[s.size() - 4]) == 0xD8 &&
-      static_cast<unsigned char>(s[s.size() - 3]) == 0xA7 && static_cast<unsigned char>(s[s.size() - 2]) == 0xD9 &&
-      static_cast<unsigned char>(s[s.size() - 1]) == 0x8B) {
-    return s.substr(0, s.size() - 4);
-  }
-  return s;
-}
-
-// Exchanges alef maqsura and yaa: ى(D989) <-> ي(D98A). Egyptian typesetting writes a
-// final yaa as ى, and dictionary keys are inconsistent about which one they carry --
-// ours holds both راعي and راعى, both عالى and عالي -- so neither spelling can be the
-// canonical one to fold toward. A lookup simply tries the word both ways.
-std::string swapArabicMaqsura(const std::string& s) {
-  std::string out(s);
-  for (size_t i = 0; i + 1 < out.size(); ++i) {
-    if (static_cast<unsigned char>(out[i]) != 0xD9) continue;
-    const unsigned char n = static_cast<unsigned char>(out[i + 1]);
-    if (n == 0x89 || n == 0x8A) out[i + 1] = static_cast<char>(n ^ 0x03);
-    ++i;  // the pair is consumed either way -- never rescan a trail byte as a lead
-  }
-  return out;
-}
-
-// Proclitics that attach to the front of an Arabic word, longest first so "wal-" is
-// taken whole rather than read as "wa-" + "al-". Shared by the two callers on purpose:
-// they take different slices of the SAME list, and one copy is what stops the slices
-// drifting apart.
-//
-// The first MULTI_LETTER_PROCLITICS entries are unambiguous -- no Arabic word opens
-// with those sequences as its root -- so they are safe anywhere. The rest are single
-// letters that are also ordinary first root letters, and are only safe where a wrong
-// strip is cheap. See getSuggestionAnchor() for where that line falls.
-constexpr const char* ARABIC_PROCLITICS[] = {
-    "\xD9\x88\xD8\xA7\xD9\x84",  // wal = وال
-    "\xD9\x81\xD8\xA7\xD9\x84",  // fal = فال
-    "\xD8\xA8\xD8\xA7\xD9\x84",  // bal = بال
-    "\xD9\x83\xD8\xA7\xD9\x84",  // kal = كال
-    "\xD9\x84\xD9\x84",          // lil = لل
-    "\xD8\xA7\xD9\x84",          // al = ال
-    "\xD9\x88",                  // wa = و
-    "\xD9\x81",                  // fa = ف
-    "\xD8\xA8",                  // bi = ب
-    "\xD9\x83",                  // ka = ك
-    "\xD9\x84",                  // li = ل
+ private:
+  HalFile& file;
 };
-constexpr size_t MULTI_LETTER_PROCLITICS = 6;
-
-// A stripped stem has to be able to BE a word. Arabic roots are triliteral, and Arabic
-// is two bytes a letter in UTF-8, so anything below this is debris rather than a
-// candidate: "كتاب" (book) would otherwise lose its first root letter to the "ك"
-// proclitic and offer up a two-letter remainder.
-constexpr size_t MIN_ARABIC_STEM_BYTES = 6;
-
-// Imperfect verb prefixes. The last of these is alef because normalizeArabicHamza()
-// has already folded the first-person hamza onto it.
-//
-// Every entry here is tried independently against the same stem, not chained, so
-// the four Form X (istaf3ala) entries below are just more literal prefixes, not a
-// second pass -- each fires alongside, never instead of, a shorter one that also
-// matches. Form X stacks its person marker directly on the measure's own "ist-",
-// so peeling only "ya-"/"ta-"/"na-"/"a-" leaves "ist-" still attached and the
-// measure's root never surfaces (yastaf-dilu never reaches FDL). But "-st-" is
-// also just three ordinary root letters (yastur-ha, he covers her, root S-T-R), so
-// these four are placed LAST: list order is the order lookup() sees the resulting
-// forms in, and the double strip must only get to answer for a stem the shorter,
-// safer guess above it couldn't.
-//
-// File scope (not local to getFallbackForms(), where every other prefix/suffix
-// table lives) because the geminate-key probe needs it too: a doubled measure's
-// imperfect always carries one of these, unlike its past tense, which carries
-// none on the 3rd-person-masculine form the geminate key already matches as-is.
-constexpr const char* VERB_PREFIXES[] = {
-    "\xD8\xB3\xD9\x8A",          // sa-ya
-    "\xD8\xB3\xD8\xAA",          // sa-ta
-    "\xD8\xB3\xD9\x86",          // sa-na
-    "\xD9\x8A",                  // ya
-    "\xD8\xAA",                  // ta
-    "\xD9\x86",                  // na
-    "\xD8\xA7",                  // a (folded from hamza)
-    "\xD9\x8A\xD8\xB3\xD8\xAA",  // ya-st- (Form X imperfect, 3rd m.)
-    "\xD8\xAA\xD8\xB3\xD8\xAA",  // ta-st- (Form X imperfect, 3rd f. / 2nd)
-    "\xD9\x86\xD8\xB3\xD8\xAA",  // na-st- (Form X imperfect, 1st pl.)
-    "\xD8\xA7\xD8\xB3\xD8\xAA",  // a-st- (Form X past, folded hamza)
-};
-
-std::string lowercaseLatinUtf8(const std::string& input) {
-  std::string out;
-  out.reserve(input.size());
-  for (size_t i = 0; i < input.size(); ++i) {
-    const unsigned char c = static_cast<unsigned char>(input[i]);
-    if (c < 0x80) {
-      out.push_back(static_cast<char>(std::tolower(c)));
-      continue;
-    }
-    if (c == 0xC3 && i + 1 < input.size()) {
-      const unsigned char n = static_cast<unsigned char>(input[i + 1]);
-      if (n >= 0x80 && n <= 0x96 && n != 0x97) {
-        out.push_back(static_cast<char>(0xC3));
-        out.push_back(static_cast<char>(n + 0x20));
-        ++i;
-        continue;
-      }
-      if (n == 0x9C) {
-        out.push_back(static_cast<char>(0xC3));
-        out.push_back(static_cast<char>(0xBC));
-        ++i;
-        continue;
-      }
-    }
-    out.push_back(input[i]);
-  }
-  return out;
-}
-
-bool isAsciiTrimChar(unsigned char c) { return c < 0x80 && !std::isalnum(c); }
-
-bool matchTokenAt(const std::string& text, const size_t pos, const char* token) {
-  const size_t len = strlen(token);
-  return pos + len <= text.size() && text.compare(pos, len, token) == 0;
-}
-
-// Punctuation that cleanWord() peels off the ends of a selected word. ASCII is
-// handled by isAsciiTrimChar() -- every non-alphanumeric byte under 0x80, so a
-// trailing "," or "?" on an English word never reaches here. This list is the
-// multi-byte half, and it has to carry the Arabic marks separately: a word tapped
-// out of an Arabic page ends in U+060C or U+061F, not in the ASCII comma and
-// question mark that look the same, and an untrimmed one turns every lookup at
-// the end of a clause into a miss.
-constexpr const char* TRIM_TOKENS[] = {
-    "\xC2\xA1",      // inverted !
-    "\xC2\xAB",      // <<
-    "\xC2\xBB",      // >>
-    "\xC2\xBF",      // inverted ?
-    "\xD8\x8C",      // Arabic comma
-    "\xD8\x9B",      // Arabic semicolon
-    "\xD8\x9F",      // Arabic question mark
-    "\xDB\x94",      // Arabic full stop
-    "\xE2\x80\x90",  // hyphen
-    "\xE2\x80\x91",  // non-breaking hyphen
-    "\xE2\x80\x92",  // figure dash
-    "\xE2\x80\x93",  // en dash
-    "\xE2\x80\x94",  // em dash
-    "\xE2\x80\x95",  // horizontal bar
-    "\xE2\x80\x98",  // left single quote
-    "\xE2\x80\x99",  // right single quote
-    "\xE2\x80\x9C",  // left double quote
-    "\xE2\x80\x9D",  // right double quote
-    "\xE2\x80\xA6",  // ellipsis
-};
-
-bool isUtf8TrimPrefix(const std::string& text, const size_t pos, size_t& tokenLen) {
-  for (const char* token : TRIM_TOKENS) {
-    if (matchTokenAt(text, pos, token)) {
-      tokenLen = strlen(token);
-      return true;
-    }
-  }
-  return false;
-}
-
-bool isUtf8TrimSuffix(const std::string& text, const size_t end, size_t& tokenLen) {
-  for (const char* token : TRIM_TOKENS) {
-    const size_t len = strlen(token);
-    if (end >= len && text.compare(end - len, len, token) == 0) {
-      tokenLen = len;
-      return true;
-    }
-  }
-  return false;
-}
 
 void appendWithSeparator(std::string& out, const char* data, size_t len) {
   while (len > 0 && (*data == '\0' || *data == '\r' || *data == '\n' || *data == ' ' || *data == '\t')) {
@@ -693,88 +424,13 @@ std::string trimAsciiCopy(const std::string& value) {
   return value.substr(start, end - start);
 }
 
-std::string foldLatinUtf8ToAscii(const std::string& input) {
-  std::string out;
-  out.reserve(input.size());
-  bool lastSpace = true;
-  for (size_t i = 0; i < input.size(); ++i) {
-    const unsigned char c = static_cast<unsigned char>(input[i]);
-    char folded = '\0';
-    if (c < 0x80) {
-      if (std::isalnum(c)) {
-        folded = static_cast<char>(std::tolower(c));
-      } else if (std::isspace(c) || c == '-' || c == '/' || c == '.') {
-        if (!lastSpace) {
-          out.push_back(' ');
-          lastSpace = true;
-        }
-        continue;
-      } else {
-        continue;
-      }
-    } else if (c == 0xC3 && i + 1 < input.size()) {
-      const unsigned char n = static_cast<unsigned char>(input[i + 1]);
-      switch (n) {
-        case 0x81:
-        case 0xA1:
-        case 0x80:
-        case 0xA0:
-          folded = 'a';
-          break;
-        case 0x89:
-        case 0xA9:
-        case 0x88:
-        case 0xA8:
-          folded = 'e';
-          break;
-        case 0x8D:
-        case 0xAD:
-        case 0x8C:
-        case 0xAC:
-          folded = 'i';
-          break;
-        case 0x93:
-        case 0xB3:
-        case 0x92:
-        case 0xB2:
-          folded = 'o';
-          break;
-        case 0x9A:
-        case 0xBA:
-        case 0x9C:
-        case 0xBC:
-          folded = 'u';
-          break;
-        case 0x91:
-        case 0xB1:
-          folded = 'n';
-          break;
-        case 0x87:
-        case 0xA7:
-          folded = 'c';
-          break;
-        default:
-          break;
-      }
-      ++i;
-    }
-
-    if (folded != '\0') {
-      out.push_back(folded);
-      lastSpace = false;
-    }
-  }
-  while (!out.empty() && out.back() == ' ') out.pop_back();
-  return out;
-}
-
 bool startsWithFoldedWord(const std::string& text, const char* word) {
   const size_t len = strlen(word);
   return text.size() >= len && text.compare(0, len, word) == 0 && (text.size() == len || text[len] == ' ');
 }
 
 bool isGrammarHeadingLine(const std::string& line) {
-  const std::string folded = foldLatinUtf8ToAscii(trimAsciiCopy(line));
+  const std::string folded = ArabicStem::foldLatinUtf8ToAscii(trimAsciiCopy(line));
   if (folded.empty() || folded.size() > 48) return false;
 
   static constexpr const char* HEADINGS[] = {
@@ -1014,7 +670,7 @@ std::string decodeStarDictData(const std::string& raw, const std::string& sameTy
         continue;
       }
       if (std::isupper(type) && pos + 4 <= raw.size()) {
-        const uint32_t fieldSize = readBE32(reinterpret_cast<const uint8_t*>(raw.data() + pos));
+        const uint32_t fieldSize = StarDictIndex::readBE32(reinterpret_cast<const uint8_t*>(raw.data() + pos));
         pos += 4;
         if (pos + fieldSize > raw.size()) break;
         appendTypedField(out, type, raw.data() + pos, fieldSize);
@@ -1039,7 +695,7 @@ std::string decodeStarDictData(const std::string& raw, const std::string& sameTy
       continue;
     }
     if (std::isupper(type) && pos + 4 <= raw.size()) {
-      const uint32_t fieldSize = readBE32(reinterpret_cast<const uint8_t*>(raw.data() + pos));
+      const uint32_t fieldSize = StarDictIndex::readBE32(reinterpret_cast<const uint8_t*>(raw.data() + pos));
       pos += 4;
       if (pos + fieldSize > raw.size()) break;
       appendTypedField(out, type, raw.data() + pos, fieldSize);
@@ -1130,12 +786,12 @@ std::string stripHtmlAndEntities(const std::string& input) {
 }
 
 bool startsWithAsciiPrefix(const std::string& text, const std::string& prefix) {
-  return text.size() >= prefix.size() && compareWords(text.substr(0, prefix.size()), prefix) == 0;
+  return text.size() >= prefix.size() && StarDictIndex::compareKeys(text.substr(0, prefix.size()), prefix) == 0;
 }
 
 bool isSpanishLanguage(const DictionaryEntry& entry) {
-  const std::string id = foldLatinUtf8ToAscii(entry.languageId);
-  const std::string lang = foldLatinUtf8ToAscii(entry.lang);
+  const std::string id = ArabicStem::foldLatinUtf8ToAscii(entry.languageId);
+  const std::string lang = ArabicStem::foldLatinUtf8ToAscii(entry.lang);
   return id == "spanish" || id == "es" || id == "espanol" || startsWithAsciiPrefix(lang, "es");
 }
 
@@ -1147,8 +803,8 @@ int commonPrefixLength(const std::string& a, const std::string& b) {
 }
 
 std::string suggestionScoreKey(const std::string& word) {
-  std::string folded = foldLatinUtf8ToAscii(word);
-  return folded.empty() ? lowercaseLatinUtf8(word) : folded;
+  std::string folded = ArabicStem::foldLatinUtf8ToAscii(word);
+  return folded.empty() ? ArabicStem::lowercaseLatinUtf8(word) : folded;
 }
 
 int editDistanceLimited(const std::string& a, const std::string& b, int maxDist) {
@@ -1189,7 +845,7 @@ int editDistanceLimited(const std::string& a, const std::string& b, int maxDist)
 }
 
 // (isEnglishLanguage was removed here: the English suffix stems in
-// getFallbackForms() now run unconditionally, since this predicate matched
+// ArabicStem::fallbackForms() now run unconditionally, since this predicate matched
 // almost no real-world dictionary. See the comment at that call site.)
 
 }  // namespace
@@ -1314,6 +970,15 @@ bool DictionaryStore::loadEntryFromIfoPath(const std::string& ifoPath, Dictionar
     if (Storage.openFileForRead("DICT", entry.idxPath, idx)) {
       entry.idxFileSize = static_cast<uint32_t>(idx.fileSize());
       idx.close();
+    }
+  }
+  // Needed before the cache is read, not after: it is what tells a cache built
+  // for a since-replaced .syn from one still describing the file on disk.
+  if (!entry.synPath.empty()) {
+    HalFile syn;
+    if (Storage.openFileForRead("DICT", entry.synPath, syn)) {
+      entry.synFileSize = static_cast<uint32_t>(syn.fileSize());
+      syn.close();
     }
   }
 
@@ -1542,92 +1207,92 @@ bool DictionaryStore::prepareActive(const std::function<void(int percent)>& onPr
   return ensurePrepared(*entry, onProgress);
 }
 
+// Cache layout: header, then the .idx table (offsets, then ordinals), then the
+// same pair for the .syn table. Both source file sizes are in the header, so a
+// dictionary whose .syn was added or replaced rebuilds on its own.
 bool DictionaryStore::loadCheckpointCache(DictionaryEntry& entry) {
-  entry.checkpoints.clear();
-  entry.ordinals.clear();
-  entry.totalWords = 0;
+  entry.idxTable.clear();
+  entry.synTable.clear();
 
   HalFile file;
   if (!Storage.openFileForRead("DICT", entry.cachePath, file)) return false;
-  uint8_t header[16];
-  if (file.read(header, sizeof(header)) != static_cast<int>(sizeof(header))) {
-    file.close();
+  uint8_t header[28];
+  if (file.read(header, sizeof(header)) != static_cast<int>(sizeof(header))) return false;
+  // Both source sizes are checked: a .syn that has since been added, replaced or
+  // removed makes the cached synonym table describe a file that is no longer
+  // there, and the two tables are written as one file, so both get rebuilt.
+  if (readU32(header) != CACHE_MAGIC || readU32(header + 4) != entry.idxFileSize ||
+      readU32(header + 8) != entry.synFileSize) {
     return false;
   }
 
-  if (readU32(header) != CACHE_MAGIC || readU32(header + 4) != entry.idxFileSize) {
-    file.close();
+  const uint32_t idxCount = readU32(header + 12);
+  const uint32_t synCount = readU32(header + 20);
+  entry.idxTable.totalEntries = readU32(header + 16);
+  entry.synTable.totalEntries = readU32(header + 24);
+  entry.idxTable.fileSize = entry.idxFileSize;
+  entry.synTable.fileSize = entry.synFileSize;
+
+  if (idxCount == 0 || idxCount > StarDictIndex::MAX_CHECKPOINT_COUNT ||
+      synCount > StarDictIndex::MAX_CHECKPOINT_COUNT ||
+      !hasHeapHeadroom(static_cast<size_t>(idxCount + synCount) * sizeof(uint32_t) * 2, HEAP_SMALL_GUARD_BYTES)) {
     return false;
   }
 
-  const uint32_t count = readU32(header + 8);
-  entry.totalWords = readU32(header + 12);
-  if (count == 0 || count > MAX_CHECKPOINT_COUNT ||
-      !hasHeapHeadroom(static_cast<size_t>(count) * sizeof(uint32_t) * 2, HEAP_SMALL_GUARD_BYTES)) {
-    file.close();
-    return false;
-  }
-
-  entry.checkpoints.reserve(count);
-  entry.ordinals.reserve(count);
-  uint8_t buf[4];
-  for (uint32_t i = 0; i < count; ++i) {
-    if (file.read(buf, 4) != 4) {
-      file.close();
-      entry.checkpoints.clear();
-      entry.ordinals.clear();
-      return false;
+  const auto readVector = [&file](std::vector<uint32_t>& out, const uint32_t count) {
+    out.reserve(count);
+    uint8_t buf[4];
+    for (uint32_t i = 0; i < count; ++i) {
+      if (file.read(buf, 4) != 4) return false;
+      out.push_back(readU32(buf));
     }
-    entry.checkpoints.push_back(readU32(buf));
+    return true;
+  };
+
+  if (!readVector(entry.idxTable.offsets, idxCount) || !readVector(entry.idxTable.ordinals, idxCount) ||
+      !readVector(entry.synTable.offsets, synCount) || !readVector(entry.synTable.ordinals, synCount)) {
+    entry.idxTable.clear();
+    entry.synTable.clear();
+    return false;
   }
-  for (uint32_t i = 0; i < count; ++i) {
-    if (file.read(buf, 4) != 4) {
-      file.close();
-      entry.checkpoints.clear();
-      entry.ordinals.clear();
-      return false;
-    }
-    entry.ordinals.push_back(readU32(buf));
-  }
-  file.close();
-  return entry.checkpoints.size() == entry.ordinals.size();
+  return !entry.idxTable.empty();
 }
 
 bool DictionaryStore::saveCheckpointCache(const DictionaryEntry& entry) const {
-  if (entry.checkpoints.empty() || entry.checkpoints.size() != entry.ordinals.size()) return false;
+  if (entry.idxTable.empty()) return false;
   const std::string tempPath = entry.cachePath + ".tmp";
   Storage.remove(tempPath.c_str());
 
   HalFile file;
   if (!Storage.openFileForWrite("DICT", tempPath, file)) return false;
 
-  uint8_t header[16];
-  writeU32(header, CACHE_MAGIC);
-  writeU32(header + 4, entry.idxFileSize);
-  writeU32(header + 8, static_cast<uint32_t>(entry.checkpoints.size()));
-  writeU32(header + 12, entry.totalWords);
-  if (file.write(header, sizeof(header)) != sizeof(header)) {
+  const auto abort = [&file, &tempPath]() {
     file.close();
     Storage.remove(tempPath.c_str());
     return false;
-  }
+  };
 
-  uint8_t buf[4];
-  for (uint32_t value : entry.checkpoints) {
-    writeU32(buf, value);
-    if (file.write(buf, 4) != 4) {
-      file.close();
-      Storage.remove(tempPath.c_str());
-      return false;
+  uint8_t header[28];
+  writeU32(header, CACHE_MAGIC);
+  writeU32(header + 4, entry.idxFileSize);
+  writeU32(header + 8, entry.synFileSize);
+  writeU32(header + 12, static_cast<uint32_t>(entry.idxTable.offsets.size()));
+  writeU32(header + 16, entry.idxTable.totalEntries);
+  writeU32(header + 20, static_cast<uint32_t>(entry.synTable.offsets.size()));
+  writeU32(header + 24, entry.synTable.totalEntries);
+  if (file.write(header, sizeof(header)) != sizeof(header)) return abort();
+
+  const auto writeVector = [&file](const std::vector<uint32_t>& values) {
+    uint8_t buf[4];
+    for (const uint32_t value : values) {
+      writeU32(buf, value);
+      if (file.write(buf, 4) != 4) return false;
     }
-  }
-  for (uint32_t value : entry.ordinals) {
-    writeU32(buf, value);
-    if (file.write(buf, 4) != 4) {
-      file.close();
-      Storage.remove(tempPath.c_str());
-      return false;
-    }
+    return true;
+  };
+  if (!writeVector(entry.idxTable.offsets) || !writeVector(entry.idxTable.ordinals) ||
+      !writeVector(entry.synTable.offsets) || !writeVector(entry.synTable.ordinals)) {
+    return abort();
   }
 
   file.flush();
@@ -1644,286 +1309,83 @@ bool DictionaryStore::ensurePrepared(DictionaryEntry& entry, const std::function
   // compressed is NOT a rejection here: index preparation only reads entry.idxPath
   // (always plain), never entry.dictPath -- readDefinition() is what handles .dz.
   if (entry.missingFiles || entry.unsupportedFormat) return false;
-  if (!entry.checkpoints.empty() && !entry.ordinals.empty()) return true;
+  if (!entry.idxTable.empty()) return true;
   if (loadCheckpointCache(entry)) return true;
 
-  HalFile idx;
-  if (!Storage.openFileForRead("DICT", entry.idxPath, idx)) return false;
-  entry.idxFileSize = static_cast<uint32_t>(idx.fileSize());
-  entry.checkpoints.clear();
-  entry.ordinals.clear();
-  entry.totalWords = 0;
-
-  uint32_t pos = 0;
-  int lastProgress = -1;
-  bool checkpointLimitReached = false;
-  auto addCheckpoint = [&](const uint32_t checkpointPos, const uint32_t ordinal) {
-    if (checkpointLimitReached) return true;
-    if (entry.checkpoints.size() >= MAX_CHECKPOINT_COUNT) {
-      checkpointLimitReached = true;
-      return true;
-    }
-    if (entry.checkpoints.size() == entry.checkpoints.capacity()) {
-      const size_t nextCapacity =
-          std::min<size_t>(MAX_CHECKPOINT_COUNT, entry.checkpoints.empty() ? 128 : entry.checkpoints.capacity() * 2);
-      const size_t bytes = nextCapacity * sizeof(uint32_t) * 2;
-      if (!hasHeapHeadroom(bytes, HEAP_SMALL_GUARD_BYTES)) {
-        if (entry.checkpoints.empty()) return false;
-        checkpointLimitReached = true;
-        return true;
-      }
-      entry.checkpoints.reserve(nextCapacity);
-      entry.ordinals.reserve(nextCapacity);
-    }
-    entry.checkpoints.push_back(checkpointPos);
-    entry.ordinals.push_back(ordinal);
-    return true;
-  };
-
-  // Buffered scan. This previously called idx.read() once per byte, and every
-  // HalFile call takes storageMutex (SdFat is not thread-safe -- see HalStorage),
-  // so a 2.7MB .idx cost ~2.7 MILLION mutex round-trips: several seconds of pure
-  // call overhead on top of the same underlying SD reads. Walking 4KB at a time
-  // in RAM does identical I/O with ~1/4000th the crossings. This matters because
-  // lookup() calls ensurePrepared() with no progress callback, so the whole build
-  // ran as one unbroken, input-blind stall the first time a dictionary was used.
-  constexpr size_t SCAN_BUFFER_BYTES = 4096;
-  constexpr uint32_t YIELD_INTERVAL_BYTES = 64 * 1024;
-  auto scanBuffer = makeUniqueNoThrow<uint8_t[]>(SCAN_BUFFER_BYTES);
-  if (!scanBuffer) {
-    LOG_ERR("DICT", "OOM: %u byte index scan buffer", static_cast<unsigned>(SCAN_BUFFER_BYTES));
-    idx.close();
-    return false;
+  StarDictIndex::ScanHooks hooks;
+  // Feeds the watchdog and lets the render/input task run: lookup() calls this
+  // with no progress callback, so the first scan of a large index would
+  // otherwise be one unbroken, input-blind stall.
+  hooks.yield = [] { delay(1); };
+  hooks.hasHeadroom = [](const size_t bytes) { return hasHeapHeadroom(bytes, HEAP_SMALL_GUARD_BYTES); };
+  // A plain function pointer plus context, rather than handing the library a
+  // std::function: it heap-allocates its closure and costs KBs of binary per
+  // signature (see CLAUDE.md).
+  if (onProgress) {
+    hooks.progress = [](void* ctx, const int percent) {
+      (*static_cast<const std::function<void(int)>*>(ctx))(percent);
+    };
+    hooks.progressCtx = const_cast<std::function<void(int percent)>*>(&onProgress);
   }
 
-  size_t bufLen = 0;  // valid bytes currently in scanBuffer
-  size_t bufPos = 0;  // read cursor within scanBuffer
-  uint32_t nextYieldPos = YIELD_INTERVAL_BYTES;
-  // Refills on exhaustion; false only at real EOF/error.
-  const auto ensureBuffered = [&]() -> bool {
-    if (bufPos < bufLen) return true;
-    const int got = idx.read(scanBuffer.get(), SCAN_BUFFER_BYTES);
-    if (got <= 0) return false;
-    bufLen = static_cast<size_t>(got);
-    bufPos = 0;
-    return true;
-  };
-
-  while (pos < entry.idxFileSize) {
-    if (entry.totalWords % CHECKPOINT_INTERVAL == 0) {
-      if (!addCheckpoint(pos, entry.totalWords)) {
-        idx.close();
-        entry.checkpoints.clear();
-        entry.ordinals.clear();
-        entry.totalWords = 0;
-        return false;
-      }
+  {
+    HalFile idx;
+    if (!Storage.openFileForRead("DICT", entry.idxPath, idx)) return false;
+    HalFileReader reader(idx);
+    entry.idxFileSize = static_cast<uint32_t>(idx.fileSize());
+    if (!StarDictIndex::buildCheckpoints(reader, StarDictIndex::IDX_RECORD_BYTES, entry.idxTable, hooks)) {
+      return false;
     }
+  }
 
-    // Headword: bytes up to and including the NUL terminator.
-    bool sawTerminator = false;
-    while (ensureBuffered()) {
-      const uint8_t c = scanBuffer[bufPos++];
-      ++pos;
-      if (c == 0) {
-        sawTerminator = true;
-        break;
-      }
-    }
-    // No terminator, or nothing left for the 8-byte record: truncated tail.
-    if (!sawTerminator || pos >= entry.idxFileSize) break;
-
-    // Fixed 8-byte (BE32 offset, BE32 size) record. Only skipped here -- the
-    // values are re-read on demand during lookup -- so it may span a refill.
-    size_t remaining = sizeof(uint32_t) * 2;
-    while (remaining > 0 && ensureBuffered()) {
-      const size_t take = std::min(remaining, bufLen - bufPos);
-      bufPos += take;
-      pos += take;
-      remaining -= take;
-    }
-    if (remaining != 0) break;
-    ++entry.totalWords;
-
-    // Feed the watchdog and let the render/input task run. Without this the
-    // scan holds the CPU for the whole file; CLAUDE.md requires a yield in any
-    // long-running loop, and the previous per-byte version had none at all.
-    if (pos >= nextYieldPos) {
-      nextYieldPos = pos + YIELD_INTERVAL_BYTES;
-      delay(1);
-    }
-
-    if (onProgress && entry.idxFileSize > 0) {
-      const int progress = static_cast<int>((static_cast<uint64_t>(pos) * 100ULL) / entry.idxFileSize);
-      if (progress >= lastProgress + 5) {
-        lastProgress = progress;
-        onProgress(progress);
+  if (!entry.synPath.empty()) {
+    HalFile syn;
+    if (Storage.openFileForRead("DICT", entry.synPath, syn)) {
+      HalFileReader reader(syn);
+      entry.synFileSize = static_cast<uint32_t>(syn.fileSize());
+      // A .syn that cannot be indexed costs the synonym step, not the
+      // dictionary: lookups still run, they just miss the alternate spellings.
+      if (!StarDictIndex::buildCheckpoints(reader, StarDictIndex::SYN_RECORD_BYTES, entry.synTable, hooks)) {
+        LOG_ERR("DICT", "Synonym index unusable: %s", entry.synPath.c_str());
+        entry.synTable.clear();
       }
     }
   }
-  idx.close();
 
-  if (entry.checkpoints.empty()) return false;
   saveCheckpointCache(entry);
   return true;
 }
 
 bool DictionaryStore::findIndexHit(const DictionaryEntry& entry, const std::string& word, IndexHit& hit) const {
-  if (entry.checkpoints.empty()) return false;
-
   HalFile idx;
-  if (!Storage.openFileForRead("DICT", entry.idxPath, idx)) return false;
+  if (entry.idxTable.empty() || !Storage.openFileForRead("DICT", entry.idxPath, idx)) return false;
+  HalFileReader reader(idx);
 
-  int lo = 0;
-  int hi = static_cast<int>(entry.checkpoints.size()) - 1;
-  while (lo < hi) {
-    const int mid = lo + (hi - lo + 1) / 2;
-    if (!idx.seekSet(entry.checkpoints[mid])) break;
-    const std::string key = readIndexWord(idx);
-    if (compareWords(key, word) <= 0) {
-      lo = mid;
-    } else {
-      hi = mid - 1;
-    }
-  }
-
-  if (!idx.seekSet(entry.checkpoints[lo])) {
-    idx.close();
-    return false;
-  }
-
-  uint32_t maxEntries = CHECKPOINT_INTERVAL;
-  if (lo + 1 < static_cast<int>(entry.ordinals.size())) {
-    maxEntries = entry.ordinals[lo + 1] - entry.ordinals[lo];
-  } else if (entry.totalWords > entry.ordinals[lo]) {
-    maxEntries = entry.totalWords - entry.ordinals[lo];
-  }
-
-  for (uint32_t i = 0; i < maxEntries; ++i) {
-    const std::string key = readIndexWord(idx);
-    if (key.empty()) break;
-    uint8_t buf[8];
-    if (idx.read(buf, sizeof(buf)) != static_cast<int>(sizeof(buf))) break;
-    const int cmp = compareWords(key, word);
-    if (cmp == 0) {
-      hit.headword = key;
-      hit.dictOffset = readBE32(buf);
-      hit.dictSize = readBE32(buf + 4);
-      idx.close();
-      return true;
-    }
-    if (cmp > 0) break;
-  }
-
-  idx.close();
-  return false;
+  StarDictIndex::Hit found;
+  if (!StarDictIndex::findKey(reader, entry.idxTable, StarDictIndex::IDX_RECORD_BYTES, word, found)) return false;
+  hit.headword = found.key;
+  hit.dictOffset = StarDictIndex::readBE32(found.record);
+  hit.dictSize = StarDictIndex::readBE32(found.record + 4);
+  return true;
 }
 
 std::string DictionaryStore::headwordAtOrdinal(const DictionaryEntry& entry, uint32_t ordinal) const {
-  if (entry.checkpoints.empty() || entry.checkpoints.size() != entry.ordinals.size()) return "";
-  size_t lo = 0;
-  size_t hi = entry.ordinals.size();
-  while (lo + 1 < hi) {
-    const size_t mid = lo + (hi - lo) / 2;
-    if (entry.ordinals[mid] <= ordinal) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-
   HalFile idx;
-  if (!Storage.openFileForRead("DICT", entry.idxPath, idx)) return "";
-  if (!idx.seekSet(entry.checkpoints[lo])) {
-    idx.close();
-    return "";
-  }
-
-  const uint32_t skipCount = ordinal - entry.ordinals[lo];
-  uint8_t skip[8];
-  for (uint32_t i = 0; i < skipCount; ++i) {
-    readIndexWord(idx);
-    if (idx.read(skip, sizeof(skip)) != static_cast<int>(sizeof(skip))) {
-      idx.close();
-      return "";
-    }
-  }
-
-  const std::string headword = readIndexWord(idx);
-  idx.close();
-  return headword;
+  if (entry.idxTable.empty() || !Storage.openFileForRead("DICT", entry.idxPath, idx)) return "";
+  HalFileReader reader(idx);
+  return StarDictIndex::keyAtOrdinal(reader, entry.idxTable, StarDictIndex::IDX_RECORD_BYTES, ordinal);
 }
 
 bool DictionaryStore::lookupSynonym(const DictionaryEntry& entry, const std::string& word,
                                     std::string& canonical) const {
-  if (entry.synPath.empty()) return false;
   HalFile syn;
-  if (!Storage.openFileForRead("DICT", entry.synPath, syn)) return false;
+  if (entry.synTable.empty() || !Storage.openFileForRead("DICT", entry.synPath, syn)) return false;
+  HalFileReader reader(syn);
 
-  const size_t fileSize = syn.fileSize();
-  size_t lo = 0;
-  size_t hi = fileSize;
-  bool found = false;
   uint32_t ordinal = 0;
-
-  while (hi > lo && hi - lo > 1024) {
-    const size_t mid = lo + (hi - lo) / 2;
-    const size_t scanFrom = mid > 260 ? mid - 260 : 0;
-    if (!syn.seekSet(scanFrom)) break;
-
-    int guard = 260;
-    while (guard-- > 0) {
-      const int c = syn.read();
-      if (c < 0) goto linearSyn;
-      if (c == 0) break;
-    }
-    if (!syn.seekCur(4)) break;
-
-    const size_t entryStart = syn.position();
-    if (entryStart >= hi) {
-      hi = mid;
-      continue;
-    }
-
-    const std::string key = readIndexWord(syn);
-    if (key.empty()) goto linearSyn;
-    uint8_t raw[4];
-    if (syn.read(raw, 4) != 4) goto linearSyn;
-    const int cmp = compareWords(key, word);
-    if (cmp == 0) {
-      ordinal = readBE32(raw);
-      found = true;
-      break;
-    }
-    if (cmp < 0) {
-      lo = syn.position();
-    } else {
-      hi = entryStart;
-    }
-  }
-
-linearSyn:
-  if (!found) {
-    if (!syn.seekSet(lo)) {
-      syn.close();
-      return false;
-    }
-    while (syn.position() < hi) {
-      const std::string key = readIndexWord(syn);
-      if (key.empty() && syn.position() >= hi) break;
-      uint8_t raw[4];
-      if (syn.read(raw, 4) != 4) break;
-      const int cmp = compareWords(key, word);
-      if (cmp == 0) {
-        ordinal = readBE32(raw);
-        found = true;
-        break;
-      }
-    }
-  }
-
+  if (!StarDictIndex::findSynonym(reader, entry.synTable, word, ordinal)) return false;
   syn.close();
-  if (!found) return false;
+
   canonical = headwordAtOrdinal(entry, ordinal);
   return !canonical.empty();
 }
@@ -2028,428 +1490,6 @@ std::string DictionaryStore::readDefinition(const DictionaryEntry& entry, const 
   return stripHtmlAndEntities(decoded);
 }
 
-// findSuggestions() scans the index neighbourhood around one word and scores every
-// key against it, so this single choice decides which part of the dictionary the
-// user is offered. It used to be getFallbackForms().back() -- the most heavily
-// stripped form available -- which is exactly the wrong pick, because the most
-// stripped form is also the most likely to be wrong.
-//
-// The single-letter proclitics are the problem. "ك" (like), "ب" (with), "ل" (for)
-// and "و" (and) are real prefixes, but they are also ordinary first root letters:
-// "كتاب" (book) is not "ك" + "تاب", and nothing short of a lexicon can tell the
-// two apart. As a LOOKUP candidate a wrong strip is cheap -- one index probe that
-// misses, and the next form is tried. As the suggestion ANCHOR it is not: the scan
-// lands in the wrong part of the index and every candidate offered is unrelated.
-//
-// So the anchor only uses transformations that cannot corrupt a word: dropping
-// marks, folding hamza seats, and removing the multi-letter proclitics, which are
-// unambiguous because no Arabic word begins with "ال" as root letters.
-std::string DictionaryStore::getSuggestionAnchor(const std::string& word) {
-  std::string anchor = normalizeArabicHamza(stripArabicMarks(word));
-  // The multi-letter head of the shared table only. Looped because these do stack
-  // ("و" + "بال" + stem), and one pass would leave the inner one in place.
-  for (bool stripped = true; stripped;) {
-    stripped = false;
-    for (size_t i = 0; i < MULTI_LETTER_PROCLITICS; ++i) {
-      const char* proclitic = ARABIC_PROCLITICS[i];
-      const size_t n = strlen(proclitic);
-      // Same three-letter floor as the fallback forms: never strip a word to debris.
-      if (anchor.size() < n + MIN_ARABIC_STEM_BYTES || !anchor.starts_with(proclitic)) continue;
-      anchor = anchor.substr(n);
-      stripped = true;
-      break;
-    }
-  }
-  return anchor;
-}
-
-std::vector<std::string> DictionaryStore::getFallbackForms(const DictionaryEntry& entry,
-                                                           const std::string& word) const {
-  std::vector<std::string> forms;
-  const std::string lower = lowercaseLatinUtf8(word);
-  if (lower != word) forms.push_back(lower);
-
-  auto add = [&forms](std::string value) {
-    if (value.size() < 3) return;
-    if (std::find(forms.begin(), forms.end(), value) == forms.end()) forms.push_back(std::move(value));
-  };
-
-  // Arabic branch (Foulad eInk): bare forms first (marks stripped, hamza
-  // folded), then with common proclitics removed -- definite article and
-  // single-letter conjunctions/prepositions (وال، بال، ال، و، ب، ك، ل...).
-  // Fallbacks only run after the exact query missed, so an over-strip can at
-  // worst surface a related headword instead of NotFound. Latin/Spanish
-  // stemming below is meaningless for Arabic -- return early.
-  if (containsArabicUtf8(word)) {
-    // A selection can arrive as more than one word: "و علّم", where the book set
-    // the conjunction off from the verb it belongs to. cleanWord() only trims the
-    // ends of the query, so that space survives into it, and no index key can
-    // contain one -- the lookup was dead before any rule below got to run.
-    //
-    // Page selection is per-word and can never produce this; a typed query can,
-    // and does -- "و علّم" is what a reader types when the book spaced the
-    // conjunction off the verb.
-    //
-    // Which token is meant is not fixed by position: the particle can lead
-    // ("و علّم") or the object trail ("علّم الناس"). What is reliable is that a
-    // particle is short and a content word is not, so tokens shorter than a
-    // triliteral root go last while the rest keep the order they were typed in.
-    // They still go in -- a query of "من" alone is a real word with a curated
-    // entry -- they just stop outranking the word next to them. Capped, so a
-    // pasted sentence cannot turn one miss into hundreds of SD reads.
-    if (word.find_first_of(" \t\r\n") != std::string::npos) {
-      constexpr size_t MAX_SELECTION_TOKENS = 4;
-      std::vector<std::string> tokens;
-      for (size_t i = 0; i < word.size();) {
-        const size_t start = word.find_first_not_of(" \t\r\n", i);
-        if (start == std::string::npos) break;
-        const size_t end = word.find_first_of(" \t\r\n", start);
-        tokens.push_back(word.substr(start, end == std::string::npos ? end : end - start));
-        i = (end == std::string::npos) ? word.size() : end;
-      }
-      std::stable_partition(tokens.begin(), tokens.end(),
-                            [](const std::string& t) { return t.size() >= MIN_ARABIC_STEM_BYTES; });
-      if (tokens.size() > MAX_SELECTION_TOKENS) tokens.resize(MAX_SELECTION_TOKENS);
-      for (const std::string& token : tokens) {
-        add(token);
-        for (std::string& form : getFallbackForms(entry, token)) add(std::move(form));
-      }
-      // Nothing below could have used the spaced string: every rule there is a
-      // letter-level edit on a single word.
-      return forms;
-    }
-
-    const std::string bare = stripArabicMarks(word);
-    const std::string folded = normalizeArabicHamza(bare);
-
-    // Ahead of the bare form, and only for a word that actually carries a
-    // shadda: the same word with that one mark kept. The dictionary keys its
-    // doubled headwords under this shape as well as under the bare skeleton
-    // they share with their root, so عَلَّمَ answers with عَلَّمَ instead of with
-    // the whole root article -- 29KB of it for علم, of which readDefinition()
-    // reads the first 16KB, so the block wanted was not merely buried but
-    // unreachable. Strictly the more specific answer, so it is probed first;
-    // a word with no shadda leaves geminate == folded and this whole branch is
-    // skipped, so no existing lookup changes.
-    const std::string geminate = normalizeArabicHamza(stripArabicMarks(word, true));
-    if (geminate != folded) {
-      add(geminate);
-      // Running text writes the proclitics onto the word ("wa-'allama"), and
-      // the general derivation below only ever sees the bare form, so the
-      // shadda-bearing stem has to shed them here or it is never asked for.
-      // Just the proclitics: the suffix and verb-prefix passes below are about
-      // reaching a root from an inflected form, and the root is exactly what
-      // this key exists to avoid falling back to.
-      std::string stem = geminate;
-      for (bool changed = true; changed;) {
-        changed = false;
-        for (const char* proclitic : ARABIC_PROCLITICS) {
-          const size_t n = strlen(proclitic);
-          if (stem.size() < n + MIN_ARABIC_STEM_BYTES || !stem.starts_with(proclitic)) continue;
-          stem = stem.substr(n);
-          add(stem);
-          changed = true;
-          break;
-        }
-      }
-      // A doubled measure conjugated in the imperfect always carries a subject
-      // prefix (ya-/ta-/na-/a-) -- unlike the past tense just handled above, which
-      // carries none on the 3rd-person-masculine form the bare geminate key
-      // already matches. Without this, "يفسّد" never reaches "فسّد" at all: it
-      // falls straight through to derive() below, which strips the prefix but
-      // only off the bare (shadda-less) form, landing on the root "فسد" and
-      // silently losing the shadda this whole branch exists to keep.
-      for (const char* verbPrefix : VERB_PREFIXES) {
-        const size_t n = strlen(verbPrefix);
-        if (stem.size() >= n + MIN_ARABIC_STEM_BYTES && stem.starts_with(verbPrefix)) add(stem.substr(n));
-      }
-    }
-
-    if (bare != word) add(bare);
-    if (folded != bare) add(folded);
-
-    // Every form here costs one index probe plus one .syn probe on the miss path, so
-    // the affix rules are capped rather than left to multiply. Prefixes and suffixes
-    // combine (ya- ... -un on one verb), and without a ceiling a single long word
-    // could generate dozens of probes for a lookup that is already failing.
-    constexpr size_t MAX_ARABIC_FORMS = 16;
-    auto arabicAdd = [&add, &forms, &word](std::string value) {
-      if (forms.size() >= MAX_ARABIC_FORMS) return;
-      // lookup() probes the query itself, through both the index and the .syn file,
-      // before it touches this list. A form identical to it is two guaranteed-dead
-      // SD reads, and the suffix pass below starts from the unmodified word, so it
-      // produces one on every Arabic lookup that carries no marks.
-      if (value == word) return;
-      add(std::move(value));
-    };
-
-    // The length test is the real work: starts_with/ends_with alone would happily
-    // strip a word down to nothing.
-    auto hasPrefix = [](const std::string& base, const char* affix, const size_t n) {
-      return base.size() >= n + MIN_ARABIC_STEM_BYTES && base.starts_with(affix);
-    };
-    auto hasSuffix = [](const std::string& base, const char* affix, const size_t n) {
-      return base.size() >= n + MIN_ARABIC_STEM_BYTES && base.ends_with(affix);
-    };
-
-    // Attached pronouns, the perfect-tense person markers, then the plural/dual
-    // endings. Longest first for the same reason: "-huma" must win over "-ha".
-    // The perfect markers conjugate a past-tense verb for its subject ("dhahaba"
-    // -> "dhahabtu", I went); for a sound triliteral Form I verb the bare past is
-    // already the headword, so peeling one lands on it.
-    static constexpr const char* ENCLITICS[] = {
-        "\xD9\x87\xD9\x85\xD8\xA7",  // -huma
-        "\xD9\x83\xD9\x85\xD8\xA7",  // -kuma
-        "\xD8\xAA\xD9\x85\xD8\xA7",  // -tuma
-        "\xD9\x87\xD9\x85",          // -hum
-        "\xD9\x87\xD9\x86",          // -hunna
-        "\xD9\x83\xD9\x85",          // -kum
-        "\xD9\x83\xD9\x86",          // -kunna
-        "\xD8\xAA\xD9\x85",          // -tum
-        "\xD8\xAA\xD9\x86",          // -tunna
-        "\xD9\x87\xD8\xA7",          // -ha
-        "\xD9\x86\xD8\xA7",          // -na
-        "\xD9\x86\xD9\x8A",          // -ni
-        "\xD9\x88\xD9\x86",          // -un (pl)
-        "\xD9\x8A\xD9\x86",          // -in (pl)
-        "\xD8\xA7\xD9\x86",          // -an (dual)
-        "\xD8\xA7\xD8\xAA",          // -at (pl)
-        "\xD9\x88\xD8\xA7",          // -u (verb)
-        "\xD8\xA9",                  // -a (feminine, taa marbuta)
-        "\xD9\x87",                  // -hu
-        "\xD9\x83",                  // -ka
-        "\xD9\x8A",                  // -i
-        "\xD8\xAA",                  // -tu / -ta / -ti
-        "\xD9\x86",                  // -na (3fp)
-    };
-    // The stem itself, then the same stem with one attached pronoun or plural ending
-    // removed. One suffix, not repeated: two stacked enclitics do not occur.
-    auto addStemAndSuffixStrips = [&](const std::string& stem) {
-      arabicAdd(stem);
-      for (const char* enclitic : ENCLITICS) {
-        const size_t n = strlen(enclitic);
-        if (!hasSuffix(stem, enclitic, n)) continue;
-        std::string peeled = stem.substr(0, stem.size() - n);
-        arabicAdd(peeled);
-        // A noun ending in taa marbuta writes it as a plain taa the moment anything
-        // follows it: dhurriya + -hu is dhurriyatuhu, and peeling just the pronoun
-        // leaves "dhurriyat", which is not how the noun is ever written alone. Hand
-        // the taa marbuta back, or the headword is never asked for.
-        if (peeled.size() >= 2 && static_cast<unsigned char>(peeled[peeled.size() - 2]) == 0xD8 &&
-            static_cast<unsigned char>(peeled[peeled.size() - 1]) == 0xAA) {
-          peeled[peeled.size() - 1] = static_cast<char>(0xA9);
-          arabicAdd(std::move(peeled));
-        }
-      }
-    };
-
-    // Proclitics stack -- "wa-" + "bil-" + stem is ordinary Arabic -- so this strips
-    // repeatedly instead of once, and offers every intermediate as a candidate: the
-    // dictionary may hold the partly-clitic form even when it lacks the bare stem.
-    // Each intermediate gets the suffix pass too, not just the fully stripped one at
-    // the end. The loop cannot tell a proclitic from a root letter that looks like
-    // one, so it keeps eating: "walafzhuhu" (and its wording) loses its waw to reach
-    // "lafzhuhu", then loses the lam of the root LFZH itself to reach a dead
-    // "fzhuhu". The headword wanted -- "lafzh", that first intermediate minus only
-    // its pronoun -- exists in the dictionary, and suffixing only the final stem
-    // would never ask for it.
-    auto stripProclitics = [&](std::string base) {
-      for (bool changed = true; changed;) {
-        changed = false;
-        for (const char* proclitic : ARABIC_PROCLITICS) {
-          const size_t n = strlen(proclitic);
-          if (!hasPrefix(base, proclitic, n)) continue;
-          base = base.substr(n);
-          addStemAndSuffixStrips(base);
-          changed = true;
-          break;
-        }
-      }
-      return base;
-    };
-
-    // Suffixes first, on the word as it stands. A proclitic strip is a guess and it
-    // is destructive: "kitabuhu" (his book) starts with the kaf that "ka-" claims, so
-    // everything derived after that strip is built on a mangled stem and the form
-    // actually wanted -- the same word minus only its pronoun -- would never be
-    // generated at all.
-    auto derive = [&](const std::string& stemFolded) {
-      addStemAndSuffixStrips(stemFolded);
-      const std::string stem = stripProclitics(stemFolded);  // suffixes each strip it makes
-      // A conjugated verb carries both ends at once: ya-...-un is one word, and the
-      // headword is what is left after both come off. So the suffix pass runs again
-      // over each verb-prefix-stripped stem rather than only over the bare one.
-      for (const char* verbPrefix : VERB_PREFIXES) {
-        const size_t n = strlen(verbPrefix);
-        if (hasPrefix(stem, verbPrefix, n)) addStemAndSuffixStrips(stem.substr(n));
-      }
-    };
-    derive(folded);
-
-    // A second full pass, over the word with accusative tanween's alif carrier cut
-    // off, and only after the first: the mark's alif might mask a proclitic or an
-    // enclitic of its own ("wa-kitaban", and a book), and appending here can only add
-    // candidates, never take one away -- unlike running the derivation on this form
-    // alone, which would silently lose every word this detection is wrong about (an
-    // OCR-mangled hamza-final noun, not a case marker, looks identical once the mark
-    // is gone). Checked on the untouched word, before stripArabicMarks(), because that
-    // is the only place the fathatan -- the signal this is tanween at all, not a root
-    // letter -- still survives.
-    const std::string detanweened = stripArabicTanweenAlif(word);
-    if (detanweened != word) derive(normalizeArabicHamza(stripArabicMarks(detanweened)));
-
-    // The other spelling of every form, and only after all of them: a maqsura swap is
-    // a guess about the typesetter, not about the word, so it must not outrank a form
-    // derived from the word as written. "al-bayt" suffix-strips to "al-bay", whose twin
-    // is a real key and the wrong answer, while the "al-" it has not shed yet still
-    // leads to the right one.
-    const std::vector<std::string> natural(forms);
-    std::string swappedFolded = swapArabicMaqsura(folded);
-    if (swappedFolded != folded) arabicAdd(std::move(swappedFolded));
-    for (const std::string& form : natural) {
-      std::string swapped = swapArabicMaqsura(form);
-      if (swapped != form) arabicAdd(std::move(swapped));
-    }
-
-    // The dual's noon drops in idafa, so what is left against the noun in front of an
-    // attached pronoun is a bare yaa: rijl + -ayn + -ha is rijlayha, and peeling only
-    // the pronoun stops at "rijlay", one letter short of the headword.
-    //
-    // Only in front of a pronoun, and only dead last. A trailing yaa with nothing
-    // after it is usually the word's own -- a nisba (al-Bukhari is a name, not
-    // bukhar, steam; al-Dhahabi is not dhahab, gold) -- and stripping those turns an
-    // honest miss into a confident wrong answer on every scholar's name in a chain of
-    // transmission. Earlier in the order it is worse still: "al-bayt" suffix-strips
-    // to "al-bay", whose yaa this would then eat down to a dead "al-b", while the
-    // "al-" it has not shed yet still leads to bayt.
-    static constexpr const char* PRONOUN_ENCLITICS[] = {
-        "\xD9\x87\xD9\x85\xD8\xA7",  // -huma
-        "\xD9\x83\xD9\x85\xD8\xA7",  // -kuma
-        "\xD9\x87\xD9\x85",          // -hum
-        "\xD9\x87\xD9\x86",          // -hunna
-        "\xD9\x83\xD9\x85",          // -kum
-        "\xD9\x83\xD9\x86",          // -kunna
-        "\xD9\x87\xD8\xA7",          // -ha
-        "\xD9\x86\xD8\xA7",          // -na
-        "\xD9\x87",                  // -hu
-        "\xD9\x83",                  // -ka
-    };
-    for (const char* pronoun : PRONOUN_ENCLITICS) {
-      const size_t n = strlen(pronoun);
-      // one letter past the floor: the yaa still has to come off after the pronoun
-      if (folded.size() < n + MIN_ARABIC_STEM_BYTES + 2 || !folded.ends_with(pronoun)) continue;
-      std::string stem = folded.substr(0, folded.size() - n);
-      if (stem.size() >= 2 && static_cast<unsigned char>(stem[stem.size() - 2]) == 0xD9 &&
-          static_cast<unsigned char>(stem[stem.size() - 1]) == 0x8A) {
-        stem.resize(stem.size() - 2);
-        arabicAdd(std::move(stem));
-      }
-      break;
-    }
-
-    // Single-letter prefixes and suffixes are also ordinary root letters, so a good
-    // number of these forms are wrong. That is affordable HERE and nowhere else: each
-    // is one index probe that misses before the next is tried, and lookup() returns on
-    // the first hit. getSuggestionAnchor() deliberately does not reuse any of this --
-    // see it for what an over-strip costs once a fuzzy scan is anchored on it.
-    return forms;
-  }
-
-  auto endsWith = [&lower](const char* suffix) {
-    const size_t len = strlen(suffix);
-    return lower.size() >= len && lower.compare(lower.size() - len, len, suffix) == 0;
-  };
-
-  if (lower.size() > 4 && endsWith("es")) add(lower.substr(0, lower.size() - 2));
-  if (lower.size() > 3 && endsWith("s")) add(lower.substr(0, lower.size() - 1));
-
-  if (isSpanishLanguage(entry)) {
-    struct SpanishInfinitivePronoun {
-      const char* suffix;
-      size_t pronounLen;
-    };
-
-    static constexpr SpanishInfinitivePronoun PRONOUNS[] = {
-        {"arme", 2},  {"arte", 2}, {"arse", 2}, {"arnos", 3}, {"aros", 2}, {"erme", 2},  {"erte", 2}, {"erse", 2},
-        {"ernos", 3}, {"eros", 2}, {"irme", 2}, {"irte", 2},  {"irse", 2}, {"irnos", 3}, {"iros", 2},
-    };
-
-    for (const auto& form : PRONOUNS) {
-      if (endsWith(form.suffix) && lower.size() > strlen(form.suffix) + 2) {
-        add(lower.substr(0, lower.size() - form.pronounLen));
-      }
-    }
-
-    auto addGerundFallback = [&](const char* suffix, const char* infinitiveEnding) {
-      const size_t suffixLen = strlen(suffix);
-      if (lower.size() > suffixLen + 2 && lower.compare(lower.size() - suffixLen, suffixLen, suffix) == 0) {
-        add(lower.substr(0, lower.size() - suffixLen) + infinitiveEnding);
-      }
-    };
-
-    addGerundFallback("andose", "ar");
-    addGerundFallback("\xC3\xA1ndose", "ar");
-    addGerundFallback("iendose", "er");
-    addGerundFallback("iendose", "ir");
-    addGerundFallback("i\xC3\xA9ndose", "er");
-    addGerundFallback("i\xC3\xA9ndose", "ir");
-  }
-
-  // Deliberately NOT gated on isEnglishLanguage(). That gate matches only a
-  // languageId (the folder name) of exactly "english"/"en", or an .ifo lang=
-  // starting with "en" -- but most StarDict .ifo files carry no lang field at
-  // all, and real folder names look like "eng", "en-ar", "FreeDict", "wiktionary".
-  // So on the majority of installed dictionaries these suffix rules silently
-  // never ran and "walked"/"stories" simply failed. Running them unconditionally
-  // is safe: they are byte compares against ASCII suffixes, so they cannot match
-  // Arabic/Persian text (all bytes >= 0x80), and Arabic returns earlier anyway.
-  // The only cost is a few extra findIndexHit() calls on the miss path, which
-  // already pays for findSuggestions() -- orders of magnitude more work.
-  if (lower.size() > 5 && endsWith("ing")) {
-    add(lower.substr(0, lower.size() - 3));
-    add(lower.substr(0, lower.size() - 3) + "e");
-  }
-  if (lower.size() > 4 && endsWith("ed")) {
-    add(lower.substr(0, lower.size() - 2));
-    add(lower.substr(0, lower.size() - 1));
-  }
-  if (lower.size() > 5 && endsWith("ies")) add(lower.substr(0, lower.size() - 3) + "y");
-
-  // Undo a doubled final consonant before -ed/-ing: stopped -> stop, running ->
-  // run, planned -> plan, sitting -> sit. Without this the plain suffix strip
-  // above yields "stopp"/"runn", which no dictionary lists. Common enough in
-  // prose that its absence was a routine lookup failure.
-  const auto addUndoubled = [&](const char* suffix) {
-    const size_t suffixLen = strlen(suffix);
-    if (lower.size() < suffixLen + 3) return;
-    if (lower.compare(lower.size() - suffixLen, suffixLen, suffix) != 0) return;
-    const size_t stemLen = lower.size() - suffixLen;
-    const char last = lower[stemLen - 1];
-    // Only for doubled ASCII consonants; "ee"/"oo" are not this pattern.
-    if (last != lower[stemLen - 2]) return;
-    if (last < 'a' || last > 'z') return;
-    if (last == 'a' || last == 'e' || last == 'i' || last == 'o' || last == 'u') return;
-    add(lower.substr(0, stemLen - 1));
-  };
-  addUndoubled("ed");
-  addUndoubled("ing");
-
-  // Possessives: "dog's" -> "dog". cleanWord() only trims non-alphanumerics at
-  // the EDGES, so an interior apostrophe survives and the generic -s strip above
-  // produces "dog'", which never matches. Handles both ASCII ' and U+2019, the
-  // curly apostrophe most EPUBs actually use.
-  const auto addPossessive = [&](const char* apostrophe) {
-    const std::string suffix = std::string(apostrophe) + "s";
-    if (lower.size() <= suffix.size()) return;
-    if (lower.compare(lower.size() - suffix.size(), suffix.size(), suffix) != 0) return;
-    add(lower.substr(0, lower.size() - suffix.size()));
-  };
-  addPossessive("'");
-  addPossessive("\xE2\x80\x99");
-
-  return forms;
-}
-
 DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const bool includeSuggestions) {
   DictionaryLookupResult result;
   ensureActiveEntryLoaded();
@@ -2512,11 +1552,24 @@ DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const
     return result;
   }
 
-  for (const std::string& fallback : getFallbackForms(*entry, result.query)) {
+  // The candidate that answers carries the cut that made it, so the definition
+  // screen can show which parts of the word were set aside to find it.
+  const auto describe = [&result](const ArabicStem::Candidate& candidate) {
+    ArabicStem::Segment segments[ArabicStem::MAX_SEGMENTS];
+    const size_t count = ArabicStem::segments(result.query, candidate, segments, ArabicStem::MAX_SEGMENTS);
+    if (count > 1) result.decomposition = ArabicStem::joinSegments(segments, count);
+  };
+
+  for (const ArabicStem::Candidate& fallback :
+       ArabicStem::fallbackCandidates(result.query, isSpanishLanguage(*entry))) {
     if (lowMemoryAbort) break;
-    if (findIndexHit(*entry, fallback, hit) && finishFound(hit)) return result;
+    if (findIndexHit(*entry, fallback.form, hit) && finishFound(hit)) {
+      describe(fallback);
+      return result;
+    }
     if (lowMemoryAbort) break;
-    if (lookupSynonym(*entry, fallback, canonical) && findIndexHit(*entry, canonical, hit) && finishFound(hit)) {
+    if (lookupSynonym(*entry, fallback.form, canonical) && findIndexHit(*entry, canonical, hit) && finishFound(hit)) {
+      describe(fallback);
       return result;
     }
   }
@@ -2536,40 +1589,25 @@ DictionaryLookupResult DictionaryStore::lookup(const std::string& rawWord, const
 std::vector<std::string> DictionaryStore::findSuggestions(const DictionaryEntry& entry, const std::string& word,
                                                           const int maxResults) const {
   std::vector<std::string> results;
-  if (entry.checkpoints.empty()) return results;
+  if (entry.idxTable.empty()) return results;
 
   HalFile idx;
   if (!Storage.openFileForRead("DICT", entry.idxPath, idx)) return results;
+  HalFileReader reader(idx);
 
-  // Anchors the neighbourhood scan and the scoring below. getSuggestionAnchor()
+  // Anchors the neighbourhood scan and the scoring below. ArabicStem::suggestionAnchor()
   // rather than the raw query so a word like the definite-article form of
   // "ancients" lands near its bare stem instead of among unrelated al-prefixed
   // headwords that merely sort near it -- and rather than the most-stripped
   // fallback form, which is the one most likely to be a wrong strip. See that
   // function for why the difference matters here and not on the lookup path.
-  const std::string anchorWord = getSuggestionAnchor(word);
+  const std::string anchorWord = ArabicStem::suggestionAnchor(word);
 
-  int lo = 0;
-  int hi = static_cast<int>(entry.checkpoints.size()) - 1;
-  while (lo < hi) {
-    const int mid = lo + (hi - lo + 1) / 2;
-    idx.seekSet(entry.checkpoints[mid]);
-    const std::string key = readIndexWord(idx);
-    if (compareWords(key, anchorWord) <= 0) {
-      lo = mid;
-    } else {
-      hi = mid - 1;
-    }
-  }
+  // Two checkpoint segments either side of the anchor: enough neighbourhood for
+  // a near-miss to be in range, bounded so a not-found lookup cannot walk the
+  // whole index.
+  const uint32_t totalToScan = StarDictIndex::seekToNeighbourhood(reader, entry.idxTable, anchorWord, 2);
 
-  const int startSegment = std::max(0, lo - 2);
-  const int endSegment = std::min(static_cast<int>(entry.checkpoints.size()) - 1, lo + 2);
-  idx.seekSet(entry.checkpoints[startSegment]);
-
-  uint32_t totalToScan = (endSegment - startSegment + 1) * CHECKPOINT_INTERVAL;
-  if (entry.totalWords > entry.ordinals[startSegment]) {
-    totalToScan = std::min<uint32_t>(totalToScan, entry.totalWords - entry.ordinals[startSegment]);
-  }
   const std::string scoreWord = suggestionScoreKey(anchorWord);
   const int maxDistance = std::max(2, static_cast<int>(scoreWord.size()) / 3 + 1);
 
@@ -2589,7 +1627,7 @@ std::vector<std::string> DictionaryStore::findSuggestions(const DictionaryEntry&
     return a.word.size() < b.word.size();
   };
   auto addCandidate = [&](const std::string& key, const int score, const int commonPrefix, const int lengthDelta) {
-    if (key.empty() || compareWords(key, word) == 0) return;
+    if (key.empty() || StarDictIndex::compareKeys(key, word) == 0) return;
     Candidate candidate{key, score, commonPrefix, lengthDelta};
     if (candidates.size() < MAX_SUGGESTION_CANDIDATES) {
       candidates.push_back(std::move(candidate));
@@ -2606,21 +1644,21 @@ std::vector<std::string> DictionaryStore::findSuggestions(const DictionaryEntry&
   // dead code: findSuggestions() has exactly one caller (lookup(), below the
   // NotFound branch), and that caller has already tried every one of these same
   // forms through the same two functions immediately beforehand -- if any had
-  // hit, lookup() would have returned early and never called us. getFallbackForms()
+  // hit, lookup() would have returned early and never called us. ArabicStem::fallbackForms()
   // is deterministic and nothing mutates `entry` in between, so the pass could
   // only ever re-derive the same misses. For Arabic (up to ~12 fallback forms)
   // that cost 12 full index scans plus 12 .syn binary searches on every
   // not-found lookup -- roughly a second of guaranteed-useless SD I/O.
-  // getFallbackForms() is no longer called here at all: anchorWord now comes from
-  // getSuggestionAnchor(), which shares the normalization but stops short of the
+  // ArabicStem::fallbackForms() is no longer called here at all: anchorWord now comes from
+  // ArabicStem::suggestionAnchor(), which shares the normalization but stops short of the
   // strips that can corrupt a word.
 
   for (uint32_t i = 0; i < totalToScan; ++i) {
-    const std::string key = readIndexWord(idx);
+    const std::string key = StarDictIndex::readKey(reader);
     if (key.empty()) break;
-    uint8_t skip[8];
-    if (idx.read(skip, sizeof(skip)) != static_cast<int>(sizeof(skip))) break;
-    if (compareWords(key, word) == 0) continue;
+    uint8_t skip[StarDictIndex::IDX_RECORD_BYTES];
+    if (reader.read(skip, sizeof(skip)) != static_cast<int>(sizeof(skip))) break;
+    if (StarDictIndex::compareKeys(key, word) == 0) continue;
 
     const std::string scoreKey = suggestionScoreKey(key);
     const int score = editDistanceLimited(scoreKey, scoreWord, maxDistance);
@@ -2642,50 +1680,7 @@ std::vector<std::string> DictionaryStore::findSuggestions(const DictionaryEntry&
   return results;
 }
 
-std::string DictionaryStore::cleanWord(const std::string& word) {
-  if (word.empty()) return "";
-
-  size_t start = 0;
-  while (start < word.size()) {
-    const unsigned char c = static_cast<unsigned char>(word[start]);
-    if (c < 0x80 && isAsciiTrimChar(c)) {
-      ++start;
-      continue;
-    }
-    size_t tokenLen = 0;
-    if (isUtf8TrimPrefix(word, start, tokenLen)) {
-      start += tokenLen;
-      continue;
-    }
-    break;
-  }
-
-  size_t end = word.size();
-  while (end > start) {
-    const unsigned char c = static_cast<unsigned char>(word[end - 1]);
-    if (c < 0x80 && isAsciiTrimChar(c)) {
-      --end;
-      continue;
-    }
-    size_t tokenLen = 0;
-    if (isUtf8TrimSuffix(word, end, tokenLen)) {
-      end -= tokenLen;
-      continue;
-    }
-    break;
-  }
-  if (start >= end) return "";
-
-  std::string out = word.substr(start, end - start);
-  for (size_t i = 0; i + 1 < out.size();) {
-    if (static_cast<unsigned char>(out[i]) == 0xC2 && static_cast<unsigned char>(out[i + 1]) == 0xAD) {
-      out.erase(i, 2);
-    } else {
-      ++i;
-    }
-  }
-  return lowercaseLatinUtf8(out);
-}
+std::string DictionaryStore::cleanWord(const std::string& word) { return ArabicStem::cleanWord(word); }
 
 std::vector<std::string> DictionaryStore::getHistory() {
   std::vector<std::string> history;

@@ -37,17 +37,18 @@ void DictionarySuggestionsActivity::lookupSelected() {
     return;
   }
 
-  startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
-                             renderer, mappedInput, page, lookup.headword, lookup.definition, lookup.truncated,
-                             readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
-                         [this](const ActivityResult& result) {
-                           if (!result.isCancelled) {
-                             setResult(ActivityResult{});
-                             finish();
-                             return;
-                           }
-                           requestUpdate();
-                         });
+  startActivityForResult(
+      std::make_unique<DictionaryDefinitionActivity>(
+          renderer, mappedInput, page, lookup.headword, lookup.decomposition, lookup.definition, lookup.truncated,
+          readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          setResult(ActivityResult{});
+          finish();
+          return;
+        }
+        requestUpdate();
+      });
 }
 
 void DictionarySuggestionsActivity::loop() {

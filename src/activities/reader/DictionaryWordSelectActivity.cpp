@@ -1,5 +1,6 @@
 #include "DictionaryWordSelectActivity.h"
 
+#include <ArabicStem.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
@@ -67,11 +68,25 @@ void DictionaryWordSelectActivity::extractWords() {
       const std::string wordStr = block->wordText(i);
       const std::string cleaned = DictionaryStore::cleanWord(wordStr);
       if (cleaned.empty()) continue;
-      const int16_t x = static_cast<int16_t>(line.xPos + block->wordXpos(i) + marginLeft);
       const int16_t y = static_cast<int16_t>(line.yPos + marginTop);
       const uint16_t kashida = block->kashidaExtraPx(i);
-      const int16_t width = static_cast<int16_t>(std::max(1, measureWordWidth(wordStr.c_str()) + kashida));
-      words.push_back(WordInfo{wordStr, cleaned, x, y, width, 0, -1, -1, kashida});
+      int16_t x = static_cast<int16_t>(line.xPos + block->wordXpos(i) + marginLeft);
+      int16_t width = static_cast<int16_t>(std::max(1, measureWordWidth(wordStr.c_str()) + kashida));
+
+      // A mushaf writes the ayah's citation straight onto its last word, with no
+      // space for the layout to split on: "...الصَّاغِرِينَ﴾[الأعراف: ١٠-١٣]" arrives as one
+      // word. The lookup already takes only what stands before the ornate paren, so
+      // the highlight covers that much too -- and in an Arabic word that part is at
+      // the right-hand end, where the line starts.
+      const size_t keep = ArabicStem::wordLookupLength(wordStr);
+      std::string shown = wordStr;
+      if (keep < wordStr.size()) {
+        shown = wordStr.substr(0, keep);
+        const int16_t kept = static_cast<int16_t>(std::max(1, measureWordWidth(shown.c_str())));
+        if (ScriptDetector::containsArabic(wordStr.c_str())) x = static_cast<int16_t>(x + width - kept);
+        width = kept;
+      }
+      words.push_back(WordInfo{shown, cleaned, x, y, width, 0, -1, -1, kashida});
     }
   }
 
@@ -410,17 +425,18 @@ void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
   }
   const auto lookup = DICTIONARIES.lookup(query, true);
   if (lookup.status == DictionaryLookupResult::Status::Found) {
-    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
-                               renderer, mappedInput, page, lookup.headword, lookup.definition, lookup.truncated,
-                               readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
-                           // Both Done and Back land back here rather than closing: opening the
-                           // dictionary is a mode, and a mode ends when the user says so. Looking
-                           // up two words in a row used to mean re-entering word select and
-                           // re-finding your place on the page after the first one. A typed
-                           // lookup has no page word behind it, so it ends here instead.
-                           [this](const ActivityResult& result) {
-                             if (!finishTypedLookup(result.isCancelled)) requestUpdate();
-                           });
+    startActivityForResult(
+        std::make_unique<DictionaryDefinitionActivity>(
+            renderer, mappedInput, page, lookup.headword, lookup.decomposition, lookup.definition, lookup.truncated,
+            readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
+        // Both Done and Back land back here rather than closing: opening the
+        // dictionary is a mode, and a mode ends when the user says so. Looking
+        // up two words in a row used to mean re-entering word select and
+        // re-finding your place on the page after the first one. A typed
+        // lookup has no page word behind it, so it ends here instead.
+        [this](const ActivityResult& result) {
+          if (!finishTypedLookup(result.isCancelled)) requestUpdate();
+        });
     return;
   }
 

@@ -41,8 +41,8 @@ void DictionaryActivity::lookupTypedWord(const std::string& word) {
   if (lookup.status == DictionaryLookupResult::Status::Found) {
     // No page/background: this is the standalone app, not the reader overlay.
     startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
-                               renderer, mappedInput, nullptr, lookup.headword, lookup.definition, lookup.truncated,
-                               readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), 0, 0,
+                               renderer, mappedInput, nullptr, lookup.headword, lookup.decomposition, lookup.definition,
+                               lookup.truncated, readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), 0, 0,
                                /*renderPageBackground=*/false),
                            [this](const ActivityResult&) { requestUpdate(); });
     return;

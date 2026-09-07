@@ -2,6 +2,7 @@
 
 #include <Epub/Page.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,11 +14,13 @@ struct Rect;
 class DictionaryDefinitionActivity final : public Activity {
  public:
   DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::shared_ptr<Page> page,
-                               std::string headword, std::string definition, bool truncated, int readerFontId,
-                               int definitionFontId, int marginLeft, int marginTop, bool renderPageBackground = true)
+                               std::string headword, std::string decomposition, std::string definition, bool truncated,
+                               int readerFontId, int definitionFontId, int marginLeft, int marginTop,
+                               bool renderPageBackground = true)
       : Activity("DictionaryDefinition", renderer, mappedInput),
         page(std::move(page)),
         headword(std::move(headword)),
+        decomposition(std::move(decomposition)),
         definition(std::move(definition)),
         truncated(truncated),
         readerFontId(readerFontId),
@@ -35,6 +38,10 @@ class DictionaryDefinitionActivity final : public Activity {
  private:
   std::shared_ptr<Page> page;
   std::string headword;
+  // "عرض + هم": the parts the lookup set aside to reach this headword. Empty when
+  // the word was found as written. DictionaryStore fills it from the same
+  // ArabicStem::segments the browser simulator draws its pills from.
+  std::string decomposition;
   std::string definition;
   bool truncated = false;
   int readerFontId = 0;
@@ -43,15 +50,24 @@ class DictionaryDefinitionActivity final : public Activity {
   int marginTop = 0;
   bool renderPageBackground = true;
   std::vector<std::string> wrappedLines;
-  // Row pitch varies line to line now that a wrapped line is single-script, so a
-  // page is a range of lines rather than a fixed count: pageStarts[p] is the first
-  // line of page p, and lineHeights runs parallel to wrappedLines.
+  // Row pitch varies line to line -- a line carrying Arabic is set from the taller
+  // Arabic face -- so a page is a range of lines rather than a fixed count:
+  // pageStarts[p] is the first line of page p, and lineHeights runs parallel to
+  // wrappedLines.
   std::vector<int> lineHeights;
+  // Which edge each line hangs off, decided once per paragraph rather than per line
+  // so a bullet that mixes scripts does not alternate sides as it wraps. Parallel to
+  // wrappedLines; 1 is right-aligned.
+  std::vector<uint8_t> lineRtl;
   std::vector<int> pageStarts;
   int currentPage = 0;
   int totalPages = 1;
 
   Rect overlayRect() const;
+  // Height the decomposition line takes under the title, 0 when there is none.
+  // Both the wrap pass (which subtracts it from the body) and the render pass
+  // (which puts the separator below it) have to agree.
+  int decompositionHeight() const;
   void wrapText();
   void prepareDefinitionFontMetrics();
   int measureDefinitionText(const char* text) const;
