@@ -23,7 +23,9 @@ void DictionarySuggestionsActivity::onEnter() {
 
 void DictionarySuggestionsActivity::lookupSelected() {
   if (selectedIndex < 0 || selectedIndex >= static_cast<int>(suggestions.size())) return;
-  const auto lookup = DICTIONARIES.lookup(suggestions[selectedIndex], false);
+  // A suggestion is a headword the reader picked off a list; there is no word in
+  // front of it to read as evidence.
+  const auto lookup = DICTIONARIES.lookup(suggestions[selectedIndex], std::string(), false);
   if (lookup.status != DictionaryLookupResult::Status::Found) {
     const char* msg = lookup.status == DictionaryLookupResult::Status::LowMemory ? tr(STR_DICTIONARY_LOW_MEMORY)
                       : lookup.status == DictionaryLookupResult::Status::DecompressError
@@ -37,18 +39,17 @@ void DictionarySuggestionsActivity::lookupSelected() {
     return;
   }
 
-  startActivityForResult(
-      std::make_unique<DictionaryDefinitionActivity>(
-          renderer, mappedInput, page, lookup.headword, lookup.decomposition, lookup.definition, lookup.truncated,
-          readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
-      [this](const ActivityResult& result) {
-        if (!result.isCancelled) {
-          setResult(ActivityResult{});
-          finish();
-          return;
-        }
-        requestUpdate();
-      });
+  startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
+                             renderer, mappedInput, page, lookup, readerFontId,
+                             DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled) {
+                             setResult(ActivityResult{});
+                             finish();
+                             return;
+                           }
+                           requestUpdate();
+                         });
 }
 
 void DictionarySuggestionsActivity::loop() {

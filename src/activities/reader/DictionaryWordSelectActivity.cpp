@@ -386,11 +386,20 @@ void DictionaryWordSelectActivity::drawSelectionHighlight() {
 void DictionaryWordSelectActivity::lookupSelectedWord() {
   if (rows.empty()) return;
   const int wordIndex = rows[currentRow].wordIndices[currentWordInRow];
+
+  // The token in front of this one, which is evidence about it: أَقُل behind لم is
+  // the verb أقول written contracted, not the noun أقل. A word split across a line
+  // break is one word, so its other half is not what came before it.
+  int previousIndex = wordIndex - 1;
+  if (words[wordIndex].continuationOf >= 0 && words[wordIndex].continuationOf == previousIndex) --previousIndex;
+  const std::string previousWord = previousIndex >= 0 ? words[previousIndex].text : std::string();
+
   lookupQuery(words[wordIndex].lookupText.empty() ? DictionaryStore::cleanWord(words[wordIndex].text)
-                                                  : words[wordIndex].lookupText);
+                                                  : words[wordIndex].lookupText,
+              previousWord);
 }
 
-void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
+void DictionaryWordSelectActivity::lookupQuery(const std::string& query, const std::string& previousWord) {
   freeSelectionRegionCache();
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->clearCache();
@@ -423,20 +432,19 @@ void DictionaryWordSelectActivity::lookupQuery(const std::string& query) {
     RenderLock lock(*this);
     popup = GUI.drawPopup(renderer, tr(STR_DICTIONARY_LOOKUP));
   }
-  const auto lookup = DICTIONARIES.lookup(query, true);
+  const auto lookup = DICTIONARIES.lookup(query, previousWord, true);
   if (lookup.status == DictionaryLookupResult::Status::Found) {
-    startActivityForResult(
-        std::make_unique<DictionaryDefinitionActivity>(
-            renderer, mappedInput, page, lookup.headword, lookup.decomposition, lookup.definition, lookup.truncated,
-            readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
-        // Both Done and Back land back here rather than closing: opening the
-        // dictionary is a mode, and a mode ends when the user says so. Looking
-        // up two words in a row used to mean re-entering word select and
-        // re-finding your place on the page after the first one. A typed
-        // lookup has no page word behind it, so it ends here instead.
-        [this](const ActivityResult& result) {
-          if (!finishTypedLookup(result.isCancelled)) requestUpdate();
-        });
+    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
+                               renderer, mappedInput, page, lookup, readerFontId,
+                               DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
+                           // Both Done and Back land back here rather than closing: opening the
+                           // dictionary is a mode, and a mode ends when the user says so. Looking
+                           // up two words in a row used to mean re-entering word select and
+                           // re-finding your place on the page after the first one. A typed
+                           // lookup has no page word behind it, so it ends here instead.
+                           [this](const ActivityResult& result) {
+                             if (!finishTypedLookup(result.isCancelled)) requestUpdate();
+                           });
     return;
   }
 

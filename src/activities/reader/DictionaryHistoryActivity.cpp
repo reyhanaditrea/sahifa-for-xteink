@@ -23,7 +23,7 @@ void DictionaryHistoryActivity::onEnter() {
 
 void DictionaryHistoryActivity::lookupSelected() {
   if (selectedIndex < 0 || selectedIndex >= static_cast<int>(history.size())) return;
-  const auto lookup = DICTIONARIES.lookup(history[selectedIndex], true);
+  const auto lookup = DICTIONARIES.lookup(history[selectedIndex], std::string(), true);
   if (lookup.status != DictionaryLookupResult::Status::Found) {
     const char* msg = lookup.status == DictionaryLookupResult::Status::LowMemory ? tr(STR_DICTIONARY_LOW_MEMORY)
                       : lookup.status == DictionaryLookupResult::Status::DecompressError
@@ -37,15 +37,14 @@ void DictionaryHistoryActivity::lookupSelected() {
     return;
   }
 
-  startActivityForResult(
-      std::make_unique<DictionaryDefinitionActivity>(
-          renderer, mappedInput, page, lookup.headword, lookup.decomposition, lookup.definition, lookup.truncated,
-          readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
-      [this](const ActivityResult&) {
-        history = DICTIONARIES.getHistory();
-        selectedIndex = std::min(selectedIndex, std::max(0, static_cast<int>(history.size()) - 1));
-        requestUpdate();
-      });
+  startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
+                             renderer, mappedInput, page, lookup, readerFontId,
+                             DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
+                         [this](const ActivityResult&) {
+                           history = DICTIONARIES.getHistory();
+                           selectedIndex = std::min(selectedIndex, std::max(0, static_cast<int>(history.size()) - 1));
+                           requestUpdate();
+                         });
 }
 
 void DictionaryHistoryActivity::loop() {

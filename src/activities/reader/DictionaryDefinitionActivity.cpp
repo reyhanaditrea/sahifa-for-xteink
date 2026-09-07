@@ -1,5 +1,6 @@
 #include "DictionaryDefinitionActivity.h"
 
+#include <DictGloss.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -173,10 +174,40 @@ void DictionaryDefinitionActivity::prepareDefinitionFontMetrics() {
     renderer.ensureSdCardFontReady(definitionFontId, definition.c_str(), 0x01);
   }
 
+  // The readings line is drawn in the same font and is not part of the article,
+  // so its glyphs have to be asked for by name or the line comes out blank.
+  for (const DictionaryReading& reading : readings) {
+    if (!reading.headword.empty()) {
+      renderer.ensureSdCardFontReady(definitionFontId, reading.headword.c_str(), 0x01);
+    }
+  }
+
   if (truncated) {
     const std::string marker = std::string("[") + tr(STR_DEFINITION_TRUNCATED) + "]";
     renderer.ensureSdCardFontReady(definitionFontId, marker.c_str(), 0x01);
   }
+}
+
+const std::string& DictionaryDefinitionActivity::bodySource() const {
+  return layer == Layer::Brief ? gloss : definition;
+}
+
+std::vector<const DictionaryReading*> DictionaryDefinitionActivity::otherReadings() const {
+  std::vector<const DictionaryReading*> out;
+  for (const DictionaryReading& reading : readings) {
+    if (reading.headword != headword) out.push_back(&reading);
+  }
+  return out;
+}
+
+int DictionaryDefinitionActivity::seeAlsoHeight() const {
+  if (layer != Layer::Brief || otherReadings().empty()) return 0;
+  const int latin = renderer.getLineHeight(definitionFontId);
+  const int arabic = renderer.getLineHeight(renderer.getResolvedArabicFontId(definitionFontId));
+  // Two blank lines above it: the readings are the last thing the brief says, not
+  // a footer, and the eye needs to stop before it without a rule drawn across the
+  // screen. Then the label's line and the readings' own.
+  return latin * 2 + latin + std::max(latin, arabic);
 }
 
 int DictionaryDefinitionActivity::decompositionHeight() const {
@@ -292,7 +323,7 @@ void DictionaryDefinitionActivity::wrapText() {
   const int maxWidth = std::max(80, rect.width - padding * 2);
   const int headerHeight = renderer.getLineHeight(UI_10_FONT_ID) + 20 + decompositionHeight();
   const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 8;
-  const int bodyHeight = std::max(1, rect.height - headerHeight - footerHeight - padding);
+  const int bodyHeight = std::max(1, rect.height - headerHeight - footerHeight - padding - seeAlsoHeight());
 
   auto utf8UnitLength = [](const unsigned char c) -> size_t {
     if ((c & 0x80) == 0) return 1;
@@ -446,16 +477,21 @@ void DictionaryDefinitionActivity::wrapText() {
     }
   };
 
+  // Whichever layer is showing. The brief wraps the gloss, which is one short
+  // paragraph; the article wraps the whole entry.
+  const std::string& source = bodySource();
   size_t lineStart = 0;
-  for (size_t i = 0; i <= definition.size(); ++i) {
-    if (i == definition.size() || definition[i] == '\n') {
-      wrapSourceLine(definition.substr(lineStart, i - lineStart));
+  for (size_t i = 0; i <= source.size(); ++i) {
+    if (i == source.size() || source[i] == '\n') {
+      wrapSourceLine(source.substr(lineStart, i - lineStart));
       if (wrapLimitReached) break;
       lineStart = i + 1;
     }
   }
 
-  if (truncated || wrapLimitReached) {
+  // A gloss is never truncated -- it is cut to length on purpose -- and saying so
+  // under one would read as a fault in the entry.
+  if ((truncated && layer == Layer::Article) || wrapLimitReached) {
     const std::string marker = std::string("[") + tr(STR_DEFINITION_TRUNCATED) + "]";
     if (wrappedLines.size() < MAX_WRAPPED_DEFINITION_LINES) {
       wrappedLines.push_back(marker);
@@ -469,7 +505,79 @@ void DictionaryDefinitionActivity::wrapText() {
   currentPage = std::clamp(currentPage, 0, totalPages - 1);
 }
 
+void DictionaryDefinitionActivity::moveReading(const int step) {
+  const std::vector<const DictionaryReading*> others = otherReadings();
+  if (others.empty()) return;
+  const int last = static_cast<int>(others.size()) - 1;
+  // -1 is a position the line is left from, never one a press is spent on: from
+  // rest either button lands on the line at once, down at its first reading and
+  // up at its last, and walking off either end puts the highlight away again.
+  if (readingIndex < 0) {
+    readingIndex = step > 0 ? 0 : last;
+  } else {
+    const int next = readingIndex + step;
+    readingIndex = (next < 0 || next > last) ? -1 : next;
+  }
+  requestUpdate();
+}
+
+bool DictionaryDefinitionActivity::openHighlightedReading() {
+  const std::vector<const DictionaryReading*> others = otherReadings();
+  if (readingIndex < 0 || readingIndex >= static_cast<int>(others.size())) return false;
+  const DictionaryReading picked = *others[readingIndex];
+
+  std::string article;
+  bool articleTruncated = false;
+  if (!DICTIONARIES.readReading(picked, article, articleTruncated)) return false;
+
+  headword = picked.headword;
+  decomposition = picked.decomposition;
+  definition = std::move(article);
+  truncated = articleTruncated;
+  gloss = DictGloss::gloss(definition);
+  // The reader asked to be shown this reading, not to be dropped into its entry:
+  // the brief stays, with the new word in it.
+  layer = gloss.empty() ? Layer::Article : Layer::Brief;
+  readingIndex = -1;
+  currentPage = 0;
+  prepareDefinitionFontMetrics();
+  wrapText();
+  requestUpdate();
+  return true;
+}
+
 void DictionaryDefinitionActivity::loop() {
+  if (layer == Layer::Brief) {
+    // The side buttons belong to the readings line while the brief has one; the
+    // front row carries the same pair, because a reader whose thumb is already
+    // there should not have to reach around the bezel.
+    if (mappedInput.wasReleased(MappedInputManager::Button::Up) ||
+        mappedInput.wasReleased(MappedInputManager::Button::ScrollPrevious)) {
+      moveReading(-1);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Down) ||
+        mappedInput.wasReleased(MappedInputManager::Button::ScrollNext)) {
+      moveReading(1);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      if (openHighlightedReading()) return;
+      layer = Layer::Article;
+      currentPage = 0;
+      wrapText();
+      requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
+      finish();
+    }
+    return;
+  }
+
   const bool prevPage = mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
                         mappedInput.wasReleased(MappedInputManager::Button::Left);
   const bool nextPage = mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
@@ -496,6 +604,15 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    // Back walks out the way in went: to the brief when there was one, and out of
+    // the lookup only from there.
+    if (!gloss.empty()) {
+      layer = Layer::Brief;
+      currentPage = 0;
+      wrapText();
+      requestUpdate();
+      return;
+    }
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));
@@ -529,7 +646,9 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   const std::string title = renderer.truncatedText(UI_10_FONT_ID, headword.c_str(), titleMaxWidth, EpdFontFamily::BOLD);
   renderer.drawText(UI_10_FONT_ID, rect.x + padding, titleY, title.c_str(), true, EpdFontFamily::BOLD);
 
-  if (totalPages > 1) {
+  // The brief is one screen by construction, and a "1/1" over it would be a
+  // promise of more.
+  if (layer == Layer::Article && totalPages > 1) {
     const std::string pageText = std::to_string(currentPage + 1) + "/" + std::to_string(totalPages);
     const int pageWidth = renderer.getTextWidth(SMALL_FONT_ID, pageText.c_str());
     renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - padding - pageWidth, titleY + 2, pageText.c_str());
@@ -577,7 +696,52 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     y += lineHeights[i];
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  if (layer == Layer::Brief) drawSeeAlso(rect, y);
+
+  const bool canStep = layer == Layer::Brief && !otherReadings().empty();
+  const auto labels = layer == Layer::Brief
+                          ? mappedInput.mapLabels(tr(STR_BACK), readingIndex >= 0 ? tr(STR_OPEN) : tr(STR_READ_MORE),
+                                                  canStep ? tr(STR_DIR_UP) : "", canStep ? tr(STR_DIR_DOWN) : "",
+                                                  /*rtlSwap=*/false)
+                          : mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+void DictionaryDefinitionActivity::drawSeeAlso(const Rect& rect, const int top) const {
+  const std::vector<const DictionaryReading*> others = otherReadings();
+  if (others.empty()) return;
+
+  const int padding = 10;
+  const int latin = renderer.getLineHeight(definitionFontId);
+  const int arabic = std::max(latin, renderer.getLineHeight(renderer.getResolvedArabicFontId(definitionFontId)));
+  // Two blank lines under the last line of the gloss, then the label on its own
+  // line: the label reads left to right and the readings right to left, so they
+  // get a line each rather than fighting over one.
+  const int labelY = top + latin * 2;
+  renderer.drawText(definitionFontId, rect.x + padding, labelY, tr(STR_SEE_ALSO));
+
+  const int rowY = labelY + latin;
+  const char* const separator = " \xC2\xB7 ";
+  const int separatorWidth = renderer.getTextAdvanceX(definitionFontId, separator, EpdFontFamily::REGULAR);
+  const int leftEdge = rect.x + padding;
+  int cursor = rect.x + rect.width - padding;
+  for (size_t i = 0; i < others.size(); ++i) {
+    const std::string& word = others[i]->headword;
+    const int width = renderer.getTextAdvanceX(definitionFontId, word.c_str(), EpdFontFamily::REGULAR);
+    // What does not fit is not drawn: the line is one line, and a reading half off
+    // the edge would look like a rendering fault rather than a list that ran out.
+    if (cursor - width < leftEdge) break;
+    cursor -= width;
+    if (static_cast<int>(i) == readingIndex) {
+      renderer.fillRect(cursor - 2, rowY - 2, width + 4, arabic + 2, true);
+      renderer.drawText(definitionFontId, cursor, rowY, word.c_str(), false);
+    } else {
+      renderer.drawText(definitionFontId, cursor, rowY, word.c_str());
+    }
+    if (i + 1 < others.size() && cursor - separatorWidth > leftEdge) {
+      cursor -= separatorWidth;
+      renderer.drawText(definitionFontId, cursor, rowY, separator);
+    }
+  }
 }

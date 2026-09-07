@@ -108,7 +108,9 @@ class DictionaryWordSelectActivity final : public Activity {
   void lookupSelectedWord();
   // Everything after the query is known: the prepare-progress popup, the index
   // lookup, and pushing the definition, the suggestion list or the failure popup.
-  void lookupQuery(const std::string& query);
+  // `previousWord` is the token in front of the one being looked up, as the page
+  // wrote it. Empty for a typed lookup, which has no page behind it.
+  void lookupQuery(const std::string& query, const std::string& previousWord = std::string());
   // Ends a typed lookup, handing `cancelled` to the reader. Returns false for a word
   // picked off the page, where this screen stays open instead.
   bool finishTypedLookup(bool cancelled);

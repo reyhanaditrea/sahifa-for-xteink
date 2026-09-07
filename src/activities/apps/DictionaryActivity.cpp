@@ -36,15 +36,15 @@ void DictionaryActivity::onEnter() {
 }
 
 void DictionaryActivity::lookupTypedWord(const std::string& word) {
-  const auto lookup = DICTIONARIES.lookup(word, true);
+  const auto lookup = DICTIONARIES.lookup(word, std::string(), true);
   const int readerFontId = SETTINGS.getReaderFontId();
   if (lookup.status == DictionaryLookupResult::Status::Found) {
     // No page/background: this is the standalone app, not the reader overlay.
-    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
-                               renderer, mappedInput, nullptr, lookup.headword, lookup.decomposition, lookup.definition,
-                               lookup.truncated, readerFontId, DICTIONARIES.getDefinitionFontId(readerFontId), 0, 0,
-                               /*renderPageBackground=*/false),
-                           [this](const ActivityResult&) { requestUpdate(); });
+    startActivityForResult(
+        std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, nullptr, lookup, readerFontId,
+                                                       DICTIONARIES.getDefinitionFontId(readerFontId), 0, 0,
+                                                       /*renderPageBackground=*/false),
+        [this](const ActivityResult&) { requestUpdate(); });
     return;
   }
   if (lookup.status == DictionaryLookupResult::Status::NotFound && !lookup.suggestions.empty()) {
