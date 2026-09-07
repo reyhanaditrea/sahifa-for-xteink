@@ -62,6 +62,12 @@ add_subdirectory(differential_rounding)
 add_subdirectory(hyphenation_eval)
 add_subdirectory(utf8_compose)
 add_subdirectory(arabic_shaper)
+add_subdirectory(arabic_stem)
+add_subdirectory(stardict_index)
+
+# Not a test: the host dictionary probe shares this build so it links the same
+# libraries the suites do. Run it by hand, see tools/dictprobe/dictprobe.cpp.
+add_subdirectory(${REPO_ROOT}/tools/dictprobe dictprobe)
 add_subdirectory(midad_app_settings_load_plan)
 add_subdirectory(ota_rollback_recovery_plan)
 add_subdirectory(ota_rollback_digest_format)
