@@ -64,6 +64,7 @@ add_subdirectory(utf8_compose)
 add_subdirectory(arabic_shaper)
 add_subdirectory(arabic_stem)
 add_subdirectory(stardict_index)
+add_subdirectory(dict_gloss)
 
 # Not a test: the host dictionary probe shares this build so it links the same
 # libraries the suites do. Run it by hand, see tools/dictprobe/dictprobe.cpp.
