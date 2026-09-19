@@ -36,6 +36,44 @@ constexpr int QR_CODE_HEIGHT = 198;
 DNSServer* dnsServer = nullptr;
 constexpr uint16_t DNS_PORT = 53;
 
+// Most routers ship on channel 1, so a hotspot fixed there shares the air with
+// the neighbours. Pick the quietest of the three non-overlapping channels from a
+// short scan; a failed scan keeps AP_CHANNEL.
+uint8_t pickHotspotChannel() {
+#ifdef SIMULATOR
+  return AP_CHANNEL;
+#else
+  constexpr uint8_t CANDIDATES[] = {1, 6, 11};
+  constexpr uint32_t SCAN_MS_PER_CHANNEL = 120;
+
+  WiFi.mode(WIFI_STA);
+  const int16_t found = WiFi.scanNetworks(false, false, false, SCAN_MS_PER_CHANNEL);
+  if (found < 0) {
+    LOG_DBG("WEBACT", "Hotspot channel scan failed (%d), using channel %d", found, AP_CHANNEL);
+    return AP_CHANNEL;
+  }
+
+  // A 20 MHz network reaches two channels either side; a strong one costs more.
+  int load[3] = {0, 0, 0};
+  for (int16_t i = 0; i < found; i++) {
+    const int32_t channel = WiFi.channel(i);
+    const int weight = WiFi.RSSI(i) > -70 ? 3 : 1;
+    for (size_t c = 0; c < 3; c++) {
+      if (abs(channel - CANDIDATES[c]) <= 2) load[c] += weight;
+    }
+  }
+  WiFi.scanDelete();
+
+  size_t best = 0;
+  for (size_t c = 1; c < 3; c++) {
+    if (load[c] < load[best]) best = c;
+  }
+  LOG_DBG("WEBACT", "Hotspot channel %d (load 1/6/11: %d/%d/%d, %d networks)", CANDIDATES[best], load[0], load[1],
+          load[2], found);
+  return CANDIDATES[best];
+#endif
+}
+
 void stopDnsServer() {
   if (!dnsServer) return;
 
@@ -203,16 +241,18 @@ void CrossPointWebServerActivity::startAccessPoint() {
   LOG_DBG("WEBACT", "Free heap before AP start: %d bytes", ESP.getFreeHeap());
 
   // Configure and start the AP
+  const uint8_t channel = pickHotspotChannel();
+
   WiFi.mode(WIFI_AP);
   delay(100);
 
   // Start soft AP
   bool apStarted;
   if (AP_PASSWORD && strlen(AP_PASSWORD) >= 8) {
-    apStarted = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, false, AP_MAX_CONNECTIONS);
+    apStarted = WiFi.softAP(AP_SSID, AP_PASSWORD, channel, false, AP_MAX_CONNECTIONS);
   } else {
     // Open network (no password)
-    apStarted = WiFi.softAP(AP_SSID, nullptr, AP_CHANNEL, false, AP_MAX_CONNECTIONS);
+    apStarted = WiFi.softAP(AP_SSID, nullptr, channel, false, AP_MAX_CONNECTIONS);
   }
 
   if (!apStarted) {
