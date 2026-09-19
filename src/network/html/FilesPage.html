@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Files - Midad</title>
-  <script src="/js/jszip.min.js"></script>
   <style>
     :root {
       --font-color: #171717;
@@ -1862,6 +1861,24 @@
 </div>
 
 <script>
+  // JSZip is only for the EPUB tools, and it is a third of this page's download:
+  // fetch it the first time one of them runs. On failure the callers' own
+  // `typeof JSZip` checks take over.
+  let jsZipLoading = null;
+  function ensureJsZip() {
+    if (typeof JSZip !== 'undefined') return Promise.resolve();
+    if (!jsZipLoading) {
+      jsZipLoading = new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = '/js/jszip.min.js';
+        script.onload = resolve;
+        script.onerror = () => { jsZipLoading = null; resolve(); };
+        document.head.appendChild(script);
+      });
+    }
+    return jsZipLoading;
+  }
+
   // get current path from query parameter
   const currentPath = decodeURIComponent(new URLSearchParams(window.location.search).get('path') || '/');
 
@@ -2395,6 +2412,7 @@
    * Returns array of {path, name, dataUrl, width, height}
    */
   async function extractImagesForPreview(file) {
+    await ensureJsZip();
     const zip = await JSZip.loadAsync(file);
     const imageExtensions = ['.png', '.gif', '.webp', '.bmp', '.jpg', '.jpeg'];
 
@@ -2735,6 +2753,7 @@
    * Show image picker after EPUB file selection
    */
   async function showImagePicker(file) {
+    await ensureJsZip();
     // Check if JSZip is available
     if (typeof JSZip === 'undefined') {
       console.error('JSZip not loaded');
@@ -3911,6 +3930,7 @@ function buildMetadataFilename(title, author) {
 }
 
 async function getMetadataFilenameForEpub(file) {
+  await ensureJsZip();
   if (typeof JSZip === 'undefined') return '';
   const zip = await JSZip.loadAsync(file);
   const opfPath = await findOPFPath(zip);
@@ -5055,6 +5075,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
 
 // Convert EPUB file - returns converted blob
 async function convertEpubFile(file, progressCallback) {
+  await ensureJsZip();
   const startTime = Date.now();
   const originalSize = file.size;
 

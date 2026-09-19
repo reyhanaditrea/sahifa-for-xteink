@@ -283,8 +283,9 @@ void CrossPointWebServer::begin() {
   WebDiagLog::append("free heap after route setup=" + std::to_string(ESP.getFreeHeap()));
 
   // Collect WebDAV headers and register handler
-  const char* davHeaders[] = {"Depth", "Destination", "Overwrite", "If", "Lock-Token", "Timeout"};
-  server->collectHeaders(davHeaders, 6);
+  // If-None-Match is for the embedded pages (see sendEmbedded()).
+  const char* collectedHeaders[] = {"Depth", "Destination", "Overwrite", "If", "Lock-Token", "Timeout", "If-None-Match"};
+  server->collectHeaders(collectedHeaders, 7);
   // `new (std::nothrow)`, not makeUniqueNoThrow: addHandler() takes ownership and deletes
   // this itself when the server stops (see the comment it used to carry), so a unique_ptr
   // here would double-free. On OOM, skip registering WebDAV rather than crash -- the rest
@@ -434,9 +435,29 @@ CrossPointWebServer::WsUploadStatus CrossPointWebServer::getWsUploadStatus() con
   return status;
 }
 
-static void sendHtmlContent(WebServer* server, const char* data, size_t len) {
+// The embedded pages and scripts change only with the firmware, and on this link
+// they are the slow part of every visit. The browser keeps them and revalidates:
+// a repeat visit costs a 304 instead of the page again.
+static void sendEmbedded(WebServer* server, const char* contentType, const char* data, size_t len) {
+  uint32_t hash = 2166136261u;  // FNV-1a
+  for (size_t i = 0; i < len; i++) {
+    hash = (hash ^ static_cast<uint8_t>(data[i])) * 16777619u;
+  }
+  char etag[16];
+  snprintf(etag, sizeof(etag), "\"%08lx\"", static_cast<unsigned long>(hash));
+
+  server->sendHeader("Cache-Control", "no-cache");
+  server->sendHeader("ETag", etag);
+  if (server->header("If-None-Match") == etag) {
+    server->send(304, contentType, "");
+    return;
+  }
   server->sendHeader("Content-Encoding", "gzip");
-  server->send_P(200, "text/html", data, len);
+  server->send_P(200, contentType, data, len);
+}
+
+static void sendHtmlContent(WebServer* server, const char* data, size_t len) {
+  sendEmbedded(server, "text/html", data, len);
 }
 
 void CrossPointWebServer::handleRoot() const {
@@ -445,8 +466,7 @@ void CrossPointWebServer::handleRoot() const {
 }
 
 void CrossPointWebServer::handleJszip() const {
-  server->sendHeader("Content-Encoding", "gzip");
-  server->send_P(200, "application/javascript", jszip_minJs, jszip_minJsCompressedSize);
+  sendEmbedded(server.get(), "application/javascript", jszip_minJs, jszip_minJsCompressedSize);
   LOG_DBG("WEB", "Served jszip.min.js");
 }
 
