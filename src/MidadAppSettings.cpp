@@ -21,8 +21,6 @@ void MidadAppSettings::toJson(JsonDocument& doc) const {
   doc["pomodoroFocusMin"] = pomodoroFocusMin;
   doc["pomodoroShortBreakMin"] = pomodoroShortBreakMin;
   doc["pomodoroLongBreakMin"] = pomodoroLongBreakMin;
-  doc["gymEnabled"] = gymEnabled;
-  doc["gymWeightUnit"] = gymWeightUnit;
   doc["debugLoggingEnabled"] = debugLoggingEnabled;
   doc["prayerEnabled"] = prayerEnabled;
   doc["prayerMethod"] = prayerMethod;
@@ -51,9 +49,6 @@ bool MidadAppSettings::fromJson(JsonVariantConst doc) {
   const uint8_t longBreak = doc["pomodoroLongBreakMin"] | pomodoroLongBreakMin;
   pomodoroLongBreakMin = (longBreak >= 5 && longBreak <= 60) ? longBreak : pomodoroLongBreakMin;
 
-  gymEnabled = clampToggle(doc["gymEnabled"] | gymEnabled, gymEnabled);
-  const uint8_t weightUnit = doc["gymWeightUnit"] | gymWeightUnit;
-  gymWeightUnit = weightUnit < GYM_WEIGHT_UNIT_COUNT ? weightUnit : gymWeightUnit;
   debugLoggingEnabled = clampToggle(doc["debugLoggingEnabled"] | debugLoggingEnabled, debugLoggingEnabled);
 
   prayerEnabled = clampToggle(doc["prayerEnabled"] | prayerEnabled, prayerEnabled);

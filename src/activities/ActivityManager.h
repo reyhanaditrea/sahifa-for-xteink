@@ -140,7 +140,6 @@ class ActivityManager {
   // Boot target for a queued "Fetch now": runs the article fetch on a
   // boot-fresh heap, then silent-restarts back into News.
   void goToNewsFullText();
-  void goToGym();
   void goToPrayer();
   void goToDictionary();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);

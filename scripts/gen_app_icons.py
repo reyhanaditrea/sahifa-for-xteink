@@ -167,15 +167,6 @@ def draw_pomodoro(d):
     line(d, 12, 6.0, 15.4, 5.2)
 
 
-def draw_gym(d):
-    # Dumbbell: two end weights, two inner collars, one bar.
-    line(d, 3.4, 9.0, 3.4, 15.0)
-    line(d, 7.0, 6.6, 7.0, 17.4)
-    line(d, 17.0, 6.6, 17.0, 17.4)
-    line(d, 20.6, 9.0, 20.6, 15.0)
-    line(d, 7.0, 12, 17.0, 12)
-
-
 def draw_news(d):
     # Newspaper: an outer sheet with a folded second sheet behind it, a masthead
     # rule and three text lines. Only straight edges, which is what survives the
@@ -212,7 +203,6 @@ ICONS = [
     ("AppNews72Icon", "appnews72", draw_news),
     ("AppStopwatch72Icon", "appstopwatch72", draw_stopwatch),
     ("AppPomodoro72Icon", "apppomodoro72", draw_pomodoro),
-    ("AppGym72Icon", "appgym72", draw_gym),
     ("AppPrayer72Icon", "appprayer72", draw_prayer),
 ]
 

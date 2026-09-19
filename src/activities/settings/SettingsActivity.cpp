@@ -78,13 +78,13 @@ void SettingsActivity::rebuildSettingsLists() {
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   appsSettings.push_back(SettingInfo::Action(StrId::STR_DICTIONARY, SettingAction::Dictionary));
   appsSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  // Midad-owned Apps rows (Quran/Games/Tasbih/Stop Watch/Pomodoro/Gym/Debug
+  // Midad-owned Apps rows (Quran/Games/Tasbih/Stop Watch/Pomodoro/Debug
   // Logging) -- see src/MidadSettingsList.h. Appended here, after KOReader
   // Sync, so Debug Logging (the last row that function adds) keeps landing
   // right after KOReader Sync, matching prior behavior.
   // Filtered the same way as the loop above, which it deliberately runs after:
   // appending straight into appsSettings let every Midad row bypass visibleWhen,
-  // so the Pomodoro durations and the Gym weight unit stayed on screen with their
+  // so the Pomodoro durations stayed on screen with their
   // app switched off (reported). Build them in a scratch list and copy across only
   // what should show. The upstream rows keep their filter in the loop; this is the
   // one other place rows enter a category vector carrying a predicate.

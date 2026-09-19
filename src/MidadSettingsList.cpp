@@ -75,8 +75,7 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
       },
       "pomodoroEnabled", StrId::STR_CAT_APPS));
   // The three durations describe a Pomodoro cycle that cannot run while the app
-  // itself is off, so they stay hidden until it is switched on. Same for the Gym
-  // weight unit below.
+  // itself is off, so they stay hidden until it is switched on.
   const auto pomodoroOn = [] { return MIDAD_APP_SETTINGS.pomodoroEnabled != 0; };
   appsSettings.push_back(SettingInfo::DynamicValue(
                              StrId::STR_POMODORO_FOCUS_MIN, [] { return MIDAD_APP_SETTINGS.pomodoroFocusMin; },
@@ -103,24 +102,6 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
                              },
                              {5, 60, 5}, "pomodoroLongBreakMin", StrId::STR_CAT_APPS)
                              .shownWhen(pomodoroOn));
-  // Gym toggle: pins a "Gym" tile in My Books that opens the built-in
-  // workout planner.
-  appsSettings.push_back(SettingInfo::DynamicToggle(
-      StrId::STR_GYM, [] { return MIDAD_APP_SETTINGS.gymEnabled; },
-      [](uint8_t val) {
-        MIDAD_APP_SETTINGS.gymEnabled = val;
-        MIDAD_APP_SETTINGS.saveToFile();
-      },
-      "gymEnabled", StrId::STR_CAT_APPS));
-  appsSettings.push_back(SettingInfo::DynamicEnum(
-                             StrId::STR_GYM_WEIGHT_UNIT, {StrId::STR_GYM_UNIT_KG, StrId::STR_GYM_UNIT_LB},
-                             [] { return MIDAD_APP_SETTINGS.gymWeightUnit; },
-                             [](uint8_t val) {
-                               MIDAD_APP_SETTINGS.gymWeightUnit = val;
-                               MIDAD_APP_SETTINGS.saveToFile();
-                             },
-                             "gymWeightUnit", StrId::STR_CAT_APPS)
-                             .shownWhen([] { return MIDAD_APP_SETTINGS.gymEnabled != 0; }));
   // Gates whether the rolling SD diagnostic logs get written at all -- see
   // MidadAppSettings::debugLoggingEnabled and src/util/DebugLogging.h for the
   // full list and rationale. Last in this function by design (user request):

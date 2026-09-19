@@ -7,7 +7,7 @@
 
 // Downloads every enabled feed over Wi-Fi and rewrites the on-SD cache.
 //
-// Shaped like GymCatalogSyncActivity: pick a network, do the work while the
+// Pick a network, do the work while the
 // screen shows progress, then drop Wi-Fi and silently restart back into News so
 // the reading screen starts from a fresh heap.
 class NewsSyncActivity final : public Activity {

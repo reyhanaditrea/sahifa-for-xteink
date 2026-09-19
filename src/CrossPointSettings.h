@@ -350,7 +350,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t arabicFontFamily = NOTONASKHARABIC;
   uint8_t arabicFontSize = MEDIUM;
 
-  // Settings -> Apps -> Quran/Games/Tasbih/Stop Watch/Pomodoro/Gym
+  // Settings -> Apps -> Quran/Games/Tasbih/Stop Watch/Pomodoro
   // and the Debug logging toggle all moved to MidadAppSettings (see
   // src/MidadAppSettings.h) -- none of them have a CrossPoint upstream
   // equivalent, so keeping them here meant every upstream sync touched this

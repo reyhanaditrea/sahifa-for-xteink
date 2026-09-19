@@ -3,7 +3,7 @@
 #include <cstddef>
 
 // Single shared SD-card file every rolling diagnostic logger writes into
-// (/debug_log.txt), each line tagged with its subsystem (e.g. "[GYM] ...",
+// (/debug_log.txt), each line tagged with its subsystem (e.g. "[BATTERY] ...",
 // "[SLEEP] ...") so a user asked to help diagnose an issue can pull ONE file
 // off the card instead of hunting down 8+ separate *_log.txt files. Backed by
 // the same RollingSdLog::append() read-modify-write used before consolidation

@@ -67,14 +67,6 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
   // Focus phases completed before a long break replaces the short one.
   static constexpr uint8_t POMODORO_CYCLES_BEFORE_LONG_BREAK = 4;
 
-  // Settings -> Apps -> Gym: pins a synthetic "Gym" tile that opens the
-  // built-in 7-day workout planner.
-  uint8_t gymEnabled = 1;
-  // Display unit for logged weights: 0 = kg, 1 = lb. Weight is always stored
-  // internally in kg (GymLogStore) regardless of this setting.
-  enum GYM_WEIGHT_UNIT { GYM_WEIGHT_KG = 0, GYM_WEIGHT_LB = 1, GYM_WEIGHT_UNIT_COUNT };
-  uint8_t gymWeightUnit = GYM_WEIGHT_KG;
-
   // Settings -> Apps -> Prayer Times: pins a "Prayer Times" tile that opens
   // PrayerActivity: today's timings, computed on the device from the city.
   uint8_t prayerEnabled = 1;

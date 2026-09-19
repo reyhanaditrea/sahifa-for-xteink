@@ -13,7 +13,6 @@
 #include "QuranBook.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
-#include "activities/apps/GymActivity.h"
 #include "activities/apps/PrayerActivity.h"
 #include "activities/apps/StopwatchActivity.h"
 #include "activities/apps/TasbihActivity.h"
@@ -21,7 +20,6 @@
 #include "components/UITheme.h"
 #include "components/icons/appfiles72.h"
 #include "components/icons/appgames72.h"
-#include "components/icons/appgym72.h"
 #include "components/icons/appnews72.h"
 #include "components/icons/apppomodoro72.h"
 #include "components/icons/appprayer72.h"
@@ -102,11 +100,6 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
          MIDAD_APP_SETTINGS.pomodoroEnabled = v;
          MIDAD_APP_SETTINGS.saveToFile();
        }},
-      {AppId::Gym, StrId::STR_GYM, [] { return MIDAD_APP_SETTINGS.gymEnabled; },
-       [](uint8_t v) {
-         MIDAD_APP_SETTINGS.gymEnabled = v;
-         MIDAD_APP_SETTINGS.saveToFile();
-       }},
   };
   return kEntries;
 }
@@ -123,7 +116,6 @@ const uint8_t* AppsActivity::iconFor(const AppId id) {
       AppNews72Icon,       // News
       AppStopwatch72Icon,  // Stopwatch
       AppPomodoro72Icon,   // Pomodoro
-      AppGym72Icon,        // Gym
       AppPrayer72Icon,     // Prayer
   };
   const size_t index = static_cast<size_t>(id);
@@ -209,9 +201,6 @@ bool AppsActivity::launch(const AppEntry& entry) {
       startActivityForResult(
           std::make_unique<StopwatchActivity>(renderer, mappedInput, StopwatchActivity::Mode::Pomodoro),
           [](const ActivityResult&) {});
-      return true;
-    case AppId::Gym:
-      startActivityForResult(std::make_unique<GymActivity>(renderer, mappedInput), [](const ActivityResult&) {});
       return true;
     case AppId::Prayer:
       startActivityForResult(std::make_unique<PrayerActivity>(renderer, mappedInput), [](const ActivityResult&) {});

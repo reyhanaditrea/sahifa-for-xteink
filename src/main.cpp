@@ -27,8 +27,6 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "GameHighScoresStore.h"
-#include "GymLogStore.h"
-#include "GymPlanStore.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "MidadAppSettings.h"
@@ -215,7 +213,6 @@ constexpr uint32_t SILENT_REBOOT_TARGET_OTA_INSTALL = 2;
 constexpr uint32_t SILENT_REBOOT_TARGET_OTA_CHECK = 3;
 constexpr uint32_t SILENT_REBOOT_TARGET_FILE_TRANSFER = 4;
 constexpr uint32_t SILENT_REBOOT_TARGET_FOULAD_EBOOKS = 5;
-constexpr uint32_t SILENT_REBOOT_TARGET_GYM = 6;
 constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 7;
 constexpr uint32_t SILENT_REBOOT_TARGET_DICTIONARY = 8;
 constexpr uint32_t SILENT_REBOOT_TARGET_NEWS = 9;
@@ -352,16 +349,6 @@ void silentRestartToFouladEbooks() {
   silentRebootTarget = SILENT_REBOOT_TARGET_FOULAD_EBOOKS;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=foulad_ebooks)");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  delay(50);
-  ESP.restart();
-}
-
-void silentRestartToGym() {
-  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
-  silentRebootTarget = SILENT_REBOOT_TARGET_GYM;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
-  LOG_DBG("MAIN", "Silent restart (target=gym)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
@@ -715,8 +702,6 @@ void setup() {
   RECENT_BOOKS.loadFromFile();
   GAME_SCORES.loadFromFile();
   TASBIH.loadFromFile();
-  GYM_PLAN.loadFromFile();
-  GYM_LOG.loadFromFile();
   NEWS_FEEDS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
@@ -911,10 +896,6 @@ void setup() {
     // cover download/decode allocations; started from a fragmented session
     // heap it aborted with OOM twice on-device (crash reports 7 and 8).
     activityManager.goToFouladEbooks();
-  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_GYM) {
-    // Return-to-caller: Gym catalog/asset sync reboots here instead of Home
-    // so the user lands back in the Gym app they were actually using.
-    activityManager.goToGym();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_PRAYER) {
     // Return-to-caller: setting the clock is the one thing the prayer app
     // needs a network for, and it is reached from that app -- landing on Home

@@ -144,8 +144,6 @@ void addSettingsReport(JsonObject settings) {
   settings["gamesEnabled"] = m.gamesEnabled;
   settings["tasbihEnabled"] = m.tasbihEnabled;
   settings["stopwatchEnabled"] = m.stopwatchEnabled;
-  settings["gymEnabled"] = m.gymEnabled;
-  settings["gymWeightUnit"] = m.gymWeightUnit;
   settings["debugLoggingEnabled"] = m.debugLoggingEnabled;
   // System
   settings["sleepTimeoutMinutes"] = s.sleepTimeoutMinutes;
@@ -338,8 +336,6 @@ void applySettingsFromServer(JsonObjectConst settings) {
     applyMidadToggle(m.gamesEnabled, "gamesEnabled");
     applyMidadToggle(m.tasbihEnabled, "tasbihEnabled");
     applyMidadToggle(m.stopwatchEnabled, "stopwatchEnabled");
-    applyMidadToggle(m.gymEnabled, "gymEnabled");
-    applyMidadEnum(m.gymWeightUnit, "gymWeightUnit", MidadAppSettings::GYM_WEIGHT_UNIT_COUNT);
     applyMidadToggle(m.debugLoggingEnabled, "debugLoggingEnabled");
     if (midadAppsChanged) {
       m.saveToFile();
