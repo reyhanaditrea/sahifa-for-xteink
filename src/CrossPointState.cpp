@@ -44,8 +44,6 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["recentOverlaySleepPos"] = recentOverlaySleepPos;
   doc["recentOverlaySleepFill"] = recentOverlaySleepFill;
   doc["readerActivityLoadCount"] = readerActivityLoadCount;
-  doc["pendingSyncJumpPercent"] = pendingSyncJumpPercent;
-  doc["pendingSyncJumpSpine"] = pendingSyncJumpSpine;
   doc["lastSleepFromReader"] = lastSleepFromReader;
   doc["lastSleepImagePath"] = lastSleepImagePath;
   doc["showBootScreen"] = showBootScreen;
@@ -87,9 +85,6 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
     if (legacy != UINT8_MAX) pushRecentSleep(static_cast<uint16_t>(legacy));
   }
   readerActivityLoadCount = doc["readerActivityLoadCount"] | static_cast<uint8_t>(0);
-  // Absent on a state file written before cross-device sync; 0 means nothing pending.
-  pendingSyncJumpPercent = doc["pendingSyncJumpPercent"] | static_cast<uint8_t>(0);
-  pendingSyncJumpSpine = doc["pendingSyncJumpSpine"] | static_cast<int16_t>(-1);
   lastSleepFromReader = doc["lastSleepFromReader"] | false;
   lastSleepImagePath = doc["lastSleepImagePath"] | "";
   showBootScreen = doc["showBootScreen"] | true;

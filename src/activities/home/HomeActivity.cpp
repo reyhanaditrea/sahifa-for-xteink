@@ -26,7 +26,7 @@
 #include "util/CoverThumbs.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // eBooks, Stats, Files, Settings
+  int count = 4;  // Files, Stats, Apps, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -296,11 +296,8 @@ void HomeActivity::loop() {
     }
     const int menuIndex = selectorIndex - static_cast<int>(recentBooks.size());
     switch (indexToMenuItem(menuIndex)) {
-      case HomeMenuItem::FOULAD_EBOOKS:
-        // Signed out is not a separate destination: goToFouladEbooks() sends an
-        // unconfigured device straight to FouladQrLoginActivity, and a configured
-        // one to the catalog.
-        onFouladEbooksOpen();
+      case HomeMenuItem::FILE_BROWSER:
+        onFilesOpen();
         break;
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
@@ -441,22 +438,12 @@ void HomeActivity::render(RenderLock&&) {
                           recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
-  // Order: eBooks, Stats, Files, Settings -- matches menuItemToIndex/indexToMenuItem.
+  // Order: Files, Stats, Apps, Settings -- matches menuItemToIndex/indexToMenuItem.
   // Short labels chosen to fit the bottom icon bar tiles. Recent Books has no
   // menu entry anymore: the recents covers row (and its stacked +N tile, which
   // opens the full grid) took over that job.
-  // Fixed, not login-dependent (user-specified). The slots used to swap on Foulad
-  // eBooks login state -- eBooks/Files in slot 0, Files/Update in slot 2 -- which
-  // moved two icons the moment an account was added or removed, and made eBooks
-  // undiscoverable to exactly the people who had not signed in yet. Signed out,
-  // eBooks now opens the QR sign-in (see loop()). Update keeps its permanent home
-  // under Settings > System, where it already lived for signed-in devices.
-  // Files gave up this slot to Apps and is now the first tile inside it. The apps
-  // themselves were the reason: every one of them was off by default and, once
-  // enabled, appeared inside My Books, so nobody could find them. Files is reached
-  // constantly but is one press deeper rather than invisible, which is the trade.
-  std::vector<const char*> menuItems = {tr(STR_EBOOKS), tr(STR_STATS), tr(STR_CAT_APPS), tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Library, Stats, Apps, Settings};
+  std::vector<const char*> menuItems = {tr(STR_FILES), tr(STR_STATS), tr(STR_CAT_APPS), tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Stats, Apps, Settings};
 
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     // Insert Continue Reading at the top if enabled in theme
@@ -506,9 +493,4 @@ void HomeActivity::onStatsOpen() {
 
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 
-void HomeActivity::onFouladEbooksOpen() {
-  // Reboot into the browser on a fresh heap (see SilentRestart.h): OPDS
-  // browsing from a fragmented session heap ended in OOM aborts on-device.
-  // Does not return.
-  silentRestartToFouladEbooks();
-}
+void HomeActivity::onFilesOpen() { activityManager.goToFileBrowser("/"); }

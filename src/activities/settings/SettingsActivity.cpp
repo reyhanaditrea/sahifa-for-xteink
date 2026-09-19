@@ -15,7 +15,6 @@
 #include "CrossPointSettings.h"
 #include "FontDownloadActivity.h"
 #include "FontSelectionActivity.h"
-#include "FouladEbooksConfig.h"
 #include "KOReaderSettingsActivity.h"
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
@@ -29,8 +28,6 @@
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
 #include "activities/apps/DictionaryActivity.h"
-#include "activities/browser/FouladLogoutActivity.h"
-#include "activities/browser/FouladQrLoginActivity.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -107,19 +104,6 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  // One slot, two states: Logout when an account is stored, Login when not.
-  // Top of Apps, not System (user request): signing in to Midad is how you reach
-  // your library, which is a thing you *use*, not a device setting -- and buried
-  // under System it was hard to find for exactly the people who had not signed in
-  // yet. insert() at begin() rather than push_back so it stays above Dictionary
-  // and KOReader Sync, which are appended above.
-  const auto& opdsServers = OPDS_STORE.getServers();
-  const bool hasFouladEbooksAccount = std::any_of(
-      opdsServers.begin(), opdsServers.end(), [](const OpdsServer& server) { return server.url == FOULAD_EBOOKS_URL; });
-  appsSettings.insert(appsSettings.begin(),
-                      hasFouladEbooksAccount
-                          ? SettingInfo::Action(StrId::STR_FOULAD_EBOOKS_LOGOUT, SettingAction::FouladEbooksLogout)
-                          : SettingInfo::Action(StrId::STR_FOULAD_EBOOKS_LOGIN, SettingAction::FouladEbooksLogin));
   // User request: Browse Files / File Transfer are the two most-used System
   // entries, so pin them to the very top regardless of everything else
   // appended above -- inserted last (not where they'd naturally fall in the
@@ -447,62 +431,6 @@ void SettingsActivity::toggleCurrentSetting() {
         // TCP buffers fighting a fragmented heap and page loads crawl. The
         // activity's own exit path already silentRestart()s back to Home.
         silentRestartToFileTransfer();
-        break;
-      case SettingAction::FouladEbooksLogout: {
-        // Two stages: confirm, then have the server actually drop this device. The
-        // credential is only cleared once the server says so -- previously this was
-        // local-only, so signing out left the unit listed under "My Devices" with a
-        // token that still authenticated.
-        auto removedHandler = [this](const ActivityResult& logoutResult) {
-          if (!logoutResult.isCancelled) {
-            auto& servers = OPDS_STORE.getServers();
-            for (size_t i = 0; i < servers.size(); i++) {
-              if (servers[i].url == FOULAD_EBOOKS_URL) {
-                OPDS_STORE.removeServer(i);
-                break;
-              }
-            }
-          }
-          rebuildSettingsLists();
-          selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
-        };
-
-        auto logoutHandler = [this, removedHandler](const ActivityResult& result) {
-          if (result.isCancelled) {
-            rebuildSettingsLists();
-            selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
-            return;
-          }
-          // Credentials are read here rather than inside the activity so it stays a
-          // pure "remove this device" step with no knowledge of OpdsServerStore.
-          std::string username;
-          std::string password;
-          for (const auto& server : OPDS_STORE.getServers()) {
-            if (server.url == FOULAD_EBOOKS_URL) {
-              username = server.username;
-              password = server.password;
-              break;
-            }
-          }
-          startActivityForResult(
-              std::make_unique<FouladLogoutActivity>(renderer, mappedInput, std::move(username), std::move(password)),
-              removedHandler);
-        };
-        startActivityForResult(
-            std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_FOULAD_EBOOKS_LOGOUT_CONFIRM), ""),
-            logoutHandler);
-        break;
-      }
-      case SettingAction::FouladEbooksLogin:
-        // Same QR sign-in as the first-run home entry. On success it stores the
-        // issued token and silent-reboots into the catalog on a fresh heap; on
-        // cancel we return here, so rebuild the list either way to flip this row
-        // between Login and Logout.
-        startActivityForResult(std::make_unique<FouladQrLoginActivity>(renderer, mappedInput),
-                               [this](const ActivityResult&) {
-                                 rebuildSettingsLists();
-                                 selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
-                               });
         break;
       case SettingAction::None:
         // Do nothing

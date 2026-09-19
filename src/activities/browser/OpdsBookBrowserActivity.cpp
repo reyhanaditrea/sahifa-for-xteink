@@ -15,9 +15,7 @@
 #include <memory>
 
 #include "CrossPointState.h"
-#include "FouladDeviceTracking.h"
-#include "FouladEbooksConfig.h"
-#include "FouladOpdsHooks.h"
+#include "KOReaderPendingSync.h"
 #include "MappedInputManager.h"
 #include "OpdsCoverCache.h"
 #include "OpdsServerStore.h"
@@ -134,54 +132,21 @@ void OpdsBookBrowserActivity::onExit() {
       // restart, not at Home. openEpubPath is only an in-memory field; it must be
       // explicitly persisted before ESP.restart() wipes RAM, or boot falls back to
       // whatever was last saved to disk (the book the user was already reading before
-      // opening Foulad eBooks) instead of the one they just downloaded -- confirmed as
+      // opening the catalog) instead of the one they just downloaded -- confirmed as
       // a real device bug: download a new book, and it silently reopens the old one.
       APP_STATE.openEpubPath = pendingReaderPath;
       APP_STATE.saveToFile();
       silentRestartToReader();
     } else {
-      // NOT silentRestartToFouladEbooks() here even when server.url ==
-      // FOULAD_EBOOKS_URL: that call is how Foulad eBooks is *entered* (see
-      // HomeActivity::onFouladEbooksOpen(), FouladQrLoginActivity) --
-      // calling it from this activity's own onExit() rebooted straight back
-      // into itself, so pressing Back to leave (no download in flight)
-      // reconnected WiFi and relaunched the same browser with no way out.
-      // Home is this activity's actual caller in every case; exiting always
-      // goes there, same as any other OPDS server.
       silentRestart();
     }
   }
 }
 
 void OpdsBookBrowserActivity::loop() {
-  if (state == BrowserState::UPDATE_PROMPT) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      // Reboots into the OTA flow rather than downloading here: this session has an
-      // OPDS feed and its cover cache resident, and the firmware download needs more
-      // contiguous heap than that leaves. Does not return.
-      silentRestartToOtaCheck();
-      return;
-    }
-    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-      state = BrowserState::BROWSING;  // declined; carry on browsing
-      requestUpdate();
-      return;
-    }
-    return;  // nothing else acts while the offer is up
-  }
-
-  maybeOfferFirmwareUpdate();
-  // The offer can go up mid-frame; hand this frame to it rather than letting a
-  // keypress fall through to the catalog underneath.
-  if (state == BrowserState::UPDATE_PROMPT) return;
-
   if (state == BrowserState::WIFI_SELECTION || state == BrowserState::SEARCH_INPUT) {
     return;
   }
-
-  // Re-check for a pushed settings change every ~30s while sitting on the
-  // catalog -- see FouladOpdsHooks::pollDeviceTracking().
-  FouladOpdsHooks::pollDeviceTracking(server, state == BrowserState::BROWSING);
 
   if (consumeConfirm && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     consumeConfirm = false;
@@ -376,25 +341,6 @@ void OpdsBookBrowserActivity::loop() {
 }
 
 void OpdsBookBrowserActivity::render(RenderLock&&) {
-  if (state == BrowserState::BROWSING && browsingFramesRendered < 2) browsingFramesRendered++;
-
-  if (state == BrowserState::UPDATE_PROMPT) {
-    const auto& metrics = UITheme::getInstance().getMetrics();
-    const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-    const int top = (renderer.getScreenHeight() - lineHeight * 3) / 2;
-    renderer.clearScreen();
-    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
-                   tr(STR_UPDATE));
-    renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_NEW_UPDATE), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(
-        UI_10_FONT_ID, top + lineHeight + metrics.verticalSpacing,
-        (std::string(tr(STR_NEW_VERSION)) + FouladDeviceTracking::pendingFirmwareUpdate()).c_str());
-    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_UPDATE), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
-    return;
-  }
-
   // Selector fast path. Moving the selection one cell changes two frames' worth of pixels,
   // but a full repaint re-opens and re-decodes EVERY cover on the page from the SD card
   // (see drawGridCell) -- on a page of covers that re-read is essentially the entire cost
@@ -690,10 +636,10 @@ void OpdsBookBrowserActivity::drawGridCell(const GridLayout& layout, const int p
     }
   }
   renderer.drawRect(cellX, cellY, layout.coverWidth, layout.coverHeight);
-  if (!drawn && (FouladOpdsHooks::isNewsFeed(server.url) || entry.type == OpdsEntryType::NAVIGATION)) {
-    // News entries carry no cover art -- there is no image link in the feed, so
+  if (!drawn && entry.type == OpdsEntryType::NAVIGATION) {
+    // Navigation entries carry no cover art -- there is no image link in the feed, so
     // nothing failed to download and nothing is going to appear later. The generic
-    // book icon reads as a book that did not load; the feed's own name on a
+    // book icon reads as a book that did not load; the entry's own name on a
     // designed tile reads as the thing it is, which is what the app tiles already
     // do for the same reason.
     drawTileCover(renderer, cellX, cellY, layout.coverWidth, layout.coverHeight, entry.title.c_str());
@@ -802,8 +748,7 @@ OpdsBookBrowserActivity::GridLayout OpdsBookBrowserActivity::computeGridLayout()
 // of 57 with the floor sinking 41,448 -> 37,072 bytes and aborted there.
 //
 // Below the floor, covers are skipped and the placeholder icon is drawn. A grid with
-// grey boxes in it is a bad page; an abort is a lost session and a crash report. The
-// same trade is already made for the reading-stats snapshot in FouladDeviceTracking.
+// grey boxes in it is a bad page; an abort is a lost session and a crash report.
 static bool hasHeapForCoverWork() {
   constexpr uint32_t COVER_MIN_FREE_HEAP = 32 * 1024;
   constexpr uint32_t COVER_MIN_FREE_BLOCK = 12 * 1024;
@@ -850,8 +795,8 @@ void OpdsBookBrowserActivity::loadGridPageCovers(const GridLayout& layout, const
   int processedCount = 0;
   // Cover downloads have no user-visible error state (a failed cover just falls back to
   // the placeholder icon), so without this there's no way to diagnose a real device
-  // report after the fact -- e.g. confirming whether cover/download links are still
-  // https:// even after the main feed was switched to http:// (see FouladEbooksConfig.h).
+  // report after the fact -- e.g. confirming whether cover/download links are
+  // https:// while the feed itself is http://.
   // OpdsCoverCache already LOG_ERRs the failing coverUrl into the ring buffer; this just
   // makes sure that ring buffer actually reaches an SD file the user can retrieve, the
   // same way a feed fetch failure already does via saveOpdsDiagnosticLog().
@@ -944,11 +889,9 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   }
 
   if (authFailed) {
-    // The account was signed out from the phone app or the web (or the device
-    // token was revoked). Drop the stored credential so the next entry lands on
-    // the sign-in screen rather than failing the same way forever -- for Foulad
-    // eBooks that is now the QR screen. Only the matching entry is removed; any
-    // other configured OPDS server is left alone.
+    // The server rejected the stored credential. Drop it so the next visit asks
+    // for it again rather than failing the same way forever. Only the matching
+    // entry is removed; any other configured OPDS server is left alone.
     saveOpdsDiagnosticLog("Auth rejected (401), clearing stored credential: " + url);
     LOG_ERR("OPDS", "401 from %s -- signing this device out", server.url.c_str());
     const auto& servers = OPDS_STORE.getServers();
@@ -960,31 +903,6 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     }
     state = BrowserState::ERROR;
     errorMessage = tr(STR_OPDS_SIGNED_OUT);
-
-    if (server.url == FOULAD_EBOOKS_URL) {
-      // Removing this device from the Foulad One app revokes its credential, so the
-      // next fetch 401s and arrives here. Ending on the message alone left the user
-      // to work out for themselves that signing in again meant backing out to Home
-      // and re-entering Foulad eBooks -- reported as the device looking broken after
-      // a removal that was deliberate. Take them to the QR sign-in instead.
-      //
-      // The message is painted first, and held long enough to read, so the sign-in
-      // prompt doesn't simply appear with no explanation of what happened.
-      //
-      // Restart rather than a direct transition, for the same reason
-      // ActivityManager::goToFouladEbooks() restarts on the way in: the QR flow runs
-      // WiFi, TLS and polling, and this session's heap has already been fragmented by
-      // a browse. removeServer() above persists immediately, so the reboot cannot
-      // bring back the credential just dropped and loop straight back here.
-      //
-      // Only for Foulad eBooks. A user-added OPDS server has no QR flow to send
-      // anyone to, so it keeps the plain message.
-      requestUpdateAndWait();
-      delay(1500);
-      silentRestartToFouladEbooks();  // does not return
-      return;
-    }
-
     requestUpdate();
     return;
   }
@@ -1006,10 +924,6 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   }
 
   searchTemplate = parser->getSearchTemplate();
-  // On the News root the advertised search is the BOOK search (/opds/search), which
-  // would put a row inside News that returns books. Wrong answer to the wrong
-  // question, so News does not offer it.
-  if (FouladOpdsHooks::isNewsFeed(server.url)) searchTemplate.clear();
   feedNextUrl = parser->getNextPageUrl();
   feedPrevUrl = parser->getPrevPageUrl();
   entries = std::move(*parser).getEntries();
@@ -1058,10 +972,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 
   state = feedHadEntries ? BrowserState::BROWSING : BrowserState::ERROR;
   if (!feedHadEntries) {
-    // An empty feed is the normal, successful answer to "this account has no
-    // subscriptions" -- not an error (EINK_NEWS_TASKS.md §2). Say what to do next
-    // instead, because the thing to do is on the phone and nothing here can do it.
-    errorMessage = FouladOpdsHooks::isNewsFeed(server.url) ? tr(STR_NEWS_EMPTY) : tr(STR_NO_ENTRIES);
+    errorMessage = tr(STR_NO_ENTRIES);
   }
 
   // Crash report: a heap-corruption abort (multi_heap assert_valid_block) landed inside
@@ -1129,21 +1040,22 @@ void OpdsBookBrowserActivity::navigateBack() {
   }
 }
 
+// File extension to save an acquisition link's target under. XTC books are served
+// as application/x-xtc or application/x-xtch; mirror the type back exactly (both are
+// recognised the same way by FsHelpers::hasXtcExtension). Anything else is EPUB.
+static std::string acquisitionExtension(const std::string& acquisitionType) {
+  if (acquisitionType == "application/x-xtch") return ".xtch";
+  if (acquisitionType == "application/x-xtc") return ".xtc";
+  return ".epub";
+}
+
 void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
-  // Extension/folder/replace policy is Foulad eBooks catalog-specific (XTC-only
-  // books, News' own folder and replace-not-accumulate rule) -- see FouladOpdsHooks.h.
-  const std::string extension = FouladOpdsHooks::acquisitionExtension(book.acquisitionType);
-  const bool isNewsFeed = FouladOpdsHooks::isNewsFeed(server.url);
-  if (isNewsFeed) Storage.mkdir(FOULAD_NEWS_DIR);
+  const std::string extension = acquisitionExtension(book.acquisitionType);
   const std::string filename =
-      (isNewsFeed ? std::string(FOULAD_NEWS_DIR) + "/" : std::string("/")) +
-      StringUtils::sanitizeFilename((book.author.empty() ? "" : book.author + " - ") + book.title) + extension;
+      "/" + StringUtils::sanitizeFilename((book.author.empty() ? "" : book.author + " - ") + book.title) + extension;
 
-  if (isNewsFeed) FouladOpdsHooks::removeExistingNewsDownload(filename);
-
-  if (!isNewsFeed && Storage.exists(filename.c_str())) {
+  if (Storage.exists(filename.c_str())) {
     // Already downloaded -- open it directly rather than downloading again.
-    FouladOpdsHooks::tagFouladBookId(filename, book, server);
     pendingReaderPath = filename;
     activityManager.goToReader(filename);
     return;
@@ -1161,8 +1073,8 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   std::string downloadUrl = UrlUtils::buildUrl(feedUrl, book.href);
   LOG_DBG("OPDS", "Downloading: %s -> %s", downloadUrl.c_str(), filename.c_str());
 
-  // foulad-ebooks' download endpoints respond with Transfer-Encoding: chunked (no
-  // Content-Length), so `total` is 0 for every real download today -- redraw by a byte-count
+  // Some servers answer downloads with Transfer-Encoding: chunked (no
+  // Content-Length), so `total` is 0 -- redraw by a byte-count
   // step in that case instead of skipping the throttle entirely (which forced an e-ink
   // refresh on every single 2KB HTTP chunk, making a multi-MB book look stuck for minutes).
   constexpr size_t UNKNOWN_TOTAL_REDRAW_STEP = 32 * 1024;
@@ -1188,7 +1100,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
     clearBookCache(filename);
     // Save the catalog cover next to the book (after clearBookCache, which wipes the
     // cache dir) so it shows a thumbnail on Home/My Books even when the EPUB has no
-    // embedded cover art -- common for Foulad eBooks. Best-effort; a missing cover
+    // embedded cover art. Best-effort; a missing cover
     // just falls back to the placeholder as before. Only EPUBs have the external
     // cover fallback in generateThumbBmp(); XTC covers come from the file itself.
     if (!book.coverUrl.empty() && FsHelpers::hasEpubExtension(filename)) {
@@ -1203,7 +1115,6 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
         LOG_DBG("OPDS", "External cover download failed (non-fatal): %s", book.coverUrl.c_str());
       }
     }
-    FouladOpdsHooks::tagFouladBookId(filename, book, server);
     pendingReaderPath = filename;
     activityManager.goToReader(filename);
     return;
@@ -1270,33 +1181,9 @@ void OpdsBookBrowserActivity::performSearch(const std::string& query) {
   fetchFeed(url);
 }
 
-// Once per boot, not once per Library entry: declining should stick for the session
-// rather than being asked again on every visit. File-scope because the activity is
-// destroyed and rebuilt each time.
-static bool gFirmwareOfferShownThisBoot = false;
-
-void OpdsBookBrowserActivity::maybeOfferFirmwareUpdate() {
-  if (gFirmwareOfferShownThisBoot) return;
-  if (state != BrowserState::BROWSING || browsingFramesRendered == 0) return;
-  // The catalog goes up first and the offer follows. Not a memory precaution -- this
-  // costs nothing -- simply that a popup arriving before the list has painted hides
-  // the thing the user opened Library to see.
-  if (FouladDeviceTracking::pendingFirmwareUpdate().empty()) return;
-
-  // Note what this does NOT do: contact GitHub. The version was parsed out of the
-  // registerDevice() response earlier in this same connect, so raising the offer is
-  // a string comparison. The previous attempt ran OtaUpdater::checkForUpdate() here
-  // and the TLS handshake aborted the device at ~52KB free (v1.8.17-rc); the ~32KB
-  // of mbedTLS record buffers do not fit beside a loaded feed. Nothing in this
-  // function may become a network call without moving it off this path entirely.
-  gFirmwareOfferShownThisBoot = true;
-  state = BrowserState::UPDATE_PROMPT;
-  requestUpdate();
-}
-
 void OpdsBookBrowserActivity::checkAndConnectWifi() {
   if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
-    FouladOpdsHooks::reportDeviceTrackingOnConnect(server);
+    KOReaderPendingSync::flush();
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
     requestUpdate();
@@ -1316,7 +1203,7 @@ void OpdsBookBrowserActivity::launchWifiSelection() {
 
 void OpdsBookBrowserActivity::onWifiSelectionComplete(const bool connected) {
   if (connected) {
-    FouladOpdsHooks::reportDeviceTrackingOnConnect(server);
+    KOReaderPendingSync::flush();
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
     requestUpdate(true);

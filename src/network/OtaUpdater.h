@@ -39,9 +39,8 @@ class OtaUpdater {
   // implementation of "is this newer" is how the two come to disagree about an -rc.
   //
   // Defined inline, below, deliberately: OtaUpdater.cpp is excluded from the
-  // simulator build (it needs esp_https_ota), so a caller outside the OTA flow --
-  // FouladDeviceTracking, reading the catalog's firmware report -- fails to link
-  // against an out-of-line definition. Comparing two version strings needs nothing
+  // simulator build (it needs esp_https_ota), so a caller outside the OTA flow
+  // fails to link against an out-of-line definition. Comparing two version strings needs nothing
   // from that translation unit anyway.
   static bool isVersionNewer(const char* candidate);
   bool isUpdateNewer() const;

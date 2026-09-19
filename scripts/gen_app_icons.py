@@ -71,14 +71,6 @@ def arc(d, cx, cy, r, start, end, w=None):
 
 # --- the eight icons, in the order AppsActivity lists them -------------------
 
-def draw_files(d):
-    # Folder: back panel with a tab, front panel across the bottom.
-    line(d, 3.2, 6.0, 9.0, 6.0)
-    line(d, 9.0, 6.0, 10.8, 8.0)
-    rect(d, 3.2, 8.0, 20.8, 19.0)
-    line(d, 3.2, 6.0, 3.2, 8.4)
-
-
 def draw_quran(d):
     # Open book: two leaves meeting at a centre spine.
     line(d, 12, 6.6, 12, 19.2)
@@ -196,7 +188,6 @@ def draw_prayer(d):
 
 
 ICONS = [
-    ("AppFiles72Icon", "appfiles72", draw_files),
     ("AppQuran72Icon", "appquran72", draw_quran),
     ("AppGames72Icon", "appgames72", draw_games),
     ("AppTasbih72Icon", "apptasbih72", draw_tasbih),

@@ -12,7 +12,6 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
-#include "FouladEbooksConfig.h"
 #include "OpdsCoverCache.h"
 #include "OpdsServerStore.h"
 #include "apps/AppsActivity.h"
@@ -23,7 +22,6 @@
 #include "apps/PrayerActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
-#include "browser/FouladQrLoginActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
@@ -261,29 +259,6 @@ void ActivityManager::goToBrowser() {
   }
 }
 
-void ActivityManager::goToFouladEbooks() {
-  const auto& servers = OPDS_STORE.getServers();
-  const auto it = std::find_if(servers.begin(), servers.end(),
-                               [](const OpdsServer& server) { return server.url == FOULAD_EBOOKS_URL; });
-  if (it != servers.end()) {
-    // Already set up on this device — skip straight to browsing.
-    //
-    // Clear the cover cache on every entry rather than requiring a manual Settings
-    // action: a cover that downloaded successfully once is never re-validated against
-    // the server afterward (ensureOpdsCoverCached's "already cached" fast path just
-    // checks the BMP is well-formed, not that it's still current), so covers cached
-    // from before a server-side URL/scheme change wouldn't otherwise self-heal even
-    // after the underlying issue is fixed. Foulad eBooks specifically, not a
-    // user-added OPDS server, since only this one has had server-side URL changes
-    // during the beta.
-    clearOpdsCoverCache();
-    replaceActivity(std::make_unique<OpdsBookBrowserActivity>(renderer, mappedInput, *it));
-    return;
-  }
-  // First time on this device — collect username/password before browsing.
-  replaceActivity(std::make_unique<FouladQrLoginActivity>(renderer, mappedInput));
-}
-
 void ActivityManager::goToNews() {
   // The News reader owns its own feeds and cache on SD; nothing here needs an
   // account or a server, so this is a plain replaceActivity.
@@ -351,8 +326,6 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     } else if (activityName == "FileBrowser") {
       initialMenuItem = HomeMenuItem::FILE_BROWSER;
-    } else if (activityName == "OpdsBookBrowser") {
-      initialMenuItem = HomeMenuItem::FOULAD_EBOOKS;
     }
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh));

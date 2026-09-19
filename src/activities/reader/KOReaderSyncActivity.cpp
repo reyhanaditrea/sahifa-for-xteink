@@ -15,7 +15,7 @@
 
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
-#include "FouladDeviceTracking.h"
+#include "KOReaderPendingSync.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "MappedInputManager.h"
@@ -145,7 +145,7 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   // happens to be the same document). Harmless no-op the vast majority of the
   // time -- there is usually nothing queued once the manual Sync flow is what
   // got the radio up in the first place.
-  FouladDeviceTracking::flushPendingKOReaderSync();
+  KOReaderPendingSync::flush();
 
   {
     RenderLock lock(*this);

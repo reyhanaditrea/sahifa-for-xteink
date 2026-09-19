@@ -17,8 +17,6 @@
 #include <utility>
 #include <vector>
 
-#include "FouladDeviceTracking.h"
-#include "FouladEbooksConfig.h"
 
 #if defined(FREEINK_NET_WOLFSSL)
 #include <SecureHttpClient.h>
@@ -47,34 +45,6 @@ constexpr int HTTP_TX_BUF = 512;
 constexpr int HTTP_TIMEOUT_MS = 60000;
 constexpr size_t READ_CHUNK = 1024;
 constexpr int MAX_REDIRECTS = 5;
-
-// Identifies this device to Foulad eBooks on every request, reads included.
-// Removing a device server-side can only cut off its reads if the read itself
-// says which device it is: a reader holding the account password (the pre-QR
-// manual login path) otherwise sends a request byte-for-byte identical to the
-// owner's own browser, so the server cannot refuse one without refusing both.
-// With this header present it answers a removed device 401, which the device
-// already signs itself out on (see OpdsBookBrowserActivity's 401 handling).
-// Contract: EINK_OPDS_SERIAL_HEADER_TASKS.md in the foulad-ebooks repo.
-//
-// Deliberately applied here, at the single choke point every HTTP request
-// passes through, rather than at each OPDS call site -- the spec requires it on
-// *every* request (feeds, search, downloads, covers, signed ?signature= links),
-// and a per-call-site approach silently loses revocation for whichever path
-// someone forgets, with no visible symptom until it matters.
-//
-// Value comes from FouladDeviceTracking::getSerialNumber(), the same source the
-// `serial_number` POST bodies use. If the two ever disagreed the server would
-// match neither and revocation would quietly stop working, so it is read from
-// one place rather than formatted twice.
-void setDeviceSerialHeader(esp_http_client_handle_t client, const std::string& url) {
-  // Host-gated: a user-added third-party OPDS server must never be told this
-  // device's identifier.
-  if (!isFouladEbooksUrl(url)) return;
-  const std::string serial = FouladDeviceTracking::getSerialNumber();
-  if (serial.empty()) return;
-  esp_http_client_set_header(client, "X-Device-Serial", serial.c_str());
-}
 
 // The simulator's esp_http_client.h stub (crosspoint-simulator, an external repo)
 // doesn't implement esp_http_client_get_errno -- only real ESP-IDF has it.
@@ -333,9 +303,6 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   }
 
   esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
-  // Set on the handle, so it survives the manual redirect hops below (which
-  // reopen the same client rather than building a new one).
-  setDeviceSerialHeader(client, url);
   if (conditional && !conditional->ifNoneMatch.empty()) {
     esp_http_client_set_header(client, "If-None-Match", conditional->ifNoneMatch.c_str());
   }
@@ -389,24 +356,20 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     if (esp_http_client_set_redirection(client) != ESP_OK) break;
 
     // esp_http_client_set_redirection() only refuses an HTTPS-to-HTTP downgrade;
-    // it does not refuse a same-scheme redirect to a different host. Both
-    // Authorization (Basic-auth callers) and X-Device-Serial (any Foulad
-    // eBooks request, see setDeviceSerialHeader() above) stay on this reused
-    // client handle across the hop, so a compromised or malicious server could
-    // otherwise redirect to attacker infrastructure and receive either. Runs
-    // for every request, not just credentialed ones -- a serial-only request
-    // needs the same origin check. Strips once the origin changes; neither
-    // header comes back even if a later hop redirects back to the original
-    // origin.
+    // it does not refuse a same-scheme redirect to a different host. The
+    // Authorization header (Basic-auth callers) stays on this reused client
+    // handle across the hop, so a compromised or malicious server could
+    // otherwise redirect to attacker infrastructure and receive it. Strips once
+    // the origin changes; it does not come back even if a later hop redirects
+    // back to the original origin.
     {
       constexpr size_t kUrlBufLen = 512;
       auto urlBuf = makeUniqueNoThrow<char[]>(kUrlBufLen);
       const bool sameOrigin = urlBuf && esp_http_client_get_url(client, urlBuf.get(), kUrlBufLen) == ESP_OK &&
                               urlOrigin(urlBuf.get()) == urlOrigin(url);
       if (!sameOrigin) {
-        LOG_DBG("HTTP", "redirect changed origin -- dropping Authorization/X-Device-Serial headers");
+        LOG_DBG("HTTP", "redirect changed origin -- dropping Authorization header");
         esp_http_client_delete_header(client, "Authorization");
-        esp_http_client_delete_header(client, "X-Device-Serial");
       }
     }
 
@@ -569,7 +532,6 @@ HttpDownloader::DownloadError runPostFile(const std::string& url,
   }
 
   esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
-  setDeviceSerialHeader(client, url);
   const std::string contentType = "multipart/form-data; boundary=" + boundary;
   esp_http_client_set_header(client, "Content-Type", contentType.c_str());
   if (!username.empty() && !password.empty()) {
@@ -724,7 +686,6 @@ HttpDownloader::DownloadError runDelete(const std::string& url, const std::strin
   }
 
   esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
-  setDeviceSerialHeader(client, url);
   if (!username.empty() && !password.empty()) {
     // Preemptive Basic auth, same convention as runGet -- don't wait for a 401.
     const std::string credentials = username + ":" + password;
@@ -810,7 +771,6 @@ HttpDownloader::DownloadError runPostJson(const std::string& url, const std::str
   }
 
   esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
-  setDeviceSerialHeader(client, url);
   esp_http_client_set_header(client, "Content-Type", "application/json");
   if (!username.empty() && !password.empty()) {
     // Preemptive Basic auth, same convention as runGet -- don't wait for a 401.
@@ -850,15 +810,11 @@ HttpDownloader::DownloadError runPostJson(const std::string& url, const std::str
   const int status = esp_http_client_get_status_code(client);
   // Any 2xx, not just 200: POSTing to a creation endpoint legitimately answers
   // 201 Created, and this function returns before reading the body, so treating
-  // that as a failure discards a perfectly good response. /api/device-login/start
-  // does exactly this -- it answers 201 with the pairing code and qr_payload, so
-  // requiring a bare 200 here made QR sign-in fail every time and drop the user on
-  // the error screen instead of a QR (see FouladDeviceLogin::start).
+  // that as a failure discards a perfectly good response.
   if (status < 200 || status > 299) {
-    // Not necessarily an error the caller should log loudly -- e.g. a 404 from
-    // /opds/reading-stats just means "register the device first" (see
-    // FouladDeviceTracking). Callers inspect getLastFailure().detail for the
-    // status code rather than this function surfacing it as a return value.
+    // Not necessarily an error the caller should log loudly. Callers inspect
+    // getLastFailure().detail for the status code rather than this function
+    // surfacing it as a return value.
     LOG_DBG("HTTP", "postJson non-2xx status: %d", status);
     setLastFailure(HttpDownloader::FailStage::STATUS, status);
     esp_http_client_cleanup(client);

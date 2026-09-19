@@ -17,8 +17,7 @@ void RecentBooksStore::toJson(JsonDocument& doc) const {
     obj["title"] = book.title;
     obj["author"] = book.author;
     obj["coverBmpPath"] = book.coverBmpPath;
-    obj["fouladBookId"] = book.fouladBookId;
-  }
+    }
   JsonArray hidden = doc["hidden"].to<JsonArray>();
   for (const auto& path : hiddenPaths) hidden.add(path);
 }
@@ -36,8 +35,7 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc) {
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
-    book.fouladBookId = obj["fouladBookId"] | "";
-    recentBooks.push_back(book);
+      recentBooks.push_back(book);
   }
 
   // Absent in files written before Hide from Recents existed; a null array
@@ -54,7 +52,7 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc) {
 }
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
-                               const std::string& coverBmpPath, const std::string& fouladBookId) {
+                               const std::string& coverBmpPath) {
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
 
@@ -64,14 +62,10 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   // it has to be undone.
   hiddenPaths.erase(std::remove(hiddenPaths.begin(), hiddenPaths.end(), path), hiddenPaths.end());
 
-  // Remove existing entry if present, but keep its fouladBookId if this call
-  // didn't specify one -- the reader's own addBook() call (title/author/cover
-  // only) must not erase what downloadBook() set when the book was fetched.
-  std::string resolvedFouladBookId = fouladBookId;
+  // Remove existing entry if present
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it != recentBooks.end()) {
-    if (resolvedFouladBookId.empty()) resolvedFouladBookId = it->fouladBookId;
     recentBooks.erase(it);
   }
 
@@ -81,7 +75,6 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   book.title = title;
   book.author = author;
   book.coverBmpPath = coverBmpPath;
-  book.fouladBookId = resolvedFouladBookId;
   recentBooks.insert(recentBooks.begin(), std::move(book));
 
   // Trim to max size

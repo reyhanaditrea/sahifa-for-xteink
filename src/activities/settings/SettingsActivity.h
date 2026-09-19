@@ -27,8 +27,6 @@ enum class SettingAction {
   Dictionary,
   BrowseFiles,
   FileTransfer,
-  FouladEbooksLogout,
-  FouladEbooksLogin,
 };
 
 struct SettingInfo {

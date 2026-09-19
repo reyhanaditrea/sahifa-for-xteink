@@ -391,15 +391,6 @@ uint32_t ReadingStatsStore::getLatestReadingDayOrdinal() const {
   return readingDays.empty() ? 0 : readingDays.back().dayOrdinal;
 }
 
-void ReadingStatsStore::setFouladBookId(const std::string& path, const std::string& fouladBookId) {
-  if (fouladBookId.empty()) return;  // never clear a known id with an absent one
-  ensureLoaded();
-  const size_t index = findBookIndex(path);
-  if (index >= books.size()) return;
-  if (books[index].fouladBookId == fouladBookId) return;  // no needless SD write
-  books[index].fouladBookId = fouladBookId;
-  dirty = true;
-}
 
 bool ReadingStatsStore::removeBook(const std::string& path) {
   ensureLoaded();

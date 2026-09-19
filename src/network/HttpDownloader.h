@@ -124,8 +124,7 @@ class HttpDownloader {
    * becomes its own streamed multipart file part. Used by the Convert Font
    * relay to send optional bold/italic/bolditalic style fonts alongside the
    * required regular one ("font", "font_bold", "font_italic",
-   * "font_bolditalic" -- matching the foulad-ebooks endpoint), and by
-   * FouladDeviceTracking to stream the on-SD debug log with Basic Auth.
+   * "font_bolditalic").
    */
   static bool postFilesMultipart(const std::string& url, const std::vector<std::pair<std::string, std::string>>& files,
                                  const std::vector<std::pair<std::string, std::string>>& fields,

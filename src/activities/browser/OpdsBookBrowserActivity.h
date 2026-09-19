@@ -22,10 +22,7 @@ class OpdsBookBrowserActivity final : public Activity {
     BROWSING,
     DOWNLOADING,
     ERROR,
-    SEARCH_INPUT,
-    // A newer firmware build was named by the catalog server. Not a step in
-    // browsing -- an offer laid over it, which Cancel returns from.
-    UPDATE_PROMPT
+    SEARCH_INPUT
   };
 
   explicit OpdsBookBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, OpdsServer server)
@@ -202,13 +199,6 @@ class OpdsBookBrowserActivity final : public Activity {
   void checkAndConnectWifi();
   void launchWifiSelection();
   void onWifiSelectionComplete(bool connected);
-  // Raises the update offer if registration came back naming a newer build. Reads a
-  // cached string; makes no request. An earlier version of this asked GitHub from
-  // here and aborted the device -- see the implementation.
-  void maybeOfferFirmwareUpdate();
-  // Counts painted BROWSING frames, so the offer waits until the catalog it covers
-  // is actually on screen.
-  uint8_t browsingFramesRendered = 0;
   void fetchFeed(const std::string& path);
   void navigateToEntry(const OpdsEntry& entry);
   void navigateBack();
@@ -218,13 +208,11 @@ class OpdsBookBrowserActivity final : public Activity {
   // Only actually in-flight network work should block auto-sleep -- a page
   // sitting open in BROWSING/SEARCH_INPUT/ERROR is idle, no different from any
   // other screen the user walked away from. The previous unconditional `true`
-  // kept the device (and its WiFi radio) awake for as long as Foulad
-  // eBooks/OPDS stayed the foreground activity, even fully idle -- a real
+  // kept the device (and its WiFi radio) awake for as long as an OPDS
+  // catalog stayed the foreground activity, even fully idle -- a real
   // battery-drain path (user report).
   bool preventAutoSleep() override {
-    // UPDATE_PROMPT holds the device awake for the same reason OtaUpdateActivity
-    // does: sleeping on an unanswered question loses the answer.
-    return state == BrowserState::LOADING || state == BrowserState::DOWNLOADING || state == BrowserState::UPDATE_PROMPT;
+    return state == BrowserState::LOADING || state == BrowserState::DOWNLOADING;
   }
   const char* activityDebugName() const override { return "OpdsBookBrowserActivity"; }
 };

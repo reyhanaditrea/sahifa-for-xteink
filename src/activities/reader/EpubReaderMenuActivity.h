@@ -39,7 +39,6 @@ class EpubReaderMenuActivity final : public Activity {
     DISPLAY_QR,
     GO_HOME,
     SYNC,
-    MIDAD_SYNC,
     DELETE_CACHE,
     // Start / stop / acknowledge the reading Pomodoro (see ReaderPomodoro.h). The
     // drawer only reports the press; the reader owns the session so the footer and the
@@ -69,7 +68,7 @@ class EpubReaderMenuActivity final : public Activity {
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, Epub* epub,
                                   const int currentSpineIndex, const int currentPage, const int totalPages,
                                   const int bookProgressPercent, const uint8_t currentOrientation,
-                                  const bool hasFootnotes, bool hasBookmarks, bool isArabicBook, bool canSyncMidad);
+                                  const bool hasFootnotes, bool hasBookmarks, bool isArabicBook);
 
   void onEnter() override;
   void onExit() override;
@@ -108,10 +107,6 @@ class EpubReaderMenuActivity final : public Activity {
   int tabPosition(View v) const;
   const char* tabLabel(View v) const;
   View nextTab() const;
-  // False when THIS book has no catalog id -- side-loaded, or downloaded before
-  // the id was recorded. The row is hidden rather than shown-and-inert: pressing
-  // Sync and having nothing at all happen is worse than not offering it.
-  bool canSyncMidad_ = false;
 
   std::string valueLabel(MenuAction action) const;
   std::string globalLabel(const char* effectiveValueLabel) const;

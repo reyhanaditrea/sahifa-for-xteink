@@ -25,12 +25,6 @@ void silentRestartToOtaInstall();  // user already confirmed; auto-install armed
 // path symmetric.
 void silentRestartToFileTransfer();
 
-// Foulad eBooks (OPDS browser), same rationale: WiFi + feed parsing + cover
-// download/decode stack up allocations, and browsing started from a fragmented
-// session heap ended in an OOM abort() twice on-device (crash reports 7 and 8,
-// heap sliding 36KB -> 14KB across cover fetches). The browser's exit path
-// already silent-restarts when WiFi was up; this makes entry symmetric.
-void silentRestartToFouladEbooks();
 void silentRestartToNews();  // Apps -> News (EINK_NEWS_TASKS.md)
 
 // News -> "Get full text" -> "Fetch now". Same rationale as the two above,

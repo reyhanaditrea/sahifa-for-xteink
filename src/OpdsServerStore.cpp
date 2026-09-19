@@ -4,9 +4,36 @@
 #include <ObfuscationUtils.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
+#include <string_view>
 
-#include "FouladEbooksConfig.h"
+namespace {
+
+// The Midad catalog (midad.one, formerly foulad.one) was an account-only server that
+// this firmware no longer talks to. Its entry holds a per-device token; dropping it on
+// load keeps that credential from lingering on the SD card. Host comparison only:
+// scheme, port and path have all changed over the catalog's life.
+bool isRetiredMidadCatalog(std::string_view url) {
+  const auto schemeEnd = url.find("://");
+  if (schemeEnd == std::string_view::npos) return false;
+  url.remove_prefix(schemeEnd + 3);
+  const auto authorityEnd = url.find_first_of("/?#");
+  std::string_view host = authorityEnd == std::string_view::npos ? url : url.substr(0, authorityEnd);
+  const auto at = host.rfind('@');
+  if (at != std::string_view::npos) host.remove_prefix(at + 1);
+  const auto colon = host.find(':');
+  if (colon != std::string_view::npos) host = host.substr(0, colon);
+
+  const auto equalsIgnoreCase = [](std::string_view a, std::string_view b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+             return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+           });
+  };
+  return equalsIgnoreCase(host, "midad.one") || equalsIgnoreCase(host, "foulad.one");
+}
+
+}  // namespace
 
 void OpdsServerStore::toJson(JsonDocument& doc) const {
   JsonArray arr = doc["servers"].to<JsonArray>();
@@ -16,9 +43,6 @@ void OpdsServerStore::toJson(JsonDocument& doc) const {
     obj["url"] = server.url;
     obj["username"] = server.username;
     obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
-    // Only written when true, so existing files gain nothing and older firmware
-    // reading this file just ignores the key.
-    if (server.isDeviceToken) obj["is_device_token"] = true;
   }
 }
 
@@ -37,40 +61,16 @@ bool OpdsServerStore::fromJson(JsonVariantConst doc) {
     server.url = obj["url"] | "";
     server.username = obj["username"] | "";
     server.password = extractPassword(obj, needsResave);
-    // Absent on every file written before QR sign-in existed, which is exactly
-    // right: those credentials are typed account passwords.
-    server.isDeviceToken = obj["is_device_token"] | false;
 
-    // Normalise a stored Midad catalog URL to whatever the current constant is.
-    //
-    // Originally this only swapped the host for the Midad rename. That was not
-    // enough the moment the scheme changed too: every device in the field has
-    // "http://midad.one/opds" on its SD card, and this entry -- not the constant --
-    // is what requests use. Worse, "is this account set up?" is decided by comparing
-    // it against FOULAD_EBOOKS_URL (goToFouladEbooks, the reader's sync gating, the
-    // Settings login row), so a scheme change alone would make every existing device
-    // conclude it was signed out and demand a fresh QR scan.
-    //
-    // Replacing the whole URL rather than patching pieces means the next change --
-    // host, scheme, path -- needs no new migration. isFouladEbooksUrl() matches both
-    // the current and pre-rename hosts, which is why FOULAD_EBOOKS_LEGACY_HOST still
-    // has to exist even though nothing calls foulad.one any more: without it these
-    // entries stop being recognised as ours and never get rewritten at all.
-    //
-    // Credential, token flag and account are untouched -- same server, same account,
-    // different address.
-    if (!server.url.empty() && server.url != FOULAD_EBOOKS_URL && isFouladEbooksUrl(server.url)) {
-      LOG_INF("OPS", "Migrated stored catalog URL: %s -> %s", server.url.c_str(), FOULAD_EBOOKS_URL);
-      server.url = FOULAD_EBOOKS_URL;
-      server.name = FOULAD_EBOOKS_NAME;
+    if (isRetiredMidadCatalog(server.url)) {
+      LOG_INF("OPS", "Dropped retired Midad catalog entry: %s", server.url.c_str());
       needsResave = true;
+      continue;
     }
 
-    // Two entries can normalise onto the same URL -- an http one from before the
-    // switch alongside an https one added by signing in again. Collapse them here
-    // rather than leaving the list showing the same server twice. The credential
-    // wins over an empty one; otherwise the first entry stands, since both describe
-    // the same account on the same server.
+    // Two entries with the same URL describe the same server. Collapse them rather
+    // than listing it twice; the credential wins over an empty one, otherwise the
+    // first entry stands.
     const auto twin =
         std::find_if(servers.begin(), servers.end(), [&](const OpdsServer& s) { return s.url == server.url; });
     if (twin != servers.end()) {
@@ -96,11 +96,7 @@ bool OpdsServerStore::fromJson(JsonVariantConst doc) {
 }
 
 bool OpdsServerStore::addServer(const OpdsServer& server) {
-  // Signing in to a server already present replaces its entry rather than adding a
-  // twin. Without this, every re-sign-in appended: a device that had
-  // http://midad.one/opds stored and then signed in again after the switch to https
-  // ended up listing Midad twice, one per scheme, with no way to tell which the rest
-  // of the app was using.
+  // Adding a server already present replaces its entry rather than adding a twin.
   const auto existing =
       std::find_if(servers.begin(), servers.end(), [&](const OpdsServer& s) { return s.url == server.url; });
   if (existing != servers.end()) {

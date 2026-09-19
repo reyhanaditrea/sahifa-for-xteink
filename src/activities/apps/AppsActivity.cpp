@@ -18,7 +18,6 @@
 #include "activities/apps/TasbihActivity.h"
 #include "activities/games/GamesMenuActivity.h"
 #include "components/UITheme.h"
-#include "components/icons/appfiles72.h"
 #include "components/icons/appgames72.h"
 #include "components/icons/appnews72.h"
 #include "components/icons/apppomodoro72.h"
@@ -50,8 +49,8 @@ constexpr int TILE_BORDER = 2;
 }  // namespace
 
 const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
-  // Files first (it gave up its own Home slot for this screen), then the apps in
-  // the order they were introduced, which is also roughly how much they get used.
+  // The apps in the order they were introduced, which is also roughly how much
+  // they get used.
   // The exception is Prayer Times, which sits with the Quran rather than at the
   // end: the two belong together, and Settings -> Apps lists them in this same
   // order (see appendMidadAppSettings) so the two screens agree.
@@ -61,7 +60,6 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
   // in SettingsList.h) so this table is the one place that knows each app's flag
   // lives on MidadAppSettings, not the caller.
   static const std::vector<AppEntry> kEntries = {
-      {AppId::Files, StrId::STR_FILES, nullptr, nullptr},
       {AppId::Quran, StrId::STR_QURAN, [] { return MIDAD_APP_SETTINGS.quranEnabled; },
        [](uint8_t v) {
          MIDAD_APP_SETTINGS.quranEnabled = v;
@@ -109,7 +107,6 @@ const uint8_t* AppsActivity::iconFor(const AppId id) {
   // than a nine-way branch. An AppId added without an icon gets nullptr here, which
   // the tile renderer reads as "label only".
   static const uint8_t* const ICONS[] = {
-      AppFiles72Icon,      // Files
       AppQuran72Icon,      // Quran
       AppGames72Icon,      // Games
       AppTasbih72Icon,     // Tasbih
@@ -127,7 +124,7 @@ std::vector<const AppsActivity::AppEntry*> AppsActivity::visibleEntries() {
   std::vector<const AppEntry*> visible;
   visible.reserve(all.size());
   for (const auto& entry : all) {
-    // No toggle (Files) means nothing to hide it by. The Quran keeps its
+    // The Quran keeps its
     // tile while off because it is the only app that ships off by default: enabling
     // it extracts a real EPUB to the SD card, so hiding it would leave no route to it
     // from this screen at all -- precisely the discoverability problem this screen was
@@ -176,9 +173,6 @@ bool AppsActivity::launch(const AppEntry& entry) {
   }
 
   switch (entry.id) {
-    case AppId::Files:
-      activityManager.goToFileBrowser("/");
-      return true;
     case AppId::Quran:
       // A real extracted EPUB, so it opens in the reader like any other book.
       activityManager.goToReader(QuranBook::PATH);

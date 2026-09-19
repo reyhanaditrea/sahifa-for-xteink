@@ -232,8 +232,8 @@ void OtaUpdateActivity::render(RenderLock&&) {
     }
     if (rateLimited) {
       // Wrapped, not single-line: it's a full sentence and overruns the panel at this
-      // width, and drawCenteredText would clip it at both ends (same reasoning as
-      // FouladQrLoginActivity's messages). Push the codes below however tall it lands.
+      // width, and drawCenteredText would clip it at both ends. Push the codes below
+      // however tall it lands.
       diagY += renderer.drawCenteredTextWrapped(UI_10_FONT_ID, diagY, pageWidth - metrics.contentSidePadding * 2,
                                                 tr(STR_UPDATE_RATE_LIMITED), /*maxLines=*/3) +
                metrics.verticalSpacing;

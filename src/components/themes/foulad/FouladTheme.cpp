@@ -61,8 +61,6 @@ const uint8_t* menuIconBitmap(const UIIcon icon) {
     case UIIcon::Library:
       return LibraryIcon;
     case UIIcon::Folder:
-      // Home slot 0 shows Files (SD browser) when no Foulad eBooks account
-      // is configured -- see HomeActivity's fouladEbooksLoggedIn().
       return FolderIcon;
     case UIIcon::Recent:
       return RecentIcon;

@@ -32,9 +32,6 @@
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderUtils.h"
-#include "FouladDeviceTracking.h"
-#include "FouladEbooksConfig.h"
-#include "FouladReadingPosition.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "KOReaderSyncActivity.h"
@@ -47,7 +44,6 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "activities/reader/MidadSyncActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -279,64 +275,17 @@ void EpubReaderActivity::onEnter() {
   // Save current epub as last opened epub and add to recent books
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
-  // News is deliberately not a recent book. The home screen's hero card is the most
-  // recent entry, so a downloaded feed took over the "currently reading" slot with a
-  // progress bar and an estimated time left -- for something that is replaced whole
-  // the next time you open News. It is reached from its own tile, not from here.
-  const bool isNews = isNewsBookPath(epub->getPath());
-  if (!isNews) {
-    RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
-  }
+  RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
 
   // Reading-time tracking: open a session in the day-level stats store and start
   // the first page's dwell timer. Time is credited per page turn; the session is
   // committed and saved in onExit().
-  // Nor does it count as reading. EINK_NEWS_TASKS.md is explicit that finishing a
-  // feed is not finishing a book, and counting it would distort streaks and
-  // books-finished -- the same reason the server refuses a feed id for stats.
-  if (SETTINGS.trackReadingStats && !isNews) {
+  if (SETTINGS.trackReadingStats) {
     READING_STATS.beginSession(epub->getPath(), epub->getTitle(), epub->getAuthor());
-    // Capture the catalog id into the stats entry while RecentBooksStore still
-    // holds it. That list caps at 10 and evicts, and the id used to live only
-    // there -- so a catalog book read a while ago lost its id and could never be
-    // reported to /opds/reading-stats again, leaving the server without a
-    // library_reading row and the app without a cover (INSTRUCTIONS-14). Doing it
-    // on open also backfills books that predate the v3 stats format, the moment
-    // they are next read.
-    {
-      const RecentBook recent = RECENT_BOOKS.getDataFromBook(epub->getPath());
-      if (!recent.fouladBookId.empty()) {
-        READING_STATS.setFouladBookId(epub->getPath(), recent.fouladBookId);
-      }
-    }
     // One-time cleanup of the previous stats system's per-book sidecar file.
     Storage.remove((epub->getCachePath() + "/reading_stats.bin").c_str());
     paceWarmupPending = true;
     pageShownAtMs = millis();
-  }
-
-  // Consume a jump accepted on the sync screen -- but only READ it here. Applying it
-  // is deferred to the first loop() iteration.
-  //
-  // Doing the jump inside onEnter() meant resetting `section` and taking a RenderLock
-  // while the activity was still constructing itself, on the one boot that follows a
-  // sync. That is exactly where a repeating panic lands: "assert failed:
-  // xQueueSemaphoreTake queue.c:1709 (pxQueue)" ~791ms into the post-sync boot, on
-  // two consecutive releases. A null handle with 129KB free is not an allocation
-  // failure -- it is a handle taken before whatever owns it is ready.
-  //
-  // Every other reader action runs from loop(), after onEnter() has returned and the
-  // render task is serving this activity. The jump has no reason to be the exception,
-  // and one render frame later is imperceptible on e-ink.
-  //
-  // Still cleared and persisted here, not at apply time, so a crash between the two
-  // cannot leave a device re-jumping on every open.
-  if (APP_STATE.pendingSyncJumpPercent > 0) {
-    pendingJumpPercent = APP_STATE.pendingSyncJumpPercent;
-    pendingJumpSpine = APP_STATE.pendingSyncJumpSpine;
-    APP_STATE.pendingSyncJumpPercent = 0;
-    APP_STATE.pendingSyncJumpSpine = -1;
-    APP_STATE.saveToFile();
   }
 
   // Trigger first update
@@ -362,76 +311,16 @@ void EpubReaderActivity::onExit() {
     const uint8_t progressPercent = currentBookProgressPercent();
     const bool finishedBook = isAtEndOfBook();
     READING_STATS.endSession(haveEstimate ? timeLeft : 0, progressPercent, finishedBook);
-
-    // Foulad eInk device tracking (EINK_DEVICE_TRACKING_TASKS.md): opportunistic
-    // report for Foulad eBooks books only. This is normally a no-op -- WiFi is
-    // torn down before the reader even opens (see
-    // OpdsBookBrowserActivity::onExit()), so the reliable moment this actually
-    // sends is FouladDeviceTracking::flushPendingReadingStats(), called the next
-    // time the device reconnects to Foulad eBooks. Attempted here too in case
-    // WiFi happens to already be up (e.g. a future flow that doesn't tear it
-    // down) -- cheap to check, harmless when it's not.
-    const auto& recentBooksForStats = RECENT_BOOKS.getBooks();
-    const auto recentIt = std::find_if(recentBooksForStats.begin(), recentBooksForStats.end(),
-                                       [this](const RecentBook& b) { return b.path == epub->getPath(); });
-    if (recentIt != recentBooksForStats.end() && !recentIt->fouladBookId.empty()) {
-      const auto& servers = OPDS_STORE.getServers();
-      const auto serverIt =
-          std::find_if(servers.begin(), servers.end(), [](const OpdsServer& s) { return s.url == FOULAD_EBOOKS_URL; });
-      if (serverIt != servers.end()) {
-        char positionBuf[64];
-        snprintf(positionBuf, sizeof(positionBuf), "spine=%d;page=%d", currentSpineIndex,
-                 section ? section->currentPage : 0);
-        const auto* bookStats = READING_STATS.findBook(epub->getPath());
-        const uint32_t secondsRead = bookStats ? static_cast<uint32_t>(bookStats->totalReadingMs / 1000) : 0;
-        FouladDeviceTracking::reportReadingStats(serverIt->username, serverIt->password, recentIt->fouladBookId,
-                                                 progressPercent, positionBuf, secondsRead);
-
-        // Cross-device position, alongside (not instead of) the per-device stats
-        // above -- the two answer different questions and deliberately do not share
-        // a row. Sending both on close is expected (EINK_PAGE_SYNC_TASKS.md §7).
-        //
-        // Closing is what makes this automatic: without it the phone only ever has
-        // somewhere to sync to when a person remembers to press Sync in the drawer,
-        // and the feature half-works.
-        //
-        // read_at only when the clock is trustworthy THIS boot. Neither device can
-        // preserve a calendar date across a reboot -- the X3's DS3231 has no
-        // calendar and the X4 has no RTC at all (HalClock.h) -- so after offline
-        // reading there is usually nothing honest to send. Omitted, the server
-        // stamps arrival; a guess would be worse, and the spec says so.
-        const uint32_t readAt = HalClock::isSystemTimeValid() ? static_cast<uint32_t>(time(nullptr)) : 0;
-        // Age is preferred over an absolute time (spec 4.1) and is the one number
-        // this hardware can be sure of -- but only when a page was actually turned
-        // while this instance was alive. Deep sleep is a full reboot here, so a
-        // restored reader's pageShownAtMs marks when the book was reopened, not when
-        // the person last read; sending that would understate the age badly.
-        //
-        // esp_sleep_get_time_in_deep_sleep() would close that gap, but it is not in
-        // this ESP-IDF's esp_sleep.h, so there is nothing to measure the sleep with.
-        // Rather than synthesise one, send no timing at all -- spec 4.2 makes that
-        // correct now: a device supersedes its own earlier position without needing
-        // a clock, which is exactly the read-offline-all-day case.
-        const uint32_t ageSeconds =
-            pageTurnedThisSession ? static_cast<uint32_t>((millis() - pageShownAtMs) / 1000UL) : 0;
-        FouladReadingPosition::Position remote;
-        FouladReadingPosition::sync(serverIt->username, serverIt->password, recentIt->fouladBookId,
-                                    static_cast<float>(progressPercent), section ? section->currentPage : -1,
-                                    section ? section->estimatedTotalPages() : -1, readAt, ageSeconds, remote);
-      }
-    }
   }
 
   // KOReader/MidadReader Sync: queue this session's position the same way the
   // manual "Sync" menu item uploads it (see launchKOReaderSync()), so a device
   // that's read but never pressed Sync still shows up server-side eventually.
-  // Queued rather than sent live for the same reason as the Foulad reading-
-  // position block above: WiFi is torn down before the reader even opens, so a
-  // live attempt here would almost always no-op. FouladDeviceTracking::
-  // flushPendingKOReaderSync() delivers it the next time the device reconnects
-  // for any reason. Gated on pageTurnedThisSession so opening a book and
-  // immediately backing out doesn't overwrite a real remote position with
-  // nothing.
+  // Queued rather than sent live: WiFi is torn down before the reader even opens,
+  // so a live attempt here would almost always no-op. KOReaderPendingSync::flush()
+  // delivers it the next time the device reconnects for any reason. Gated on
+  // pageTurnedThisSession so opening a book and immediately backing out doesn't
+  // overwrite a real remote position with nothing.
   if (epub && pageTurnedThisSession && KOREADER_STORE.hasCredentials()) {
     const CrossPointPosition localPos = getCurrentPosition();
     const SavedProgressPosition localProgress = ProgressMapper::toSavedProgress(epub, localPos);
@@ -484,7 +373,7 @@ void EpubReaderActivity::openReaderMenu() {
   startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
                              renderer, mappedInput, epub.get(), currentSpineIndex, currentPage, totalPages,
                              bookProgressPercent, SETTINGS.orientation, !currentPageFootnotes.empty(),
-                             !cachedBookmarks.empty(), isArabicBook, bookHasFouladId()),
+                             !cachedBookmarks.empty(), isArabicBook),
                          [this](const ActivityResult& result) {
                            // Always apply orientation / auto-turn / per-book setting edits, even
                            // if the menu was cancelled (Back just closes the drawer).
@@ -605,35 +494,6 @@ void EpubReaderActivity::openDictionaryTypedLookup(const std::string& prefill) {
 }
 
 void EpubReaderActivity::loop() {
-  // Deferred cross-device jump (see onEnter). Runs once, on the first iteration
-  // after the activity is fully up and the render task is serving it.
-  if (pendingJumpPercent > 0) {
-    const int target = pendingJumpPercent;
-    const int targetSpine = pendingJumpSpine;
-    pendingJumpPercent = 0;
-    pendingJumpSpine = -1;
-    // Spine only when documents are fine-grained enough to beat the percentage.
-    // Each covers roughly 100/spineCount percent: on a 103-document book that is ~1%
-    // and the spine wins, but on a three-document book "open document 3" lands near
-    // 67% for a position 22% in -- worse than the percentage it replaced.
-    const int spineCount = epub ? epub->getSpineItemsCount() : 0;
-    if (targetSpine >= 0 && spineCount >= 30) {
-      LOG_INF("SYNC", "Applying cross-device jump to spine=%d of %d (%d%%)", targetSpine, spineCount, target);
-      jumpToSpine(targetSpine);
-    } else if (targetSpine >= 0) {
-      LOG_INF("SYNC", "Spine anchor %d of %d too coarse; using %d%% instead", targetSpine, spineCount, target);
-      jumpToPercent(target);
-    } else {
-      LOG_INF("SYNC", "Applying cross-device jump to %d%% (no spine anchor)", target);
-      jumpToPercent(target);
-    }
-    // Spine only; both jump paths reset `section` for the next render to rebuild, so
-    // pagination is always unresolved at this point. The previous version of this log
-    // printed "page=-1 of -1" every time and was reasonably read as evidence of a race.
-    LOG_INF("SYNC", "Jump applied: spine=%d, pagination resolves on next render", currentSpineIndex);
-    return;  // let the jump's own reload land before handling input this frame
-  }
-
   if (!epub) {
     finish();
     return;
@@ -1314,10 +1174,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       launchKOReaderSync();
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::MIDAD_SYNC: {
-      launchMidadSync();
-      break;
-    }
     case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
       startActivityForResult(
           std::make_unique<EpubReaderBookmarksActivity>(renderer, mappedInput, epub, epub->getPath()),
@@ -1353,87 +1209,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // MORE are handled inside the drawer and never arrive here.
       break;
   }
-}
-
-std::string EpubReaderActivity::currentBookFouladId() const {
-  if (!epub) return "";
-  // Stats store first, recents second. The id lives in ReadingBookStats precisely
-  // because RECENT_BOOKS caps at 10 and evicts (see INSTRUCTIONS-14) -- looking it
-  // up only in recents would make Sync vanish for a catalog book read a while ago,
-  // which is the same bug that hid reading from library_reading rows.
-  READING_STATS.ensureLoaded();
-  if (const auto* stats = READING_STATS.findBook(epub->getPath()); stats && !stats->fouladBookId.empty()) {
-    return stats->fouladBookId;
-  }
-  const auto& recents = RECENT_BOOKS.getBooks();
-  const auto it =
-      std::find_if(recents.begin(), recents.end(), [this](const RecentBook& b) { return b.path == epub->getPath(); });
-  return it != recents.end() ? it->fouladBookId : "";
-}
-
-bool EpubReaderActivity::bookHasFouladId() const {
-  // The Sync row is offered only for a book the catalog can be told about.
-  // launchMidadSync() requires the same id and returns silently without one, so
-  // gating the row on anything weaker (an account existing, say) produces a menu
-  // entry that does nothing at all when pressed -- which is exactly what shipped
-  // in v1.8.5-rc and was reported as "nothing happens".
-  //
-  // Empty for a side-loaded file, and also for a catalog book downloaded before
-  // the id was recorded or since evicted from the 10-entry recents list.
-  return !currentBookFouladId().empty();
-}
-
-void EpubReaderActivity::launchMidadSync() {
-  if (!epub) return;
-
-  // Empty id is not an early return any more: the sync screen says why. The id is
-  // only recorded when a book is opened THROUGH Library (see
-  // OpdsBookBrowserActivity), so a catalog book that has only ever been opened from
-  // Home legitimately has none -- indistinguishable, from the outside, from a
-  // side-loaded file or a broken feature.
-  const std::string bookId = currentBookFouladId();
-
-  const int currentPage = section ? section->currentPage : nextPageNumber;
-  const int totalPages = section ? section->estimatedTotalPages() : cachedChapterTotalPageCount;
-  const float percent = static_cast<float>(currentBookProgressPercent());
-  // Only when a page was genuinely turned while this instance was alive -- see the
-  // close-sync block in onExit() for why a restored reader's timestamp is not an age.
-  const uint32_t ageSeconds = pageTurnedThisSession ? static_cast<uint32_t>((millis() - pageShownAtMs) / 1000UL) : 0;
-  const std::string savedEpubPath = epub->getPath();
-  // Read before the Epub is released below; the resolver needs them to search.
-  const std::string savedTitle = epub->getTitle();
-  const std::string savedAuthor = epub->getAuthor();
-
-  // Persist first: the reader is replaced below and resumes from this file, so a
-  // failed write would silently lose the reader's place. Same guard as KOReader's.
-  if (!saveProgress(currentSpineIndex, currentPage, totalPages)) {
-    LOG_ERR("SYNC", "Aborting Midad sync because current progress could not be saved");
-    pendingSyncSaveError = true;
-    requestUpdate();
-    return;
-  }
-
-  // Release Epub and Section (~65KB) before the handshake, exactly as the KOReader
-  // path does. A TLS session cannot be afforded alongside a loaded book, and this is
-  // the whole reason sync is a separate activity rather than a call from here.
-  LOG_DBG("SYNC", "Releasing epub for Midad sync (heap before: %u)", (unsigned)ESP.getFreeHeap());
-  {
-    RenderLock lock(*this);
-    if (section) {
-      nextPageNumber = section->currentPage;
-    }
-    // The image extractor holds a raw pointer into this epub (see onEnter);
-    // clear it before the early release, mirroring onExit(), or a later image
-    // render would call through a dangling context.
-    ImageBlock::setExtractor(nullptr, nullptr);
-    section.reset();
-    epub.reset();
-  }
-  LOG_DBG("SYNC", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
-
-  activityManager.replaceActivity(std::make_unique<MidadSyncActivity>(renderer, mappedInput, savedEpubPath, bookId,
-                                                                      savedTitle, savedAuthor, percent, currentPage,
-                                                                      totalPages, ageSeconds));
 }
 
 bool EpubReaderActivity::launchKOReaderSync() {

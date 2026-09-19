@@ -24,7 +24,6 @@ enum class HomeMenuItem {
   NONE,
   FILE_BROWSER,
   RECENTS,
-  FOULAD_EBOOKS,
   FILE_TRANSFER,
   SETTINGS_MENU,
   CHECK_UPDATE,
@@ -134,7 +133,6 @@ class ActivityManager {
   void goToRecentBooks();
   void goToApps();
   void goToBrowser();
-  void goToFouladEbooks();
   // Apps -> News: the OPDS browser rooted at the account's feed subscriptions.
   void goToNews();
   // Boot target for a queued "Fetch now": runs the article fetch on a

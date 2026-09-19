@@ -13,7 +13,6 @@
 #include "ArabicFontSystem.h"
 #include "CrossPointSettings.h"
 #include "DictionaryStore.h"
-#include "FouladEbooksConfig.h"
 #include "MappedInputManager.h"
 #include "MidadAppSettings.h"
 #include "OpdsServerStore.h"
@@ -100,12 +99,11 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
                                                const int currentSpineIndex, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
                                                const bool hasFootnotes, const bool hasBookmarks,
-                                               const bool isArabicBook, const bool canSyncMidad)
+                                               const bool isArabicBook)
     : Activity("EpubReaderMenu", renderer, mappedInput),
       epub(epub),
       currentSpineIndex(currentSpineIndex),
       isArabicBook(isArabicBook),
-      canSyncMidad_(canSyncMidad),
       sdFamilies(sdFamilyNames(isArabicBook ? arabicFontSystem.registry() : sdFontSystem.registry())),
       title(epub ? flattenedTitle(epub->getTitle()) : std::string()),
       pendingOrientation(currentOrientation),
@@ -214,22 +212,6 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildNavig
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildSettingsItems() const {
   std::vector<MenuItem> items;
   items.reserve(7);
-  // Both syncs together. Midad was pinned to the old Reading tab because it is
-  // pressed every session, but with four tabs it no longer has to be first to be
-  // one press away, and having the two sync rows in different tabs was the odder
-  // arrangement. Shown on the strength of the account alone, not on whether THIS
-  // book carries a catalog id: a book that genuinely is in the library -- but was
-  // only ever opened from Home, so its id was never recorded -- would otherwise
-  // have no row at all, indistinguishable from the feature being broken. It
-  // explains itself when pressed; canSyncMidad_ decides which of the two it does.
-  {
-    const auto& opdsServers = OPDS_STORE.getServers();
-    const bool hasMidadAccount = std::any_of(opdsServers.begin(), opdsServers.end(),
-                                             [](const OpdsServer& s) { return s.url == FOULAD_EBOOKS_URL; });
-    if (hasMidadAccount) {
-      items.push_back({MenuAction::MIDAD_SYNC, StrId::STR_SYNC_MIDAD});
-    }
-  }
   items.push_back({MenuAction::SYNC, StrId::STR_SYNC_KOREADER});
   // Gated on the same Settings -> Apps -> Pomodoro toggle that pins the My Books
   // tile, so a device that does not use the feature sees no row at all.

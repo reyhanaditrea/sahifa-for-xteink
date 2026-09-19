@@ -44,13 +44,12 @@ class HomeActivity final : public Activity {
   bool lockNextBackRelease = false;
 
   // Convert HomeMenuItem to menu index (used in onEnter). Order matches render()'s
-  // menuItems construction: eBooks, Stats, Files, Settings ("Continue Reading" isn't
+  // menuItems construction: Files, Stats, Apps, Settings ("Continue Reading" isn't
   // a HomeMenuItem -- it's a prepended label tied to the recentBooks selection range,
-  // handled separately in loop()). Every slot is one fixed destination; the pair that
-  // used to swap on Foulad eBooks login state no longer does.
+  // handled separately in loop()). Every slot is one fixed destination.
   static int menuItemToIndex(HomeMenuItem item) {
     int i = 0;
-    if (item == HomeMenuItem::FOULAD_EBOOKS) return i;
+    if (item == HomeMenuItem::FILE_BROWSER) return i;
     ++i;
     if (item == HomeMenuItem::STATS) return i;
     ++i;
@@ -63,7 +62,7 @@ class HomeActivity final : public Activity {
   // Convert menu index to HomeMenuItem (used in loop)
   static HomeMenuItem indexToMenuItem(int idx) {
     int i = 0;
-    if (idx == i++) return HomeMenuItem::FOULAD_EBOOKS;
+    if (idx == i++) return HomeMenuItem::FILE_BROWSER;
     if (idx == i++) return HomeMenuItem::STATS;
     if (idx == i++) return HomeMenuItem::APPS;
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
@@ -73,7 +72,7 @@ class HomeActivity final : public Activity {
   void onRecentsOpen();
   void onStatsOpen();
   void onSettingsOpen();
-  void onFouladEbooksOpen();
+  void onFilesOpen();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image

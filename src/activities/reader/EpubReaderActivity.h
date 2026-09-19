@@ -177,13 +177,6 @@ class EpubReaderActivity final : public ReaderActivity {
   // previous word when the user backs out of its definition to try another.
   void openDictionaryTypedLookup(const std::string& prefill = "");
   bool launchKOReaderSync();
-  // Midad equivalent: same save-release-replace shape, see the implementation.
-  void launchMidadSync();
-  // True when this book carries a Foulad eBooks catalog id, i.e. Sync can do
-  // something. Gates the drawer row so it is never shown-and-inert.
-  bool bookHasFouladId() const;
-  // Catalog id for the open book: stats store first, recents as fallback.
-  std::string currentBookFouladId() const;
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   // Gives the status bar's text lane back when it is hidden or progress-bar-only, so a
@@ -206,11 +199,6 @@ class EpubReaderActivity final : public ReaderActivity {
   // True once a page has actually been turned in this activity instance -- see the
   // close-sync block in onExit() for why an age is only honest after that.
   bool pageTurnedThisSession = false;
-  // A cross-device jump read out of APP_STATE in onEnter() and applied on the first
-  // loop() iteration -- see the comment there for why it is not applied immediately.
-  // 0 / -1 mean nothing pending.
-  uint8_t pendingJumpPercent = 0;
-  int16_t pendingJumpSpine = -1;
   // First page dwell after opening/jumping includes orientation time, not reading --
   // skip it as a pace sample (it still counts toward session time).
   bool paceWarmupPending = true;
@@ -239,9 +227,8 @@ class EpubReaderActivity final : public ReaderActivity {
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   ~EpubReaderActivity() override;
 
-  // Overrides ReaderActivity::onEnter()/onExit() rather than layering on top of them: the
-  // isNews exclusion (below) must run BEFORE the base's unconditional RECENT_BOOKS.addBook(),
-  // which the base's own onEnter() has no hook for. onExit() calls ReaderActivity::onExit()
+  // Overrides ReaderActivity::onEnter()/onExit() rather than layering on top of them.
+  // onExit() calls ReaderActivity::onExit()
   // first, then adds the reading-stats/KOReader-sync-queue/per-book-settings cleanup the base
   // doesn't know about.
   void onEnter() override;
