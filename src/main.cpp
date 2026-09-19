@@ -31,7 +31,6 @@
 #include "MappedInputManager.h"
 #include "MidadAppSettings.h"
 #include "NewsFeedStore.h"
-#include "OpdsServerStore.h"
 #include "OtaRollbackDetection.h"
 #include "OtaRollbackRecoveryPlan.h"
 #include "QuranBook.h"
@@ -684,7 +683,6 @@ void setup() {
   NEWS_FEEDS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
-  OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 

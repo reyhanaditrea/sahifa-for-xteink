@@ -6,8 +6,7 @@
 
 #include "util/ButtonNavigator.h"
 
-// Shared row/column navigation math for cover-grid activities (OpdsBookBrowserActivity,
-// RecentBooksActivity). Ported from CrossInk's RecentBooksGridActivity
+// Shared row/column navigation math for cover-grid activities (RecentBooksActivity). Ported from CrossInk's RecentBooksGridActivity
 // (github.com/uxjulia/CrossInk) — flat index <-> row/col conversion with page-aware
 // wraparound. Header-only since both call sites need it and the functions are tiny.
 namespace GridNav {

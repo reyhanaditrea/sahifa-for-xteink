@@ -12,8 +12,6 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
-#include "OpdsCoverCache.h"
-#include "OpdsServerStore.h"
 #include "apps/AppsActivity.h"
 #include "NewsFeedStore.h"
 #include "apps/NewsActivity.h"
@@ -21,14 +19,12 @@
 #include "apps/PrayerActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
-#include "browser/OpdsBookBrowserActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
-#include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/BmpViewerActivity.h"
 #include "util/FrontlightPanelActivity.h"
@@ -245,16 +241,6 @@ void ActivityManager::goToRecentBooks() {
 }
 
 void ActivityManager::goToApps() { replaceActivity(std::make_unique<AppsActivity>(renderer, mappedInput)); }
-
-void ActivityManager::goToBrowser() {
-  const auto& servers = OPDS_STORE.getServers();
-  // Skip the server picker when there's only one server configured
-  if (servers.size() == 1) {
-    replaceActivity(std::make_unique<OpdsBookBrowserActivity>(renderer, mappedInput, servers[0]));
-  } else {
-    replaceActivity(std::make_unique<OpdsServerListActivity>(renderer, mappedInput, true));
-  }
-}
 
 void ActivityManager::goToNews() {
   // The News reader owns its own feeds and cache on SD; nothing here needs an

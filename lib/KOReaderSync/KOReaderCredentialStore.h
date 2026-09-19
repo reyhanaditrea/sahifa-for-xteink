@@ -13,8 +13,7 @@ enum class DocumentMatchMethod : uint8_t {
 };
 
 // A progress upload the reader couldn't deliver live (no reliable WiFi at
-// book-close -- reading never keeps the radio up, see
-// OpdsBookBrowserActivity::onExit()), queued for the next time the device
+// book-close -- reading never keeps the radio up), queued for the next time the device
 // happens to reconnect for some other reason. Fields mirror what
 // KOReaderSyncActivity::performUpload() sends, precomputed while the Epub was
 // still loaded so the flush itself needs no SD file access beyond this store.

@@ -112,7 +112,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // running it while the heap is already this tight is how a background tick becomes the straw
   // that triggers an OOM abort for something unrelated (e.g. a WiFi/TLS operation started right
   // after). Matches the free-heap/largest-block gate idiom used elsewhere in this codebase (see
-  // OpdsBookBrowserActivity.cpp, DictionaryStore.cpp). Foreground paths (page turns, initial
+  // DictionaryStore.cpp). Foreground paths (page turns, initial
   // build) are NOT gated -- the reader must still open the book it's showing.
   static constexpr uint32_t BUILD_TICK_MIN_FREE_HEAP_BYTES = 32 * 1024;
   static constexpr uint32_t BUILD_TICK_MIN_LARGEST_BLOCK_BYTES = 16 * 1024;

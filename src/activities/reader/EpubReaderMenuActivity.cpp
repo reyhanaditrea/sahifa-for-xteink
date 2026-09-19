@@ -15,7 +15,6 @@
 #include "DictionaryStore.h"
 #include "MappedInputManager.h"
 #include "MidadAppSettings.h"
-#include "OpdsServerStore.h"
 #include "QuranBook.h"
 #include "ReaderFontSizes.h"
 #include "ReaderPomodoro.h"

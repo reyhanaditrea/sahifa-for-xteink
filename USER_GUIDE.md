@@ -32,8 +32,7 @@ navigation, and features of the device on both supported models, the **Xteink X4
       - [3.9.3 Controls](#393-controls)
       - [3.9.4 Apps](#394-apps)
       - [3.9.5 System](#395-system)
-      - [3.9.6 OPDS Servers (Multiple Libraries)](#396-opds-servers-multiple-libraries)
-      - [3.9.7 Web Settings (Wi-Fi + OPDS)](#397-web-settings-wi-fi--opds)
+      - [3.9.7 Web Settings (Wi-Fi)](#397-web-settings-wi-fi)
       - [3.9.8 KOReader Sync Quick Setup](#398-koreader-sync-quick-setup)
         - [Option A: CrossPoint Sync Server (`sync.crosspointreader.com`, default)](#option-a-crosspoint-sync-server-synccrosspointreadercom-default)
         - [Option B: Legacy Public KOReader Server (`sync.koreader.rocks`)](#option-b-legacy-public-koreader-server-synckoreaderrocks)
@@ -383,53 +382,20 @@ The Settings screen is organized into five tabs: **Display**, **Reader**, **Cont
 - **Show Hidden Files**: Whether hidden (dot-prefixed) files/folders appear in Browse Files.
 - **Clear Read Books from Recent List**: Automatically remove finished books from the recents row.
 - **Move Finished Books to Read Folder**: Automatically move finished books into a "Read" folder on the SD card.
-- **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers, firmware updates, and OPDS browsing.
-- **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#396-opds-servers-multiple-libraries) below.
+- **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers and firmware updates.
 - **Clear Reading Cache**: Clear the internal SD card cache.
 - **Check for updates**: Check for firmware updates over Wi-Fi. Firmware can also be updated without a USB connection by placing a `firmware.bin` file on the SD card.
 - **SD Card Firmware Update**: Install a firmware update from a `firmware.bin` file placed on the SD card, without needing Wi-Fi.
 - **Language**: Set the UI language. Foulad eInk ships **English and Arabic** — a deliberately small, fully-translated
   set rather than a long list of partial translations. See [Arabic & Right-to-Left Reading](#arabic--right-to-left-reading).
 
-#### 3.9.6 OPDS Servers (Multiple Libraries)
+#### 3.9.7 Web Settings (Wi-Fi)
 
-Foulad eInk supports saving multiple OPDS servers and switching between them when browsing catalogs.
-
-1. Open **Settings -> System -> OPDS Servers**.
-
-2. Select **Add Server** to create a new entry, or select an existing server to edit it.
-
-3. Configure these fields:
-
-   - **Server Name**: Optional display name (for example, "Home Calibre" or "Public Catalog").
-
-   - **OPDS Server URL**: Full catalog root URL (for Calibre Content Server, usually ends with `/opds`).
-
-   - **Username / Password**: Optional credentials for authenticated servers.
-
-4. Use **Delete Server** inside a server entry to remove it.
-
-Behavior notes:
-
-- You can store up to 8 OPDS servers.
-- OPDS authentication supports HTTP Basic auth. If you use Calibre Content Server with authentication enabled, set it to Basic (not Digest).
-
-You can also manage OPDS servers from the web interface while in File Transfer mode:
-
-1. Connect to the device web UI.
-2. Open `http://<device-ip>/settings`.
-3. Use the **OPDS Servers** card to add, edit, or delete entries.
-
-For web-based Wi-Fi network management, see [Web Settings (Wi-Fi + OPDS)](#397-web-settings-wi-fi--opds).
-
-#### 3.9.7 Web Settings (Wi-Fi + OPDS)
-
-While in **File Transfer** mode, the web settings page includes management cards for both **Wi-Fi Networks** and **OPDS Servers**.
+While in **File Transfer** mode, the web settings page includes a management card for **Wi-Fi Networks**.
 
 1. On device: open **File Transfer** and connect through **Join a Network** or **Create Hotspot**.
 2. In a browser, open `http://<device-ip>/settings`.
 3. In **Wi-Fi Networks**, add, edit, or delete saved network entries (SSID + optional password).
-4. In **OPDS Servers**, add, edit, or delete OPDS catalogs.
 
 Behavior notes:
 

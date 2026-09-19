@@ -473,15 +473,6 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     v.push_back(SettingInfo::Toggle(StrId::STR_OTA_PRERELEASE, &CrossPointSettings::otaPrereleaseEnabled,
                                     "otaPrereleaseEnabled", StrId::STR_CAT_SYSTEM));
 
-    // OPDS download folder: persisted + web-exposed, but category-less so it
-    // is hidden from the on-device Settings screen (edited via OPDS UI).
-    v.push_back(SettingInfo::String(StrId::STR_OPDS_DOWNLOAD_FOLDER, &SETTINGS.opdsDownloadFolder[0],
-                                    sizeof(SETTINGS.opdsDownloadFolder), "opdsDownloadFolder"));
-    // OPDS download filename format: persisted + web-exposed, category-less so it
-    // is hidden from the on-device Settings screen (cycled from the OPDS UI).
-    v.push_back(SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,
-                                  {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
-                                  "opdsFilenameFormat"));
 
     // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
     v.push_back(SettingInfo::DynamicString(

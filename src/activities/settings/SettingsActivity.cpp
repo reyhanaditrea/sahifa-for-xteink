@@ -19,8 +19,6 @@
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
 #include "MidadSettingsList.h"
-#include "OpdsServerListActivity.h"
-#include "OpdsServerStore.h"
 #include "QuranBook.h"
 #include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
@@ -92,12 +90,6 @@ void SettingsActivity::rebuildSettingsLists() {
     appsSettings.push_back(std::move(setting));
   }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  // OPDS Servers is deliberately not listed. Adding a catalog by hand means typing a
-  // URL and credentials on an on-screen keyboard, and every catalog these devices
-  // actually reach is reached by signing in -- so the row only ever offered a way to
-  // get it wrong. The activity itself stays (ActivityManager still routes to it), and
-  // SettingAction::OPDSBrowser with it, so nothing else has to change to bring the row
-  // back.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
   // OTA fetches this board's own release asset (see OtaUpdater); boards whose
   // asset isn't published yet just report no update available.
@@ -376,9 +368,6 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::KOReaderSync:
         startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::OPDSBrowser:
-        startActivityForResult(std::make_unique<OpdsServerListActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::Network:
         // Settings -> Wi-Fi Networks is the ONE WiFi surface with no parent

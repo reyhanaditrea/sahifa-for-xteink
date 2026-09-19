@@ -36,7 +36,6 @@
 #include "KOReaderDocumentId.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
-#include "OpdsServerStore.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
