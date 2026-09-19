@@ -18,9 +18,7 @@
 #include "activities/apps/StopwatchActivity.h"
 #include "activities/apps/TasbihActivity.h"
 #include "activities/games/GamesMenuActivity.h"
-#include "activities/network/BluetoothActivity.h"
 #include "components/UITheme.h"
-#include "components/icons/appble72.h"
 #include "components/icons/appfiles72.h"
 #include "components/icons/appgames72.h"
 #include "components/icons/appgym72.h"
@@ -109,12 +107,6 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
          MIDAD_APP_SETTINGS.gymEnabled = v;
          MIDAD_APP_SETTINGS.saveToFile();
        }},
-      // A launcher like any other app entry below (BLE-R2) -- opens BluetoothActivity,
-      // which now owns BLE's entire lifetime itself (correction 2: screen-scoped, no
-      // persisted on/off setting left to back a getEnabled/setEnabled pair). Entering
-      // the screen starts BLE; leaving it stops BLE. Nothing to auto-enable on first
-      // tap the way a normal app's opt-in does.
-      {AppId::MidadBle, StrId::STR_MIDAD_BLE, nullptr, nullptr},
   };
   return kEntries;
 }
@@ -132,7 +124,6 @@ const uint8_t* AppsActivity::iconFor(const AppId id) {
       AppStopwatch72Icon,  // Stopwatch
       AppPomodoro72Icon,   // Pomodoro
       AppGym72Icon,        // Gym
-      AppBle72Icon,        // MidadBle
       AppPrayer72Icon,     // Prayer
   };
   const size_t index = static_cast<size_t>(id);
@@ -144,7 +135,7 @@ std::vector<const AppsActivity::AppEntry*> AppsActivity::visibleEntries() {
   std::vector<const AppEntry*> visible;
   visible.reserve(all.size());
   for (const auto& entry : all) {
-    // No toggle (Files, Midad BLE) means nothing to hide it by. The Quran keeps its
+    // No toggle (Files) means nothing to hide it by. The Quran keeps its
     // tile while off because it is the only app that ships off by default: enabling
     // it extracts a real EPUB to the SD card, so hiding it would leave no route to it
     // from this screen at all -- precisely the discoverability problem this screen was
@@ -221,17 +212,6 @@ bool AppsActivity::launch(const AppEntry& entry) {
       return true;
     case AppId::Gym:
       startActivityForResult(std::make_unique<GymActivity>(renderer, mappedInput), [](const ActivityResult&) {});
-      return true;
-    case AppId::MidadBle:
-      // Opens the pairing screen -- BLE-R2 correction 2. Does not itself touch BLE;
-      // BluetoothActivity's own onEnter()/onExit() request/release the radio
-      // directly now (see BlePeripheralManager::setUserRequested()). Deliberately
-      // still push-based (startActivityForResult), not replaceActivity() -- unlike
-      // Home's long-press shortcut (correction 3), this path already reliably
-      // clears the heap gate as measured on real hardware, since Apps itself has
-      // nothing comparable to Home's retained cover buffer. Back correctly returns
-      // to Apps, not Home.
-      startActivityForResult(std::make_unique<BluetoothActivity>(renderer, mappedInput), [](const ActivityResult&) {});
       return true;
     case AppId::Prayer:
       startActivityForResult(std::make_unique<PrayerActivity>(renderer, mappedInput), [](const ActivityResult&) {});
@@ -316,9 +296,6 @@ void AppsActivity::render(RenderLock&&) {
     // Icon over name, in a card -- the launcher shape, replacing the label-only
     // name-tile this screen borrowed from the news feed and collection grids. The
     // icon carries the identifying now, which is what let the grid go to three up.
-    // Midad BLE shows no On/Off suffix (correction 2, screen-scoped BLE): with no
-    // persisted setting left, "On" would be misleading almost all the time -- BLE
-    // only actually runs while the pairing screen itself is open.
     const bool selected = idx == selectorIndex;
     if (selected) {
       renderer.fillRect(cellX, cellY, tileWidth, tileHeight, true);

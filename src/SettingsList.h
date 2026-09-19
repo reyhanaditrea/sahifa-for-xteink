@@ -447,7 +447,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                                     "backShortToFileBrowser", StrId::STR_CAT_CONTROLS));
 
     // --- Apps ---
-    // Quran/Games/Tasbih/Stop Watch/Pomodoro/Gym/Midad BLE/Debug Logging live
+    // Quran/Games/Tasbih/Stop Watch/Pomodoro/Gym/Debug Logging live
     // on MidadAppSettings, not CrossPointSettings, and their SettingInfo rows
     // are defined in src/MidadSettingsList.h/.cpp instead of here -- see
     // SettingsActivity::rebuildSettingsLists()'s appendMidadAppSettings() call

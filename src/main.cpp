@@ -16,13 +16,6 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <Logging.h>
-#ifndef SIMULATOR
-// No simulator-side counterpart exists for this brand-new HAL component (unlike
-// HalStorage.h/HalGPIO.h/etc. above, which the simulator provides its own versions
-// of under the same names) -- lib_ignore=hal for the simulator env means this
-// wouldn't resolve there. See docs/ble-module-tasks.md.
-#include <BlePeripheralManager.h>
-#endif
 #include <SPI.h>
 #include <WiFi.h>
 #include <XteinkDetect.h>
@@ -31,9 +24,6 @@
 #include <cstring>
 
 #include "ArabicFontSystem.h"
-#include "BleCommandDispatcher.h"
-#include "BleWifiAutoConnectCache.h"
-#include "BleWifiScanCache.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "GameHighScoresStore.h"
@@ -62,7 +52,6 @@
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
 #include "util/BatteryDiagLog.h"
-#include "util/BleDiagLog.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SleepDiagLog.h"
@@ -523,21 +512,6 @@ void enterDeepSleep(bool fromTimeout = false) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
   }
-
-#ifndef SIMULATOR
-  // Leaving a BLE remote/central connected into device sleep crashes the device
-  // (CrumBLE issue #44, see docs/ble-module-tasks.md) -- tear down here, before sleep,
-  // not after sleep entry trips over it. The main loop's own bleAllowedNow check (see
-  // loop() above) already stops advertising once the Sleep activity takes over, so this
-  // firing at all means that didn't happen fast enough -- same "worth a permanent
-  // record" reasoning as the WiFi backstop just above.
-  if (BlePeripheral.isActive()) {
-    char bleBuf[96];
-    snprintf(bleBuf, sizeof(bleBuf), "%lu BLE still on at sleep entry -- backstop disconnect", millis());
-    BatteryDiagLog::append(bleBuf);
-    BlePeripheral.end();
-  }
-#endif
 
   {
     char buf[96];
@@ -1037,77 +1011,6 @@ void loop() {
     lastHeapSample = millis();
   }
 
-#ifndef SIMULATOR
-  // Midad BLE peripheral (phone control -- see docs/ble-module-tasks.md's device state
-  // machine): only ever runs while BluetoothActivity is on screen (isUserRequested(),
-  // set by that activity's onEnter()/onExit() -- BLE-R2 correction 2 moved this off a
-  // persisted "keep BLE running in the background" setting; NimBLE's ~57-58KB resident
-  // cost was competing with every other screen's own heap needs, see the Settings-
-  // screen OOM abort this correction was written in response to) AND WiFi is
-  // definitively off (the doc's mutual-exclusion design; checking WiFi.getMode() here
-  // rather than hooking every WiFi-activation call site catches all of them uniformly)
-  // AND not the reader (Reading state is reserved for Phase 4's BLE-central page-
-  // turner). begin()/end() are cheap no-ops when already in the right state, so
-  // polling this every tick is fine -- BlePeripheral.begin() itself enforces the heap
-  // gate and cool-down.
-  const bool bleAllowedNow =
-      BlePeripheral.isUserRequested() && WiFi.getMode() == WIFI_MODE_NULL && !activityManager.isReaderActivity();
-  if (bleAllowedNow) {
-    BlePeripheral.begin();
-  } else if (BlePeripheral.isActive()) {
-    BlePeripheral.end();
-  }
-  BlePeripheral.poll();
-  BleCommandDispatcher::pump();
-  BleWifiScanCache::tick();
-  BleWifiAutoConnectCache::tick();
-
-  // Diagnostics + repaint nudge. The "BT" indicator in BaseTheme::drawHeader() reads
-  // live BlePeripheral state, but e-ink screens don't repaint on a timer -- without an
-  // explicit nudge here, a header already on screen when the radio finishes starting
-  // (or stops) would sit stale until some unrelated repaint happened to occur.
-  //
-  // BleDiagLog is best-effort, not guaranteed: RollingSdLog::append() silently skips
-  // the write below RollingSdLog::MIN_SAFE_HEAP_BYTES (32 KB) free heap, and NimBLE's
-  // own resident cost can leave less than that free while BLE is up -- an Off ->
-  // Advertising transition right after a successful begin() may not actually reach
-  // /debug_log.txt. LOG_DBG alongside it is serial-only and stripped from RC builds
-  // (LOG_LEVEL=1), so it doesn't fill that gap either. Not solved here: a low-heap
-  // transition may simply go unlogged to SD. See BleDiagLog.h.
-  static bool lastBleAllowedNow = false;
-  if (bleAllowedNow != lastBleAllowedNow) {
-    LOG_DBG("BLEDIAG", "bleAllowedNow %d -> %d (userRequested=%d wifiMode=%d isReader=%d)", lastBleAllowedNow,
-            bleAllowedNow, BlePeripheral.isUserRequested(), static_cast<int>(WiFi.getMode()),
-            activityManager.isReaderActivity());
-    lastBleAllowedNow = bleAllowedNow;
-  }
-  static BlePeripheralManager::State lastBleDiagState = BlePeripheralManager::State::Off;
-  static unsigned long lastBleRefusalLogMs = 0;
-  const auto bleStateNow = BlePeripheral.state();
-  if (bleStateNow != lastBleDiagState) {
-    static const char* const kBleStateNames[] = {"off", "advertising", "connected", "paused_low_memory"};
-    char bleBuf[96];
-    snprintf(bleBuf, sizeof(bleBuf), "state %s -> %s, free heap=%u (gate=%u, floor=%u)",
-             kBleStateNames[static_cast<int>(lastBleDiagState)], kBleStateNames[static_cast<int>(bleStateNow)],
-             static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(BlePeripheralManager::kHeapGateBytes),
-             static_cast<unsigned>(BlePeripheralManager::kRunningFloorBytes));
-    BleDiagLog::append(bleBuf);
-    LOG_DBG("BLEDIAG", "%s", bleBuf);
-    lastBleDiagState = bleStateNow;
-    activityManager.requestUpdate();
-  } else if (bleAllowedNow && bleStateNow == BlePeripheralManager::State::Off &&
-             millis() - lastBleRefusalLogMs >= 60000) {
-    // Wanted to run for at least 60s straight but hasn't -- one line per minute while
-    // stuck, not every tick, so this doesn't flood the shared log.
-    lastBleRefusalLogMs = millis();
-    char bleBuf[96];
-    snprintf(bleBuf, sizeof(bleBuf), "still off after wanting to start: free heap=%u (gate=%u)",
-             static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(BlePeripheralManager::kHeapGateBytes));
-    BleDiagLog::append(bleBuf);
-    LOG_DBG("BLEDIAG", "%s", bleBuf);
-  }
-#endif
-
   if (Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
             ESP.getHeapSize(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
@@ -1128,41 +1031,9 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
-        // BLE_STATUS/RESTART: permanent debug tooling alongside SCREENSHOT above,
-        // added for inspecting BLE lifecycle state without physical button presses/
-        // screen navigation -- same rationale (device-side testing that doesn't need
-        // eyes on the e-ink panel or a phone in hand). No BLE_ON/BLE_OFF here on
-        // purpose (BLE-R2 correction 4): the whole point of screen-scoped BLE is that
-        // BluetoothActivity's onEnter()/onExit() are the ONLY place the radio is ever
-        // requested -- a serial command that could drive setUserRequested()
-        // independently of that screen would be exactly the background-BLE footgun
-        // this design exists to close off.
-      } else if (cmd == "BLE_STATUS") {
-#ifndef SIMULATOR
-        char advName[24];
-        BlePeripheralManager::getAdvertisedName(advName, sizeof(advName));
-        logSerial.printf(
-            "BLE_STATUS: userRequested=%d activity=%s wifiMode=%d isReader=%d freeHeap=%u maxAlloc=%u gate=%u "
-            "floor=%u bleState=%d name=%s bonds=%d\n",
-            BlePeripheral.isUserRequested(), activityManager.currentActivityDebugName(),
-            static_cast<int>(WiFi.getMode()), activityManager.isReaderActivity(),
-            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
-            static_cast<unsigned>(BlePeripheralManager::kHeapGateBytes),
-            static_cast<unsigned>(BlePeripheralManager::kRunningFloorBytes), static_cast<int>(BlePeripheral.state()),
-            advName, BlePeripheralManager::getBondCount());
-#endif
-      } else if (cmd == "BLE_CLEAR_BONDS") {
-#ifndef SIMULATOR
-        // Debug tooling only, same rationale as BLE_STATUS above: exercises the
-        // "forget device, re-pair from scratch" path from a USB test harness without
-        // needing OS-level "forget this device" UI on the central side.
-        const bool cleared = BlePeripheralManager::clearAllBonds();
-        logSerial.printf("BLE_CLEAR_BONDS: %s, bonds=%d\n", cleared ? "ok" : "failed",
-                         BlePeripheralManager::getBondCount());
-#endif
       } else if (cmd == "RESTART") {
         // Lets a scripted USB test harness reboot the device to exercise boot-path
-        // behavior (e.g. the boot-time BLE session) without physical access.
+        // behavior without physical access.
         // ESP.restart() is normally reserved for recovery paths (see CLAUDE.md), but a
         // serial debug command is an explicit operator request, same as the power
         // button.
@@ -1348,17 +1219,6 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    // NEVER downclock or light-sleep while BLE is up: HalPowerManager's low-power CPU
-    // frequency (and light sleep, which stops the clock even harder) is below what
-    // Espressif requires for BLE RF -- the controller keeps reporting advertising-active
-    // while physically transmitting nothing at that frequency. A device would work fine
-    // while the user is actively pressing buttons and silently go dark to real scanners
-    // the moment it idles without this check.
-#ifndef SIMULATOR
-    const bool blePreventsLowPower = BlePeripheral.isActive();
-#else
-    const bool blePreventsLowPower = false;
-#endif
     const unsigned long idleMs = millis() - lastActivityTime;
     if (idleMs >= HalPowerManager::IDLE_LIGHT_SLEEP_MS) {
       // Idle: light-sleep between input polls instead of busy-delaying (same poll cadence).
@@ -1371,7 +1231,7 @@ void loop() {
       // also runs at normal clock, but that only happens when USB (externally
       // powered), WiFi, or a render Lock (full speed wanted anyway) is active.
       powerManager.setPowerSaving(false);
-      if (blePreventsLowPower || gpio.isDebouncePending()) {
+      if (gpio.isDebouncePending()) {
         // A raw button-state change is mid-debounce: commitment needs a second
         // matching sample, so poll again quickly instead of sleeping a slice —
         // a tap shorter than the 50 ms cadence would otherwise land in a single
@@ -1389,7 +1249,7 @@ void loop() {
       // Response window after recent input: keep 100 Hz polling for snappy interaction,
       // but downclock once rapid-input bursts have settled — renders re-raise the clock
       // via HalPowerManager::Lock, so full speed only serves loop bookkeeping here
-      if (!blePreventsLowPower && idleMs >= HalPowerManager::IDLE_DOWNCLOCK_MS) {
+      if (idleMs >= HalPowerManager::IDLE_DOWNCLOCK_MS) {
         powerManager.setPowerSaving(true);
       }
       delayWallClock(10);

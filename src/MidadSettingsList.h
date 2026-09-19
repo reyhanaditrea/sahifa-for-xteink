@@ -7,7 +7,7 @@
 class SdCardFontRegistry;
 
 // Midad-owned Apps-screen setting rows: Quran, Games, Tasbih, Stop Watch,
-// Pomodoro (+ its three durations), Gym (+ weight unit), Midad BLE, Debug
+// Pomodoro (+ its three durations), Gym (+ weight unit), Debug
 // Logging. None of these have a CrossPoint upstream equivalent (see
 // MidadAppSettings.h, which backs every one of them), so their
 // SettingInfo::DynamicToggle/DynamicValue/DynamicEnum row definitions live

@@ -35,17 +35,6 @@ class HomeActivity final : public Activity {
   const HomeMenuItem initialMenuItem;
   const bool cleanInitialRefresh;
 
-  // Holding Confirm anywhere on Home opens BluetoothActivity -- BLE-R2's second entry
-  // point alongside Apps' "Midad BLE" tile, both landing on the exact same screen
-  // (see BluetoothActivity's own header comment). This is only a navigation
-  // shortcut: Home itself never touches BLE directly, only BluetoothActivity's
-  // onEnter()/onExit() do. Confirmed free/unused on this screen before adding (grep
-  // across HomeActivity.cpp found no existing getHeldTime()/hold logic). Same
-  // threshold and fired-flag-swallows-the-release pattern as RecentBooksActivity's
-  // long-press-to-remove (RecentBooksActivity.cpp).
-  static constexpr unsigned long kBleLongPressMs = 1000;
-  bool bleLongPressFired = false;
-
   // A Back press from SettingsActivity::loop() fires onGoHome() on the press
   // edge; Home is then entered fresh and would otherwise see the trailing
   // release of that SAME physical press and mistake it for "open the most

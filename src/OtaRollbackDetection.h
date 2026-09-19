@@ -8,7 +8,4 @@
 // slot invalid/aborted. This is a flash-persisted otadata signal, not a one-boot
 // event -- it keeps returning the same result on every subsequent boot until
 // that specific slot is freshly reflashed (e.g. via SD-card recovery).
-//
-// Future BLE-triggered OTA (not yet implemented) must consult this same
-// function -- and OtaRollbackRecoveryPlan -- before acting, not add its own check.
 bool captureLastInvalidOtaPartitionDigest(std::string& outDigestHex);

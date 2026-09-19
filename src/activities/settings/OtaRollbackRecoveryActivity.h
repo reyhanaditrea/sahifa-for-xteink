@@ -9,7 +9,7 @@
  * Full-screen trap entered when main.cpp's OTA routing detects an
  * unacknowledged bootloader rollback to a signature-unaware old firmware
  * image (see OtaRollbackRecoveryPlan.h). Blocks only the normal OTA-update
- * entry point -- Home, Reader, Settings, networking, and BLE all remain
+ * entry point -- Home, Reader, Settings, and networking all remain
  * reachable normally, since this activity is never entered on those paths.
  *
  * The user picks one of two options, presented via the standard OptionPopup:

@@ -19,7 +19,6 @@
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "SilentRestart.h"
-#include "activities/network/BluetoothActivity.h"
 #include "activities/stats/StatsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -275,46 +274,6 @@ void HomeActivity::loop() {
     requestUpdate();
   }
 
-  // After the BLE long-press has fired, swallow input until Up is physically
-  // released (so the release doesn't ALSO act as a normal Up tap; re-arm only
-  // once the button is up) -- same pattern RecentBooksActivity's long-press-to-
-  // remove uses.
-  if (bleLongPressFired) {
-    if (!mappedInput.isPressed(MappedInputManager::Button::Up)) {
-      bleLongPressFired = false;
-    }
-    return;
-  }
-
-  // Hold Up (side button) anywhere on Home to open BLE pairing -- BLE-R2's second
-  // entry point (see BluetoothActivity's own header comment). BLE itself
-  // starts/stops via that screen's own onEnter()/onExit(), never here. Confirm is
-  // deliberately not used for this: it is Home's normal book/menu-item activation
-  // button, and a short tap on it must never risk being mistaken for the start of
-  // a long-press gesture.
-  //
-  // replaceActivity(), not startActivityForResult(): measured on real hardware
-  // (BLE-R2 correction 3) that push-based entry left Home fully resident on
-  // ActivityManager's stack -- onExit() never fires, so HomeActivity::coverBuffer
-  // (~42KB) stays allocated for BluetoothActivity's entire lifetime, and the
-  // radio's 70KB heap gate reliably failed to clear (measured: capped at ~62.6KB
-  // free vs. the gate's 71.7KB). replaceActivity() destroys this HomeActivity
-  // instance outright (onExit() -> freeCoverBuffer(), then the object is
-  // dropped) before BluetoothActivity ever enters, measured to reliably clear
-  // the gate with tens of KB to spare. Trade-off: replaceActivity() also clears
-  // the navigation stack, so Back from BluetoothActivity finds it empty and
-  // ActivityManager's existing pop-fallback (see loop()) recreates Home fresh --
-  // i.e. this shortcut always returns to Home, which is the desired behavior for
-  // a Home-launched shortcut. The Apps -> Midad BLE tile is deliberately NOT
-  // changed to match: that path already clears the gate reliably as-is (Apps
-  // itself has nothing comparable to Home's cover buffer retained), and
-  // push/pop there correctly returns to Apps, not Home.
-  if (mappedInput.isPressed(MappedInputManager::Button::Up) && mappedInput.getHeldTime() >= kBleLongPressMs) {
-    bleLongPressFired = true;
-    activityManager.replaceActivity(std::make_unique<BluetoothActivity>(renderer, mappedInput));
-    return;
-  }
-
   const int menuCount = getMenuItemCount();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
@@ -365,22 +324,14 @@ void HomeActivity::loop() {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
     requestUpdate();
   });
-  // Repeat-while-held scrolling is suppressed while the physical Up button
-  // specifically is down: Up doubles as Home's BLE-pairing long-press (see
-  // above), and NavNext/NavPrevious's continuous repeat firing during that
-  // ~1s hold would visibly scroll the menu out from under the user right
-  // before BLE launches. A single short tap still steps once via onNextPress/
-  // onPreviousPress above; only the repeat is gated.
-  if (!mappedInput.isPressed(MappedInputManager::Button::Up)) {
-    buttonNavigator.onNextContinuous([this, menuCount] {
-      selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
-      requestUpdate();
-    });
-    buttonNavigator.onPreviousContinuous([this, menuCount] {
-      selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
-      requestUpdate();
-    });
-  }
+  buttonNavigator.onNextContinuous([this, menuCount] {
+    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
+  buttonNavigator.onPreviousContinuous([this, menuCount] {
+    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
 
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up) {

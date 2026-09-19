@@ -176,15 +176,6 @@ def draw_gym(d):
     line(d, 7.0, 12, 17.0, 12)
 
 
-def draw_ble(d):
-    # Bluetooth rune.
-    line(d, 12, 3.6, 12, 20.4)
-    line(d, 12, 3.6, 16.4, 7.8)
-    line(d, 16.4, 7.8, 7.6, 16.2)
-    line(d, 12, 20.4, 16.4, 16.2)
-    line(d, 16.4, 16.2, 7.6, 7.8)
-
-
 def draw_news(d):
     # Newspaper: an outer sheet with a folded second sheet behind it, a masthead
     # rule and three text lines. Only straight edges, which is what survives the
@@ -222,7 +213,6 @@ ICONS = [
     ("AppStopwatch72Icon", "appstopwatch72", draw_stopwatch),
     ("AppPomodoro72Icon", "apppomodoro72", draw_pomodoro),
     ("AppGym72Icon", "appgym72", draw_gym),
-    ("AppBle72Icon", "appble72", draw_ble),
     ("AppPrayer72Icon", "appprayer72", draw_prayer),
 ]
 

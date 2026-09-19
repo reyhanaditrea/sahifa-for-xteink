@@ -121,11 +121,6 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
                              },
                              "gymWeightUnit", StrId::STR_CAT_APPS)
                              .shownWhen([] { return MIDAD_APP_SETTINGS.gymEnabled != 0; }));
-  // Midad BLE used to also be registered here as a persisted Settings->Apps toggle
-  // (see MidadAppSettings.h's own removal comment) -- removed along with the field
-  // itself under BLE-R2 correction 2. Opening BluetoothActivity (Apps tile or
-  // Home's hold-Confirm shortcut) is now the only way to turn BLE on, and there's
-  // nothing left to persist.
   // Gates whether the rolling SD diagnostic logs get written at all -- see
   // MidadAppSettings::debugLoggingEnabled and src/util/DebugLogging.h for the
   // full list and rationale. Last in this function by design (user request):

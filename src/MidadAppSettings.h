@@ -105,19 +105,6 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
   // default. Does NOT gate crash_report.txt (HalSystem::checkPanic) -- that's
   // a one-shot panic capture on an actual crash, not routine verbose logging.
   uint8_t debugLoggingEnabled = 0;
-
-  // Midad BLE used to have a persisted on/off field here (bleEnabled), read by
-  // main.cpp's background bleAllowedNow gate so the radio could run unattended on
-  // Home/Settings/etc. BLE-R2 correction 2 removed it: NimBLE's ~57-58KB resident
-  // cost was competing with every other screen's own heap needs (root cause of a
-  // real Settings-screen OOM abort), so BLE is now purely screen-scoped --
-  // BluetoothActivity's onEnter()/onExit() request/release it directly via
-  // BlePeripheralManager::setUserRequested(), nothing to persist. Confirmed via
-  // audit before removal: this field was never part of FouladDeviceTracking's
-  // settings.push/report wire contract, and the BLE settings.push command itself
-  // isn't implemented yet -- its only consumer was this struct's own local SPIFFS
-  // file, which degrades safely (unknown/missing JSON keys are silently ignored,
-  // same as every other field here).
 };
 
 #define MIDAD_APP_SETTINGS MidadAppSettings::getInstance()
