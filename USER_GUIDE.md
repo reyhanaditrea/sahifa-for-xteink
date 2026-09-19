@@ -21,14 +21,7 @@ navigation, and features of the device on both supported models, the **Xteink X4
     - [3.3 Browse Files Screen](#33-browse-files-screen)
     - [3.4 My Books \& Apps Screen](#34-my-books--apps-screen)
     - [3.5 File Transfer Screen](#35-file-transfer-screen)
-    - [3.5.1 Calibre Wireless Transfers](#351-calibre-wireless-transfers)
-      - [Installing the Plugin in Calibre](#installing-the-plugin-in-calibre)
-      - [Configuring the Plugin in Calibre](#configuring-the-plugin-in-calibre)
-      - [Uploading Books](#uploading-books)
-      - [Removing a Book](#removing-a-book)
-    - [3.6 Foulad eBooks](#36-foulad-ebooks)
     - [3.7 Built-in Apps](#37-built-in-apps)
-      - [Gym](#gym)
       - [Tasbih](#tasbih)
       - [Stop Watch](#stop-watch)
       - [Games](#games)
@@ -126,8 +119,7 @@ Upon turning the device on for the first time, you will be placed on the **[Home
 
 The Home screen is the main entry point to the firmware: a hero card for the book you're currently reading (cover,
 title, author, progress bar, time read, and estimated time left), a "My Books" row of recent covers below it, and a
-bottom icon menu for **My Books & Apps**, **Stats**, **Files** (or **eBooks**, once [Foulad eBooks](#36-foulad-ebooks)
-is set up), and **Settings**.
+bottom icon menu for **Files**, **Stats**, **Apps**, and **Settings**.
 
 Setting the UI **Language** to Arabic mirrors this entire screen right-to-left — the hero cover, recents row, menu
 order, and status bar all flip to match. See [Arabic & Right-to-Left Reading](#arabic--right-to-left-reading) for
@@ -155,7 +147,7 @@ of the screen. File extensions are displayed alongside each filename, and direct
 
 Reached from the Home screen's **My Books & Apps** icon, this screen shows every book on your SD card as a cover
 grid, alongside a pinned tile for each built-in app you've enabled in **[Settings → Apps](#394-apps)** — Quran,
-Tasbih, Stop Watch, Gym, and Games, in that order, followed by your real books. Pinned app tiles show a solid black
+Tasbih, Stop Watch, and Games, in that order, followed by your real books. Pinned app tiles show a solid black
 cover with the app's name instead of a book cover, and open their app directly instead of the reader.
 
 * Use **Up/Down/Left/Right** to move the selection across the grid.
@@ -166,7 +158,7 @@ cover with the app's name instead of a book cover, and open their app directly i
 ### 3.5 File Transfer Screen
 
 The File Transfer screen allows you to upload and manage files on the device. When you enter the screen, choose **Join
-a Network**, **Calibre Wireless**, or **Create Hotspot**. The reader then starts the web server for the selected mode.
+a Network** or **Create Hotspot**. The reader then starts the web server for the selected mode.
 
 See the [web server docs](./docs/webserver.md) for more information on how to connect to the web server and upload
 files.
@@ -184,105 +176,11 @@ A **Wi-Fi signal strength indicator** (dBm) is displayed on-screen during joined
 > [!TIP]
 > If your EPUBs have compatibility issues, you can run the built-in **EPUB Optimizer** directly from the device to clean up and reprocess books for better rendering.
 
-### 3.5.1 Calibre Wireless Transfers
-
-Foulad eInk supports sending books from Calibre using the CrossPoint Reader device plugin.
-
-#### Installing the Plugin in Calibre
-
-If you don't already have the plugin installed:
-
-1. Head to https://github.com/crosspoint-reader/calibre-plugins/releases to download the latest version of the crosspoint_reader plugin.
-2. Download the zip file.
-3. Open Calibre → Preferences → Plugins → Load plugin from file → Select the zip file.
-4. Restart Calibre.
-
-#### Configuring the Plugin in Calibre
-1. In Calibre select Preferences.
-2. In the Preferences dialog select Plugins.
-3. In Plugins search for "crosspoint".
-4. Click on "Customize plugin".
-5. Update the value for "Host" to match the IP for your device.
-6. Leave the other settings as they are.
-7. [optional] Modify the "Upload path" to point to a subfolder other than the root "/" folder. Enter this as a path relative to the root folder. Example: `/mybooks`
-8. Restart Calibre.
-
-<img width="420" height="385" alt="Image" src="https://github.com/user-attachments/assets/01fc7e33-a9a7-48ba-9e26-2e68d1f9daec" />
-
-#### Uploading Books
-
-To upload a book using the plugin in Calibre:
-
-1. On the device: File Transfer -> Calibre Wireless, then join a network.
-2. Select one or more books.
-3. Right-click on that selection.
-4. Select "Send to Device" > "Send to main memory"
-
-The plugin will connect to your device, create a folder for the book's author in the root folder (or the folder you
-configured for the plugin), then copy the book into that folder.
-
-<img width="783" height="310" alt="Image" src="https://github.com/user-attachments/assets/741b0909-2e1d-4f16-8af0-2c43fbda5ce6" />
-
-#### Removing a Book
-
-Books cannot be removed from your device through Calibre. Use the web interface instead.
-
-### 3.6 Foulad eBooks
-
-Foulad eBooks is a self-hosted OPDS catalog with its own dedicated Home-screen entry point, separate from the general
-[OPDS Servers](#396-opds-servers-multiple-libraries) feature.
-
-**First-time setup:**
-
-1. Go to **Settings → System → Log In to Foulad eBooks**.
-2. Enter your username, then your password. Both fields use a **numeric-only keypad** — Foulad eBooks accounts use
-   numeric credentials, so this isn't a mistake if you were expecting a full keyboard.
-3. The device automatically reboots into the catalog once you're logged in.
-
-Once logged in, the Home screen's **Files** icon becomes an **eBooks** icon that opens the catalog directly.
-
-**Browsing and downloading:**
-
-* Books are shown as a cover grid, same navigation as [My Books & Apps](#34-my-books--apps-screen).
-* If the catalog supports search, a **Search** tile appears in the grid — press **Confirm** on it to type a query.
-* Press **Confirm** on a book to download and open it in one step. Re-selecting a book you've already downloaded opens
-  it immediately without downloading again.
-
-**Logging out:** Settings → System → **Log Out of Foulad eBooks** (with a confirmation prompt). This reverts the Home
-screen's eBooks icon back to **Files**.
-
 ### 3.7 Built-in Apps
 
-Snake, Tetris, Sudoku, Maze, a Gym workout planner, a Tasbih dhikr counter, and a Stop Watch are all built into the
+Snake, Tetris, Sudoku, Maze, a Tasbih dhikr counter, and a Stop Watch are all built into the
 firmware — no download required. Each one is pinned as its own tile in **[My Books & Apps](#34-my-books--apps-screen)**
 once enabled in **Settings → Apps** (see [3.9.4 Apps](#394-apps)).
-
-#### Gym
-
-A 7-day workout planner and set logger.
-
-**Home grid:** Opening Gym shows a 2-column grid — one card per day (a fixed weekday label, a big day number, and
-either the body parts trained that day, an exercise count, or "Rest Day"), plus an **Update** tile in the last slot.
-Use **Up/Down/Left/Right** to move between cards and **Confirm** to open one.
-
-* The first time you open Gym, there's no exercise catalog yet — press **Confirm** to sync it over Wi-Fi.
-* Selecting the **Update** tile (or holding **Back** on the home grid) downloads any missing exercise photos and
-  instructions for exercises already in your plan.
-* Holding **Confirm** on a day toggles it as a **Rest Day** — only possible while that day has no exercises assigned.
-
-**Inside a day:** select **Add Exercise** to browse by body part and add exercises to that day (you can add several in
-a row without leaving the list); select an existing exercise and use **Up/Down** to adjust its target sets and
-**Left/Right** to adjust its target reps; hold **Confirm** on an exercise to remove it from the day.
-
-**Running a workout:** select **Start Workout** to begin. Each screen shows the current exercise, a set-progress
-indicator, the exercise photo (if already downloaded), and your current weight × reps.
-
-* **Up/Down** adjust the weight in 2.5 kg steps (or lb, per your [Weight Unit setting](#394-apps)).
-* **Confirm** logs the current set and advances to the next set or exercise, remembering your last weight/reps for
-  next time.
-* **Back** asks to end the workout early; confirming saves your progress and returns to the Gym home grid.
-
-Reps are fixed per set (pre-filled from your last performance or target) and aren't adjustable mid-workout.
 
 #### Tasbih
 
@@ -317,8 +215,6 @@ The Dictionary screen lists:
 
 * **Look up a word** — type a word on the on-device keyboard and look it up.
 * **Lookup History** — your past lookups.
-* **Download Dictionaries** — browse and install StarDict-format dictionary sets over Wi-Fi. Selecting an installed
-  set removes it (along with its generated lookup index); selecting one not yet installed downloads it.
 * **Definition Text Size** — Small or Large.
 * **Clear History**.
 * One row per installed dictionary — selecting it makes that dictionary the active one used for lookups.
@@ -475,8 +371,6 @@ The Settings screen is organized into five tabs: **Display**, **Reader**, **Cont
 - **Games**: Pins a Games tile — see [Games](#games).
 - **Tasbih**: Pins a Tasbih tile — see [Tasbih](#tasbih).
 - **Stop Watch**: Pins a Stop Watch tile — see [Stop Watch](#stop-watch).
-- **Gym**: Pins a Gym tile — see [Gym](#gym).
-- **Weight Unit**: Kilograms (kg, default) or Pounds (lb) — used throughout the Gym workout screens.
 - **Dictionary**: Opens the [Dictionary](#38-dictionary) screen. Always available; no toggle to hide it.
 - **KOReader Sync**: Opens the KOReader Sync sub-screen — see [3.9.8 KOReader Sync Quick Setup](#398-koreader-sync-quick-setup). Includes a **Sync Behavior** choice between **Smart sync** (default for new configurations, auto-resolves simple push/pull decisions) and **Ask every time** (existing credential files keep this setting when migrated); switch it at any time.
 - **Debug**: Enables rolling diagnostic logs written to the SD card, useful when reporting an issue.
@@ -489,19 +383,17 @@ The Settings screen is organized into five tabs: **Display**, **Reader**, **Cont
 - **Show Hidden Files**: Whether hidden (dot-prefixed) files/folders appear in Browse Files.
 - **Clear Read Books from Recent List**: Automatically remove finished books from the recents row.
 - **Move Finished Books to Read Folder**: Automatically move finished books into a "Read" folder on the SD card.
-- **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers, firmware updates, and OPDS/Foulad eBooks browsing.
+- **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers, firmware updates, and OPDS browsing.
 - **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#396-opds-servers-multiple-libraries) below.
 - **Clear Reading Cache**: Clear the internal SD card cache.
 - **Check for updates**: Check for firmware updates over Wi-Fi. Firmware can also be updated without a USB connection by placing a `firmware.bin` file on the SD card.
 - **SD Card Firmware Update**: Install a firmware update from a `firmware.bin` file placed on the SD card, without needing Wi-Fi.
 - **Language**: Set the UI language. Foulad eInk ships **English and Arabic** — a deliberately small, fully-translated
   set rather than a long list of partial translations. See [Arabic & Right-to-Left Reading](#arabic--right-to-left-reading).
-- **Log In to Foulad eBooks** / **Log Out of Foulad eBooks**: See [3.6 Foulad eBooks](#36-foulad-ebooks).
 
 #### 3.9.6 OPDS Servers (Multiple Libraries)
 
-Foulad eInk supports saving multiple OPDS servers and switching between them when browsing catalogs. This is separate
-from [Foulad eBooks](#36-foulad-ebooks), which has its own dedicated login flow.
+Foulad eInk supports saving multiple OPDS servers and switching between them when browsing catalogs.
 
 1. Open **Settings -> System -> OPDS Servers**.
 

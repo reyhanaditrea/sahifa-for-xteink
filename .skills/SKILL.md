@@ -694,7 +694,7 @@ Midad benefits heavily from CrossPoint, so when we discover a fix or improvement
 * Device/HAL improvements that apply to CrossPoint-supported hardware generally, not just Midad's
 * Correctness fixes unrelated to Midad services or branding
 
-**Stays in Midad, never pushed upstream just to shrink the fork** — Midad Cloud, BLE services, Foulad identity/device tracking, branding, apps, or fork-specific HAL APIs (e.g. `forceCleanBaseOnHalf` — see the "Local simulator patches" list below for why that one was already tried and correctly rejected).
+**Stays in Midad, never pushed upstream just to shrink the fork** — Midad Cloud, branding, apps, or fork-specific HAL APIs (e.g. `forceCleanBaseOnHalf` — see the "Local simulator patches" list below for why that one was already tried and correctly rejected).
 
 **Workflow — never skip straight to publishing:**
 1. Identify the upstream contribution candidate.

@@ -17,17 +17,7 @@
 
 <p align="center">
   <a href="https://www.reddit.com/r/midad_one/s/5cHfK3pZhm"><img src="https://img.shields.io/badge/JOIN%20THE-REDDIT%20COMMUNITY-FF4500?style=for-the-badge&logo=reddit&logoColor=white&labelColor=555555" alt="Join the Midad community on Reddit"></a>
-  <a href="https://testflight.apple.com/join/6xSuHYbe"><img src="https://img.shields.io/badge/IOS%20BETA-TESTFLIGHT-0D96F6?style=for-the-badge&logo=apple&logoColor=white&labelColor=555555" alt="Join the Midad iOS beta on TestFlight"></a>
 </p>
-
-<p align="center">
-  <sub>
-    The <b>Midad app</b> pairs with your reader over Wi-Fi — sign in by QR, manage your library and news feeds,
-    and pick up your page on either device.
-  </sub>
-</p>
-
-<br>
 
 <p align="center">
   <a href="https://github.com/sfoulad/midad-by-foulad/releases"><img src="https://img.shields.io/github/v/release/sfoulad/midad-by-foulad?label=release&color=blue&style=flat-square" alt="Latest release"></a>
@@ -95,7 +85,7 @@
 </p>
 <h3 align="center">📚 Books and apps, in one place.</h3>
 <p align="center">
-  Every book sits in the same grid as Tasbih, Stop Watch, Gym, and Games — no separate launcher, no digging through menus.
+  Every book sits in the same grid as Tasbih, Stop Watch, and Games — no separate launcher, no digging through menus.
 </p>
 
 <br>
@@ -105,7 +95,7 @@
 </p>
 <h3 align="center">🎛️ Enable and disable apps, to taste.</h3>
 <p align="center">
-  Don't want Games or Gym cluttering your library? Turn off whatever you don't use, right from Settings — Apps.
+  Don't want Games cluttering your library? Turn off whatever you don't use, right from Settings — Apps.
 </p>
 
 <br>
@@ -117,17 +107,6 @@
 <p align="center">
   Snake, Tetris, Sudoku, and Maze, built right into the firmware — pinned in My Books & Apps for whenever you want a
   break from reading.
-</p>
-
-<br>
-
-<p align="center">
-  <img src="./docs/images/gym/gym-slideshow.gif" width="380" alt="Gym workout planner on Midad">
-</p>
-<h3 align="center">🏋️ Plan your week, log every set.</h3>
-<p align="center">
-  A 7-day workout split with a day at a glance — muscle group, exercise count, rest days — then a per-set logger
-  that remembers your last weight and reps, and shows the exercise photo right on the page.
 </p>
 
 <br>
@@ -170,13 +149,10 @@
 - 🕌 **A fully Arabic interface** — mirrored, translated, and with page-turn buttons that swap direction automatically so "forward" is always where your thumb expects it.
 - 🌍 **Reads Arabic, Persian, Ottoman Turkish, and Kurdish correctly** — proper letter shaping and right-to-left text, everywhere it shows up.
 - 📖 **A bundled Quran** — Uthmani script, ayah and surah markers, and justified lines that stretch the way a real mushaf does.
-- ☁️ **Midad library** — sign in by scanning a QR code with the Midad app, then browse your catalogue as a cover grid, search it by name, and download straight to the device.
-- 🔄 **Cross-device page sync** — put the book down on the reader and carry on in the app, or the other way round. Sync from the reading drawer and it lands on the right page, not just the right percentage.
-- 📰 **News** — subscribe to feeds in the Midad app and read them on the device as a proper book, pictures and all. Each open fetches the current articles.
+- 📰 **News** — add RSS/Atom feeds on the device and read them as a proper book, pictures and all. Each open fetches the current articles.
 - ⌨️ **An Arabic keyboard** — a full Arabic layout with right-to-left entry, so you can search an Arabic library by typing its titles.
 - 📊 **Reading stats** — streaks, a monthly heatmap, and per-book progress.
 - 🎮 **Four built-in games** — Snake, Tetris, Sudoku, and Maze.
-- 🏋️ **Gym workout planner** — a 7-day split, per-set weight/reps logging, and exercise photos, synced from a shared catalog.
 - 📿 **Tasbih counter, Stop Watch, and Dictionary** — a dhikr counter with daily/yearly stats, a lap-tracking stopwatch, and offline word lookup right from the reading drawer.
 - 🎨 **A live Dashboard screensaver** — clock, battery, current book, streak, and a rotating ayah, instead of a static sleep screen.
 - 🔋 **Free, open source, and self-updating** — flash it once, and it keeps itself up to date over Wi-Fi from here on out.
@@ -211,17 +187,10 @@
 **🧩 Apps**
 
 - Snake, Tetris, Sudoku, and Maze, pinned as their own tile in your library — no setup, nothing to install.
-- **Gym**: a 7-day workout split shown as a day-at-a-glance grid (muscle group, exercise count, rest days), an exercise picker synced from a shared catalog, and a per-set logger that remembers your last weight/reps and shows the exercise photo on the page.
 - **Tasbih**: a dhikr counter with a top-count leaderboard and daily/yearly totals.
 - **Stop Watch**: start/pause, lap tracking, and a MM:SS:CS Casio-style display.
 - **Pomodoro**: the same timer in a work/break cadence, for reading or studying in blocks.
-- **News**: feeds you subscribe to in the Midad app, delivered to the reader as an EPUB — one chapter per article, with the publisher's picture. Off by default; subscriptions are managed in the app, never on the device.
-
-**☁️ Midad library**
-
-- A dedicated home-screen entry that opens your catalogue directly — cover-grid browsing, a search row on every feed, pagination, and one-tap downloads that keep the catalogue's cover art.
-- **Sign in by QR**: scan the code with the Midad app on your phone. No password typed on an on-screen keyboard, and signing out from the app signs the reader out too.
-- **Reading position sync**: the reader sends where you stopped and takes back the furthest point across your devices, resolved by spine anchor rather than a bare percentage so it lands on the right page in a long book.
+- **News**: RSS/Atom feeds, built-in or added on the device, delivered to the reader as an EPUB — one chapter per article, with the publisher's picture. Off by default.
 
 **📶 Wireless**
 
@@ -232,7 +201,6 @@
 - WebDAV handler
 - AP mode (hotspot) and STA mode (join existing Wi-Fi), both with QR helpers
 - Calibre wireless connect flow
-- OPDS browser with search, pagination, and direct download. Catalogues are added by signing in with the Midad app rather than typed in on the device.
 - OTA update checks and installs from this repo's GitHub releases — the updater restarts the device into a clean-memory state before downloading, so updates install reliably even after long reading sessions
 
 **🎨 Customization**

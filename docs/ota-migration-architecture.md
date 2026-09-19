@@ -222,7 +222,7 @@ exit code alone).
      previously acknowledged one," it returns `Normal` or `EnterRestrictedRecovery`.
   3. `src/main.cpp` gates only the silent-reboot-into-OTA-install branch on this
      plan (`SILENT_REBOOT_TARGET_OTA_INSTALL`/`OTA_CHECK`) -- reading, Home,
-     Settings, networking, and BLE all keep working normally after a rollback.
+     Settings and networking keep working normally after a rollback.
   4. When the plan says `EnterRestrictedRecovery`,
      `src/activities/settings/OtaRollbackRecoveryActivity.{h,cpp}` traps the user in
      a full-screen, no-"Back" prompt with two choices: **recover via SD card**
