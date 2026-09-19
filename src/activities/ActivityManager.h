@@ -139,7 +139,6 @@ class ActivityManager {
   // boot-fresh heap, then silent-restarts back into News.
   void goToNewsFullText();
   void goToPrayer();
-  void goToDictionary();
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();

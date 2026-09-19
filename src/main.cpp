@@ -212,17 +212,17 @@ constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
 constexpr uint32_t SILENT_REBOOT_TARGET_OTA_INSTALL = 2;
 constexpr uint32_t SILENT_REBOOT_TARGET_OTA_CHECK = 3;
 constexpr uint32_t SILENT_REBOOT_TARGET_FILE_TRANSFER = 4;
-constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 7;
-constexpr uint32_t SILENT_REBOOT_TARGET_DICTIONARY = 8;
-constexpr uint32_t SILENT_REBOOT_TARGET_NEWS = 9;
-constexpr uint32_t SILENT_REBOOT_TARGET_PRAYER = 10;
-constexpr uint32_t SILENT_REBOOT_TARGET_NEWS_FULLTEXT = 11;
+constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 5;
+constexpr uint32_t SILENT_REBOOT_TARGET_NEWS = 6;
+constexpr uint32_t SILENT_REBOOT_TARGET_PRAYER = 7;
+constexpr uint32_t SILENT_REBOOT_TARGET_NEWS_FULLTEXT = 8;
 constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_NEWS_FULLTEXT;
 // Must always name the highest target above. The boot-time range check below uses it
 // to reject uninitialised RTC memory on a cold boot, and a target outside the range
 // is silently treated as 0 -- which is HOME. Adding a target without moving this
-// makes the new one reboot to the home screen instead, with nothing logged: exactly
-// what shipped when NEWS=9 was added while the check still read <= DICTIONARY (8).
+// makes the new one reboot to the home screen instead, with nothing logged -- which
+// has shipped once already. Targets only live across a single reboot, so they can be
+// renumbered freely.
 
 // How the device is coming back to life, resolved once at boot. Both resume
 // flows suppress the splash and leave the panel holding its pre-boot frame; a
@@ -358,16 +358,6 @@ void silentRestartToSettings() {
   silentRebootTarget = SILENT_REBOOT_TARGET_SETTINGS;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=settings)");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  delay(50);
-  ESP.restart();
-}
-
-void silentRestartToDictionary() {
-  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
-  silentRebootTarget = SILENT_REBOOT_TARGET_DICTIONARY;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
-  LOG_DBG("MAIN", "Silent restart (target=dictionary)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
@@ -889,9 +879,6 @@ void setup() {
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
     // Return-to-caller: the font download store reboots here instead of Home.
     activityManager.goToSettings();
-  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_DICTIONARY) {
-    // Return-to-caller: the dictionary download store reboots here instead of Home.
-    activityManager.goToDictionary();
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
     // through to the sleep-wake "resume reader" logic, which fires on stale

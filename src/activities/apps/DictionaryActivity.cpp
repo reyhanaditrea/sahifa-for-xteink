@@ -11,20 +11,18 @@
 #include "activities/reader/DictionaryDefinitionActivity.h"
 #include "activities/reader/DictionaryHistoryActivity.h"
 #include "activities/reader/DictionarySuggestionsActivity.h"
-#include "activities/settings/DictionaryDownloadActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
-// Foulad eInk hub layout: lookup + history + store first, then vcodex's
-// text-size/clear-history actions, then the dictionary list.
-constexpr int DICTIONARY_ACTION_COUNT = 5;
+// Hub layout: lookup + history first, then vcodex's text-size/clear-history
+// actions, then the dictionary list. Dictionaries are added over File Transfer.
+constexpr int DICTIONARY_ACTION_COUNT = 4;
 constexpr int ACTION_LOOKUP_WORD = 0;
 constexpr int ACTION_LOOKUP_HISTORY = 1;
-constexpr int ACTION_DOWNLOAD_DICTS = 2;
-constexpr int ACTION_DEFINITION_TEXT_SIZE = 3;
-constexpr int ACTION_CLEAR_HISTORY = 4;
+constexpr int ACTION_DEFINITION_TEXT_SIZE = 2;
+constexpr int ACTION_CLEAR_HISTORY = 3;
 }  // namespace
 
 void DictionaryActivity::onEnter() {
@@ -102,15 +100,6 @@ void DictionaryActivity::selectCurrent() {
     startActivityForResult(
         std::make_unique<DictionaryHistoryActivity>(renderer, mappedInput, nullptr, SETTINGS.getReaderFontId(), 0, 0),
         [this](const ActivityResult&) { requestUpdate(); });
-    return;
-  }
-  if (selectedIndex == ACTION_DOWNLOAD_DICTS) {
-    startActivityForResult(std::make_unique<DictionaryDownloadActivity>(renderer, mappedInput),
-                           [this](const ActivityResult&) {
-                             // Newly downloaded sets need a rescan to appear in the list.
-                             DICTIONARIES.scan();
-                             requestUpdate();
-                           });
     return;
   }
   if (selectedIndex == ACTION_DEFINITION_TEXT_SIZE) {
@@ -233,7 +222,6 @@ void DictionaryActivity::render(RenderLock&&) {
         [](int index) {
           if (index == ACTION_LOOKUP_WORD) return std::string(tr(STR_LOOKUP_WORD));
           if (index == ACTION_LOOKUP_HISTORY) return std::string(tr(STR_LOOKUP_HISTORY));
-          if (index == ACTION_DOWNLOAD_DICTS) return std::string(tr(STR_DOWNLOAD_DICTIONARIES));
           if (index == ACTION_DEFINITION_TEXT_SIZE) return std::string(tr(STR_DEFINITION_TEXT_SIZE));
           return std::string(tr(STR_CLEAR_HISTORY));
         },
@@ -254,7 +242,6 @@ void DictionaryActivity::render(RenderLock&&) {
         [&entries](int index) {
           if (index == ACTION_LOOKUP_WORD) return std::string(tr(STR_LOOKUP_WORD));
           if (index == ACTION_LOOKUP_HISTORY) return std::string(tr(STR_LOOKUP_HISTORY));
-          if (index == ACTION_DOWNLOAD_DICTS) return std::string(tr(STR_DOWNLOAD_DICTIONARIES));
           if (index == ACTION_DEFINITION_TEXT_SIZE) return std::string(tr(STR_DEFINITION_TEXT_SIZE));
           if (index == ACTION_CLEAR_HISTORY) return std::string(tr(STR_CLEAR_HISTORY));
           return entries[index - DICTIONARY_ACTION_COUNT].languageId;

@@ -14,17 +14,8 @@
 // support a new manifest schema.
 #define FONTS_MANIFEST_VERSION 1
 
-// Primary font source: the Foulad eBooks catalog (same manifest schema as the
-// legacy source, plus a per-family "language" field driving the Arabic/English
-// filter). Plain http for the same reason as FOULAD_EBOOKS_URL -- see
-// src/FouladEbooksConfig.h. Overridable for local testing.
-#ifndef FOULAD_FONTS_CATALOG_URL
-#define FOULAD_FONTS_CATALOG_URL "http://midad.one/api/fonts/catalog"
-#endif
-
 #ifndef FONT_MANIFEST_URL
-// LEGACY FALLBACK, tried only when the Foulad eBooks catalog is unreachable:
-// manifest + .cpfont assets published by .github/workflows/release-fonts.yml
+// Manifest + .cpfont assets published by .github/workflows/release-fonts.yml
 // to the crosspoint-fonts repo under the "sd-fonts-m<META>-b<BIN>" tag. The tag
 // pattern must stay in sync with the workflow; it derives its version numbers
 // from lib/EpdFont/scripts/cpfont_version.py.
@@ -77,8 +68,8 @@ class FontDownloadActivity : public Activity {
     size_t totalSize = 0;
     bool installed = false;
     bool hasUpdate = false;
-    // From the catalog's per-family "language" field ("arabic"/"english",
-    // missing = english). Drives the list's language filter.
+    // True when the family's "scripts" list includes "arabic". Drives the list's
+    // language filter.
     bool arabic = false;
   };
 

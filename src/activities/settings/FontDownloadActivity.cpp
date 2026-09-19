@@ -70,15 +70,7 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
 
 // --- Manifest fetching ---
 
-bool FontDownloadActivity::fetchAndParseManifest() {
-  // Foulad eBooks catalog first; the legacy crosspoint-fonts manifest stays as
-  // a fallback so Manage Fonts keeps working even if foulad.one is down (or
-  // this firmware ships before the catalog endpoint does).
-  if (fetchManifestFrom(FOULAD_FONTS_CATALOG_URL)) return true;
-  LOG_ERR("FONT", "Foulad eBooks catalog unreachable, falling back to legacy manifest");
-  if (!fetchManifestFrom(FONT_MANIFEST_URL)) return false;
-  return true;
-}
+bool FontDownloadActivity::fetchAndParseManifest() { return fetchManifestFrom(FONT_MANIFEST_URL); }
 
 bool FontDownloadActivity::fetchManifestFrom(const char* url) {
   // Download manifest to a temp file on SD card to avoid holding both
@@ -131,9 +123,12 @@ bool FontDownloadActivity::fetchManifestFrom(const char* url) {
     ManifestFamily family;
     family.name = fObj["name"] | "";
     family.description = fObj["description"] | "";
-    // Foulad eBooks catalog extension; absent in the legacy manifest, whose
-    // fonts are all Latin-script -> default english.
-    family.arabic = std::string(fObj["language"] | "english") == "arabic";
+    // Arabic-script families (Amiri, Noto Naskh/Kufi Arabic, ...) go under the
+    // Arabic tab; everything else, including a family with no "scripts" list,
+    // under English.
+    for (JsonVariant script : fObj["scripts"].as<JsonArray>()) {
+      if (script.as<std::string>() == "arabic") family.arabic = true;
+    }
 
     for (JsonVariant s : fObj["styles"].as<JsonArray>()) {
       family.styles.push_back(s.as<std::string>());
@@ -184,7 +179,7 @@ bool FontDownloadActivity::fetchManifestFrom(const char* url) {
   }
 
   // Default the filter to the UI language's script, then clamp to a tab that
-  // actually has fonts (the legacy manifest has no Arabic families at all).
+  // actually has fonts.
   showArabic_ = I18N.isRtl();
   bool anyArabic = false, anyEnglish = false;
   for (const auto& f : families_) (f.arabic ? anyArabic : anyEnglish) = true;
