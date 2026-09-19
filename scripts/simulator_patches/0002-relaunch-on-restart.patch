@@ -1,0 +1,308 @@
+From 8dc27e68d9250bfc6d65a21dc59354665ee73c44 Mon Sep 17 00:00:00 2001
+From: patch <patch@local>
+Date: Sat, 19 Sep 2026 20:30:56 +0700
+Subject: [PATCH] Relaunch on ESP.restart() and keep RTC memory across it
+
+ESP.restart(), esp_restart() and HalSystem::restart() did nothing (or exited),
+so Midad's silent restarts (File Transfer, News, Library, ...) hung the
+simulator. They now relaunch the process like a deep-sleep wake does, without
+a wake reason.
+
+RTC_NOINIT_ATTR variables go in one section that is saved before the relaunch
+and restored before static initialisers run, so the restart target survives
+as it does in RTC memory on the device. Deep-sleep wakes keep it too. Linux
+only; elsewhere the relaunch still happens but starts cold.
+
+The input and screenshot schedules run on a clock that carries on across a
+restart, so one script can span it.
+---
+ src/Arduino.h              | 10 +++-
+ src/HalDisplay.cpp         | 13 +++++-
+ src/HalGPIO.cpp            |  9 +++-
+ src/HalSystem.cpp          |  4 +-
+ src/SimulatorLifecycle.cpp | 94 ++++++++++++++++++++++++++++++++++----
+ src/SimulatorLifecycle.h   | 11 +++++
+ src/esp_system.h           |  4 +-
+ 7 files changed, 131 insertions(+), 14 deletions(-)
+
+diff --git a/src/Arduino.h b/src/Arduino.h
+index 8dc44a9..0d56212 100644
+--- a/src/Arduino.h
++++ b/src/Arduino.h
+@@ -10,11 +10,19 @@
+ #include <string>
+ #include <thread>
+ 
++#include "SimulatorLifecycle.h"
++
+ #define PROGMEM
+ #define ICACHE_RODATA_ATTR
+ #define IRAM_ATTR
+ #define DRAM_ATTR
++#if defined(__linux__)
++// One section, so SimulatorLifecycle can carry it across a relaunch the way RTC
++// memory survives ESP.restart() and deep sleep on the device.
++#define RTC_NOINIT_ATTR __attribute__((section("sim_rtc_noinit")))
++#else
+ #define RTC_NOINIT_ATTR
++#endif
+ #define PGM_P const char *
+ #define PSTR(s) (s)
+ 
+@@ -60,7 +68,7 @@ struct ESPMock {
+   }
+ 
+   uint32_t getFreeHeap() { return heapValue("CROSSPOINT_SIM_FREE_HEAP"); }
+-  void restart() {}
++  void restart() { SimulatorLifecycle::rebootAsRestart(); }
+   uint32_t getHeapSize() { return HEAP_SIZE; }
+   uint32_t getMinFreeHeap() { return getFreeHeap(); }
+   uint32_t getMaxAllocHeap() {
+diff --git a/src/HalDisplay.cpp b/src/HalDisplay.cpp
+index 5885e5a..b11911b 100644
+--- a/src/HalDisplay.cpp
++++ b/src/HalDisplay.cpp
+@@ -14,6 +14,8 @@
+ #include <thread>
+ #include <vector>
+ 
++#include "SimulatorLifecycle.h"
++
+ static SDL_Window *window = nullptr;
+ static SDL_Renderer *sdl_renderer = nullptr;
+ static SDL_Texture *texture = nullptr;
+@@ -91,11 +93,18 @@ void initializeScreenshotEvents() {
+       break;
+     start = end + 1;
+   }
++
++  // After an ESP.restart() the schedule carries on; what was taken stays taken.
++  const unsigned long alreadyRan = SimulatorLifecycle::scriptClockOffsetMs();
++  for (auto &event : screenshotEvents) {
++    if (alreadyRan > 0 && event.atMs <= alreadyRan)
++      event.handled = true;
++  }
+ }
+ 
+ bool hasDueScreenshot() {
+   initializeScreenshotEvents();
+-  const unsigned long now = millis();
++  const unsigned long now = SimulatorLifecycle::scriptClockMs();
+   for (const auto &event : screenshotEvents) {
+     if (!event.handled && event.atMs <= now)
+       return true;
+@@ -142,7 +151,7 @@ bool saveRendererBmp(const std::string &path) {
+ }
+ 
+ void captureDueScreenshots() {
+-  const unsigned long now = millis();
++  const unsigned long now = SimulatorLifecycle::scriptClockMs();
+   for (auto &event : screenshotEvents) {
+     if (event.handled || event.atMs > now)
+       continue;
+diff --git a/src/HalGPIO.cpp b/src/HalGPIO.cpp
+index 7073cb3..7b223b4 100644
+--- a/src/HalGPIO.cpp
++++ b/src/HalGPIO.cpp
+@@ -380,11 +380,18 @@ void initializeSyntheticEvents() {
+             [](const SyntheticEvent &a, const SyntheticEvent &b) {
+               return a.atMs < b.atMs;
+             });
++
++  // After an ESP.restart() the script carries on; what already ran stays run.
++  const unsigned long alreadyRan = SimulatorLifecycle::scriptClockOffsetMs();
++  for (auto &event : syntheticEvents) {
++    if (alreadyRan > 0 && event.atMs <= alreadyRan)
++      event.handled = true;
++  }
+ }
+ 
+ void processSyntheticEvents() {
+   initializeSyntheticEvents();
+-  const unsigned long now = millis();
++  const unsigned long now = SimulatorLifecycle::scriptClockMs();
+   for (auto &event : syntheticEvents) {
+     if (event.handled || event.atMs > now)
+       continue;
+diff --git a/src/HalSystem.cpp b/src/HalSystem.cpp
+index 5a39345..48dd845 100644
+--- a/src/HalSystem.cpp
++++ b/src/HalSystem.cpp
+@@ -1,7 +1,9 @@
+ #include "HalSystem.h"
+ 
++#include "SimulatorLifecycle.h"
++
+ void HalSystem::begin() {}
+-void HalSystem::restart() { exit(0); }
++void HalSystem::restart() { SimulatorLifecycle::rebootAsRestart(); }
+ void HalSystem::checkPanic() {}
+ void HalSystem::clearPanic() {}
+ std::string HalSystem::getPanicInfo(bool full) { return {}; }
+diff --git a/src/SimulatorLifecycle.cpp b/src/SimulatorLifecycle.cpp
+index 03c4fc7..1a3bdfe 100644
+--- a/src/SimulatorLifecycle.cpp
++++ b/src/SimulatorLifecycle.cpp
+@@ -3,8 +3,11 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#include <string>
+ #include <unistd.h>
+ 
++#include "Arduino.h"
++
+ namespace {
+ 
+ constexpr const char *kWakeReasonEnv = "CROSSPOINT_SIM_WAKE_REASON";
+@@ -14,8 +17,75 @@ constexpr const char *kInputScriptAfterWakeEnv =
+ constexpr const char *kScreenshotsEnv = "CROSSPOINT_SIM_SCREENSHOTS";
+ constexpr const char *kScreenshotsAfterWakeEnv =
+     "CROSSPOINT_SIM_SCREENSHOTS_AFTER_WAKE";
++constexpr const char *kScriptOffsetEnv = "CROSSPOINT_SIM_SCRIPT_OFFSET_MS";
++constexpr const char *kRtcFileEnv = "CROSSPOINT_SIM_RTC_FILE";
+ char **gArgv = nullptr;
+ 
++#if defined(__linux__)
++// Bounds of the RTC_NOINIT_ATTR section (see Arduino.h); the linker provides
++// them. Weak, so a firmware with no RTC variables still links.
++extern "C" {
++extern char __start_sim_rtc_noinit[] __attribute__((weak));
++extern char __stop_sim_rtc_noinit[] __attribute__((weak));
++}
++
++size_t rtcSize() {
++  if (!__start_sim_rtc_noinit || !__stop_sim_rtc_noinit)
++    return 0;
++  return static_cast<size_t>(__stop_sim_rtc_noinit - __start_sim_rtc_noinit);
++}
++
++void saveRtcMemory() {
++  const size_t size = rtcSize();
++  if (size == 0)
++    return;
++  char path[] = "/tmp/crosspoint-sim-rtc-XXXXXX";
++  const int fd = mkstemp(path);
++  if (fd < 0)
++    return;
++  const bool ok =
++      write(fd, __start_sim_rtc_noinit, size) == static_cast<ssize_t>(size);
++  close(fd);
++  if (ok) {
++    setenv(kRtcFileEnv, path, 1);
++  } else {
++    unlink(path);
++  }
++}
++
++// Runs before the firmware's static initialisers, so nothing sees the memory
++// before it is restored. A cold boot has no file and keeps the zeroed section.
++__attribute__((constructor(101))) void restoreRtcMemory() {
++  const char *path = std::getenv(kRtcFileEnv);
++  if (!path)
++    return;
++  const size_t size = rtcSize();
++  if (FILE *file = std::fopen(path, "rb")) {
++    std::string saved(size + 1, '\0');
++    // A different size means a different binary wrote it: start cold instead.
++    if (std::fread(saved.data(), 1, size + 1, file) == size)
++      std::memcpy(__start_sim_rtc_noinit, saved.data(), size);
++    std::fclose(file);
++  }
++  unlink(path);
++  unsetenv(kRtcFileEnv);
++}
++#else
++void saveRtcMemory() {}
++#endif
++
++[[noreturn]] void relaunch() {
++  if (!gArgv || !gArgv[0]) {
++    std::fputs("SimulatorLifecycle: missing argv for reboot\n", stderr);
++    _exit(1);
++  }
++  saveRtcMemory();
++  execvp(gArgv[0], gArgv);
++
++  std::perror("execvp");
++  _exit(1);
++}
++
+ void promoteAfterWakeValue(const char *target, const char *afterWake) {
+   const char *value = std::getenv(afterWake);
+   if (value) {
+@@ -46,11 +116,6 @@ WakeReason consumeWakeReason() {
+ }
+ 
+ [[noreturn]] void rebootAsPowerWake() {
+-  if (!gArgv || !gArgv[0]) {
+-    std::fputs("SimulatorLifecycle: missing argv for reboot\n", stderr);
+-    _exit(1);
+-  }
+-
+   setenv(kWakeReasonEnv, "power", 1);
+   // A deep-sleep wake is a fresh process. Do not replay the pre-sleep script,
+   // which would otherwise put every relaunched process back to sleep forever.
+@@ -58,10 +123,23 @@ WakeReason consumeWakeReason() {
+   // or terminate the relaunched instance.
+   promoteAfterWakeValue(kInputScriptEnv, kInputScriptAfterWakeEnv);
+   promoteAfterWakeValue(kScreenshotsEnv, kScreenshotsAfterWakeEnv);
+-  execvp(gArgv[0], gArgv);
++  unsetenv(kScriptOffsetEnv);
++  relaunch();
++}
+ 
+-  std::perror("execvp");
+-  _exit(1);
++[[noreturn]] void rebootAsRestart() {
++  setenv(kScriptOffsetEnv, std::to_string(scriptClockMs()).c_str(), 1);
++  relaunch();
++}
++
++unsigned long scriptClockOffsetMs() {
++  static const unsigned long offset = [] {
++    const char *value = std::getenv(kScriptOffsetEnv);
++    return value ? std::strtoul(value, nullptr, 10) : 0UL;
++  }();
++  return offset;
+ }
+ 
++unsigned long scriptClockMs() { return millis() + scriptClockOffsetMs(); }
++
+ } // namespace SimulatorLifecycle
+diff --git a/src/SimulatorLifecycle.h b/src/SimulatorLifecycle.h
+index 5ab7350..6a443c2 100644
+--- a/src/SimulatorLifecycle.h
++++ b/src/SimulatorLifecycle.h
+@@ -8,4 +8,15 @@ void initProcessArgs(char** argv);
+ WakeReason consumeWakeReason();
+ [[noreturn]] void rebootAsPowerWake();
+ 
++// ESP.restart(): relaunch without a wake reason. RTC_NOINIT memory survives, and
++// the input/screenshot schedules carry on from where they were, so one script
++// can span the restart.
++[[noreturn]] void rebootAsRestart();
++
++// millis() plus the time spent in the processes before an ESP.restart(). The
++// input and screenshot schedules run on this clock.
++unsigned long scriptClockMs();
++// Schedule entries at or before this already ran in an earlier process.
++unsigned long scriptClockOffsetMs();
++
+ }  // namespace SimulatorLifecycle
+diff --git a/src/esp_system.h b/src/esp_system.h
+index ef51471..56de247 100644
+--- a/src/esp_system.h
++++ b/src/esp_system.h
+@@ -1,4 +1,6 @@
+ #pragma once
+ #include <cstdint>
+-inline void esp_restart() {}
++
++#include "SimulatorLifecycle.h"
++inline void esp_restart() { SimulatorLifecycle::rebootAsRestart(); }
+ inline uint32_t esp_get_free_heap_size() { return 1000000; }
+\ No newline at end of file
+-- 
+2.43.0
+
