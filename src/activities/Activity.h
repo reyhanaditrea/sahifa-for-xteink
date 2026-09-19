@@ -53,6 +53,9 @@ class Activity {
   // true) -- a literal per override, not RTTI, so it stays meaningful after mangling.
   virtual const char* activityDebugName() const { return "Activity"; }
   virtual bool isReaderActivity() const { return false; }
+  // A file to reopen when the device wakes, for screens that are not readers but
+  // should still come back after a sleep (the image viewer). Empty = wake to Home.
+  virtual std::string wakeResumePath() const { return {}; }
   // True for the reading surfaces night mode inverts (EPUB/TXT/XTC). Resolved
   // per render by ActivityManager, so menus, overlays, and every other screen
   // keep normal polarity without managing the display flag themselves.

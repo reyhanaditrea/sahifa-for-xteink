@@ -47,6 +47,10 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   // document once opened.
   int16_t pendingSyncJumpSpine = -1;
   bool lastSleepFromReader = false;
+  // Image the viewer was showing when the device went to sleep, reopened on wake.
+  // Kept apart from openEpubPath: that one is the book the sleep screen draws its
+  // cover and stats from, and looking at an image must not replace it.
+  std::string lastSleepImagePath;
   bool showBootScreen = true;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }

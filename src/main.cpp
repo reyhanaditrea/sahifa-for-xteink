@@ -486,6 +486,7 @@ static bool loadSleepFrameBuffer() {
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+  APP_STATE.lastSleepImagePath = activityManager.wakeResumePath();
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -874,6 +875,15 @@ void setup() {
   // Output polarity is resolved per render by ActivityManager (night mode
   // inverts only the reading surfaces), so nothing to restore here.
 
+  // One-shot, whichever branch below runs: a wake that skips the image (Back held,
+  // a silent reboot) must not leave it to reopen on some later power-on. Cleared
+  // before opening, too, so an image that crashes the viewer can't loop the boot.
+  std::string sleepImagePath;
+  if (!APP_STATE.lastSleepImagePath.empty()) {
+    sleepImagePath.swap(APP_STATE.lastSleepImagePath);
+    APP_STATE.saveToFile();
+  }
+
   if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(
@@ -948,6 +958,9 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
+  } else if (!sleepImagePath.empty() && !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+    // Slept while viewing an image: reopen it.
+    activityManager.goToReader(std::move(sleepImagePath), allowFastInitialReaderRefresh);
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity

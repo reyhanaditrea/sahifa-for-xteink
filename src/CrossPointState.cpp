@@ -47,6 +47,7 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["pendingSyncJumpPercent"] = pendingSyncJumpPercent;
   doc["pendingSyncJumpSpine"] = pendingSyncJumpSpine;
   doc["lastSleepFromReader"] = lastSleepFromReader;
+  doc["lastSleepImagePath"] = lastSleepImagePath;
   doc["showBootScreen"] = showBootScreen;
 }
 
@@ -90,6 +91,7 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
   pendingSyncJumpPercent = doc["pendingSyncJumpPercent"] | static_cast<uint8_t>(0);
   pendingSyncJumpSpine = doc["pendingSyncJumpSpine"] | static_cast<int16_t>(-1);
   lastSleepFromReader = doc["lastSleepFromReader"] | false;
+  lastSleepImagePath = doc["lastSleepImagePath"] | "";
   showBootScreen = doc["showBootScreen"] | true;
   return true;
 }

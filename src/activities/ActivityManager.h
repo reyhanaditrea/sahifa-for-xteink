@@ -168,6 +168,7 @@ class ActivityManager {
   bool preventAutoSleep() const;
   const char* currentActivityDebugName() const;
   bool isReaderActivity() const;
+  std::string wakeResumePath() const;
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
