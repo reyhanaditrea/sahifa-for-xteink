@@ -5,15 +5,14 @@ transfer, device settings, Wi-Fi/OPDS management, and SD-card font management.
 
 ## Overview
 
-The web server is available while the device is in **File Transfer** or
-**Calibre Wireless** mode. It can:
+The web server is available while the device is in **File Transfer** mode. It can:
 
 - Upload, download, rename, move, and delete files on the SD card
 - Create folders
 - Edit many device settings from a browser
 - Manage saved Wi-Fi networks and OPDS servers
 - Upload and delete `.cpfont` SD-card font families
-- Accept WebDAV clients and Calibre wireless uploads
+- Accept WebDAV clients
 
 The server does not require authentication. Use it only on trusted private
 networks or in hotspot mode when you control who is connected.
@@ -26,7 +25,6 @@ networks or in hotspot mode when you control who is connected.
 | Mode | Use when |
 |------|----------|
 | **Join Network** | You want the reader to join an existing Wi-Fi network. |
-| **Calibre Wireless** | You want to receive books from the CrossPoint Calibre plugin workflow. |
 | **Create Hotspot** | You want the reader to create its own open Wi-Fi network. |
 
 ## Join Network Mode
@@ -64,16 +62,6 @@ CrossPoint-Reader
 
 The reader displays one QR code for joining the hotspot and another QR code for
 opening the web interface.
-
-## Calibre Wireless Mode
-
-Calibre Wireless starts the same web server in station mode, then displays setup
-instructions and upload progress on the reader. Use this mode with the
-CrossPoint Calibre plugin or other clients that speak the documented WebSocket
-upload protocol.
-
-For Calibre OPDS browsing, add `/opds` to the catalog URL when configuring an
-OPDS server.
 
 ## Web Interface
 
@@ -134,7 +122,7 @@ Endpoint details are documented in [webserver-endpoints.md](./webserver-endpoint
 - The WebSocket upload server runs on port 81.
 - There is no authentication.
 - Anyone on the same network can access the web interface while it is running.
-- The server stops when you exit File Transfer or Calibre Wireless mode.
+- The server stops when you exit File Transfer.
 - Hotspot mode creates an open network for connectivity fallback; disconnect when done.
 
 ## Tips

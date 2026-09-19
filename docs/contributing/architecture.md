@@ -168,7 +168,6 @@ Modes:
 
 - STA: join existing Wi-Fi network
 - AP: create hotspot
-- Calibre Wireless: STA flow specialized for Calibre plugin uploads
 
 Server behavior:
 

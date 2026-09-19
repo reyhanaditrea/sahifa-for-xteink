@@ -82,8 +82,6 @@ bool isValidDictionaryFilename(const char* name) {
   return false;
 }
 
-constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
-constexpr uint16_t LOCAL_UDP_PORT = 8134;
 
 // Static pointer for WebSocket callback (WebSocketsServer requires C-style callback)
 CrossPointWebServer* wsInstance = nullptr;
@@ -320,9 +318,6 @@ void CrossPointWebServer::begin() {
                                " largest=" + std::to_string(ESP.getMaxAllocHeap()));
   }
 
-  udpActive = udp.begin(LOCAL_UDP_PORT);
-  LOG_DBG("WEB", "Discovery UDP %s on port %d", udpActive ? "enabled" : "failed", LOCAL_UDP_PORT);
-
   // Do not subscribe the serving task to the task watchdog. Arduino WebServer
   // permits five-second client and ACK waits, which can consume the entire
   // default watchdog window on a weak connection. The interrupt watchdog still
@@ -380,11 +375,6 @@ void CrossPointWebServer::stop() {
     LOG_DBG("WEB", "WebSocket server stopped");
   }
 
-  if (udpActive) {
-    udp.stop();
-    udpActive = false;
-  }
-
   // Brief delay to allow any in-flight handleClient() calls to complete
   delay(20);
 
@@ -429,28 +419,6 @@ void CrossPointWebServer::handleClient() {
   // Handle WebSocket events
   if (wsServer) {
     wsServer->loop();
-  }
-
-  // Respond to discovery broadcasts
-  if (udpActive) {
-    int packetSize = udp.parsePacket();
-    if (packetSize > 0) {
-      char buffer[16];
-      int len = udp.read(buffer, sizeof(buffer) - 1);
-      if (len > 0) {
-        buffer[len] = '\0';
-        if (strcmp(buffer, "hello") == 0) {
-          String hostname = WiFi.getHostname();
-          if (hostname.isEmpty()) {
-            hostname = "crosspoint";
-          }
-          String message = "crosspoint (on " + hostname + ");" + String(wsPort);
-          udp.beginPacket(udp.remoteIP(), udp.remotePort());
-          udp.write(reinterpret_cast<const uint8_t*>(message.c_str()), message.length());
-          udp.endPacket();
-        }
-      }
-    }
   }
 }
 
