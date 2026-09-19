@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 // Removing this device from the user's Foulad One account when they sign out.

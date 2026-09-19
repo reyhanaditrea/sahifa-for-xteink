@@ -1,0 +1,175 @@
+From a0cedef1433ea1e536e62f8962374f6bb83e8837 Mon Sep 17 00:00:00 2001
+From: patch <patch@local>
+Date: Sat, 19 Sep 2026 18:06:16 +0700
+Subject: [PATCH] Mirror Midad firmware HAL and SDK additions
+
+Midad's lib/hal and ESP-IDF usage have grown past what upstream shims:
+HalClock system-time helpers, HalSystem::noteHeap, HalDisplay's
+forceCleanBaseOnHalf overloads, HalGPIO::verifyPowerButtonWakeup(ms, short),
+esp_http_client_get_url/delete_header, vSemaphoreDelete, pdPASS and
+random(min, max).
+---
+ src/Arduino.h           |  1 +
+ src/HalClock.h          |  8 ++++++++
+ src/HalDisplay.h        |  6 ++++++
+ src/HalGPIO.h           |  1 +
+ src/HalSystem.h         |  2 ++
+ src/esp_http_client.h   | 19 +++++++++++++++++++
+ src/freertos/FreeRTOS.h |  2 ++
+ src/freertos/semphr.h   | 15 ++++++++++++---
+ 8 files changed, 51 insertions(+), 3 deletions(-)
+
+diff --git a/src/Arduino.h b/src/Arduino.h
+index e00363d..8dc44a9 100644
+--- a/src/Arduino.h
++++ b/src/Arduino.h
+@@ -73,6 +73,7 @@ struct ESPMock {
+ extern ESPMock ESP;
+ 
+ inline long random(long max) { return std::rand() % max; }
++inline long random(long min, long max) { return max > min ? min + std::rand() % (max - min) : min; }
+ 
+ template <typename A, typename B>
+ constexpr auto max(A a, B b) -> decltype(a > b ? a : b) {
+diff --git a/src/HalClock.h b/src/HalClock.h
+index 638cffc..a35bdf5 100644
+--- a/src/HalClock.h
++++ b/src/HalClock.h
+@@ -26,4 +26,12 @@ class HalClock {
+   bool formatDate(char* buf, size_t bufSize,
+                   uint8_t utcOffsetQuarterHoursBiased = 48) const;
+   bool syncFromNTP();
++
++  // Firmware HAL additions (lib/hal/HalClock.h). The host clock is always a real
++  // calendar date, so there is nothing to restore or sync.
++  bool rtcHasCalendarDate() const { return _available; }
++  static constexpr time_t MIN_PLAUSIBLE_EPOCH = 1704067200;
++  static bool isSystemTimeValid() { return std::time(nullptr) >= MIN_PLAUSIBLE_EPOCH; }
++  static bool quickSyncSystemTime() { return isSystemTimeValid(); }
++  static void stopSntp() {}
+ };
+diff --git a/src/HalDisplay.h b/src/HalDisplay.h
+index af607ac..f407655 100644
+--- a/src/HalDisplay.h
++++ b/src/HalDisplay.h
+@@ -70,6 +70,12 @@ public:
+   void displayBuffer(RefreshMode mode = RefreshMode::FAST_REFRESH,
+                      bool turnOffScreen = false);
+   void displayBufferAsync(RefreshMode mode = RefreshMode::FAST_REFRESH);
++  // Firmware HAL forceCleanBaseOnHalf: an X3 panel-sync detail with no host
++  // equivalent, so it is accepted and dropped.
++  void displayBuffer(RefreshMode mode, bool turnOffScreen, bool) {
++    displayBuffer(mode, turnOffScreen);
++  }
++  void displayBufferAsync(RefreshMode mode, bool) { displayBufferAsync(mode); }
+   void waitRefreshComplete();
+   bool supportsAsyncRefresh() const;
+   void displayWindow(int x, int y, int w, int h);
+diff --git a/src/HalGPIO.h b/src/HalGPIO.h
+index 9d60c91..54d959f 100644
+--- a/src/HalGPIO.h
++++ b/src/HalGPIO.h
+@@ -95,6 +95,7 @@ public:
+   // Verify power button was held long enough after wakeup.
+   // The host wake path is synthetic, so verification always succeeds.
+   bool verifyPowerButtonWakeup();
++  bool verifyPowerButtonWakeup(uint16_t, bool) { return verifyPowerButtonWakeup(); }
+ 
+   // Check if USB is connected
+   bool isUsbConnected() const;
+diff --git a/src/HalSystem.h b/src/HalSystem.h
+index 3037826..23608f1 100644
+--- a/src/HalSystem.h
++++ b/src/HalSystem.h
+@@ -18,4 +18,6 @@ void clearPanic();
+ 
+ std::string getPanicInfo(bool full = false);
+ bool isRebootFromPanic();
++// Firmware samples heap once per loop tick for panic reports; the host has none.
++inline void noteHeap(uint32_t, uint32_t) {}
+ } // namespace HalSystem
+diff --git a/src/esp_http_client.h b/src/esp_http_client.h
+index 5195290..32b269d 100644
+--- a/src/esp_http_client.h
++++ b/src/esp_http_client.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <cstdio>
+ #include <cstring>
+ #include <map>
+ #include <string>
+@@ -97,6 +98,24 @@ inline esp_err_t esp_http_client_set_header(esp_http_client_handle_t handle,
+   return ESP_OK;
+ }
+ 
++inline esp_err_t esp_http_client_delete_header(esp_http_client_handle_t handle,
++                                               const char *name) {
++  if (!handle || !name)
++    return ESP_FAIL;
++  handle->headers.erase(name);
++  return ESP_OK;
++}
++
++// Redirects are followed inside the host fetch, so the URL never changes from
++// the configured one.
++inline esp_err_t esp_http_client_get_url(esp_http_client_handle_t handle,
++                                         char *url, int len) {
++  if (!handle || !url || len <= 0 || !handle->config.url)
++    return ESP_FAIL;
++  std::snprintf(url, static_cast<size_t>(len), "%s", handle->config.url);
++  return ESP_OK;
++}
++
+ inline esp_err_t esp_http_client_set_post_field(esp_http_client_handle_t handle,
+                                                 const char *data, int len) {
+   if (!handle)
+diff --git a/src/freertos/FreeRTOS.h b/src/freertos/FreeRTOS.h
+index 6613d6c..4e83167 100644
+--- a/src/freertos/FreeRTOS.h
++++ b/src/freertos/FreeRTOS.h
+@@ -6,6 +6,8 @@
+ 
+ #define pdTRUE 1
+ #define pdFALSE 0
++#define pdPASS 1
++#define pdFAIL 0
+ #define portMAX_DELAY 0xFFFFFFFF
+ #define eIncrement 1
+ #define portTICK_PERIOD_MS 1
+diff --git a/src/freertos/semphr.h b/src/freertos/semphr.h
+index bd03b35..ec9c53c 100644
+--- a/src/freertos/semphr.h
++++ b/src/freertos/semphr.h
+@@ -41,9 +41,9 @@ typedef SimSemaphoreBase *SemaphoreHandle_t;
+ 
+ namespace sim_semaphore_detail {
+ 
+-// Single non-virtual base, so a tag-checked downcast is exact. Nothing frees a
+-// handle in this shim (there is no vSemaphoreDelete), so no base-pointer delete
+-// happens and the base needs no virtual destructor.
++// Single non-virtual base, so a tag-checked downcast is exact. vSemaphoreDelete
++// frees through the same downcast, so no base-pointer delete happens and the
++// base needs no virtual destructor.
+ inline SimMutex *asMutex(SemaphoreHandle_t sem) {
+   return static_cast<SimMutex *>(sem);
+ }
+@@ -61,6 +61,15 @@ inline std::chrono::milliseconds ticksToDuration(uint32_t ticks) {
+ 
+ } // namespace sim_semaphore_detail
+ 
++inline void vSemaphoreDelete(SemaphoreHandle_t sem) {
++  if (!sem)
++    return;
++  if (sem->kind == SimSemaphoreKind::Binary)
++    delete sim_semaphore_detail::asBinary(sem);
++  else
++    delete sim_semaphore_detail::asMutex(sem);
++}
++
+ inline SemaphoreHandle_t xSemaphoreCreateMutex() { return new SimMutex(); }
+ 
+ inline SemaphoreHandle_t xSemaphoreCreateBinary() {
+-- 
+2.43.0
+
