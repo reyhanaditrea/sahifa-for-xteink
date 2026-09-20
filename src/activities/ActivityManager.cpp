@@ -13,6 +13,7 @@
 
 #include "CrossPointSettings.h"
 #include "apps/AppsActivity.h"
+#include "apps/DictionaryActivity.h"
 #include "NewsFeedStore.h"
 #include "apps/NewsActivity.h"
 #include "apps/NewsFullTextActivity.h"
@@ -231,6 +232,8 @@ void ActivityManager::goToFileTransfer() {
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToPrayer() { replaceActivity(std::make_unique<PrayerActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToDictionary() { replaceActivity(std::make_unique<DictionaryActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));

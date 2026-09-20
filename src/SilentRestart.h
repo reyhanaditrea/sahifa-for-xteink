@@ -38,9 +38,11 @@ void silentRestartToNewsFullText();
 // Return-to-caller targets: a WiFi flow launched FROM this menu should land
 // back on it, not on Home, once its own onExit() silent-restarts to clear
 // heap fragmentation. Landing on Home instead of the caller was a real user
-// complaint -- the font download store used the bare silentRestart()
-// (home-only) with no way back to where the user actually was.
+// complaint -- the font download store and the
+// dictionary download store all used the bare silentRestart() (home-only)
+// with no way back to where the user actually was.
 void silentRestartToSettings();    // SettingsActivity (font download caller)
+void silentRestartToDictionary();  // DictionaryActivity (dictionary download caller)
 void silentRestartToPrayer();      // PrayerActivity (clock sync caller)
 
 // True when the current boot was produced by any silentRestart* call -- i.e.

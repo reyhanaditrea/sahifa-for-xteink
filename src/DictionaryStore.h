@@ -87,7 +87,7 @@ struct DictionaryLookupResult {
 
 class DictionaryStore {
  public:
-  // Public: File Transfer's dictionary upload installs sets here.
+  // Public: the download store (DictionaryDownloadActivity) installs sets here.
   static constexpr const char* DICTIONARY_ROOT = "/dictionaries";
   // DEF_TEXT_READER is a font *family* choice rather than a third size: it renders
   // definitions in the book's own reading font instead of the fixed UI tiers, so an
