@@ -1,14 +1,15 @@
 <p align="center">
-  <img src="./docs/images/midad-logo.png" width="96" alt="Midad logo">
+  <img src="./docs/images/midad-logo.png" width="96" alt="Sahifa logo">
 </p>
-<h1 align="center">Midad</h1>
-<p align="center"><sub>by Foulad eInk</sub></p>
+<h1 align="center">Sahifa</h1>
+<p align="center"><sub>built on <a href="https://github.com/sfoulad/midad-by-foulad">Midad by Foulad</a></sub></p>
 <p align="center"><b>An e-reader built around Arabic.</b></p>
 <p align="center">
-  Midad — مداد, Arabic for <i>ink</i> — is a free, open-source firmware for Xteink e-ink readers, a fork of
-  <a href="https://github.com/crosspoint-reader/crosspoint-reader">CrossPoint Reader</a>, rebuilt so Arabic, and the
-  languages that share its script, read the way they're supposed to. It updates itself over the air, straight from
-  this repository.
+  Sahifa — صحيفة, Arabic for <i>page</i> — is a free, open-source firmware for Xteink e-ink readers. It is a fork of
+  <a href="https://github.com/sfoulad/midad-by-foulad">Midad</a> (مداد, <i>ink</i>), which is itself a fork of
+  <a href="https://github.com/crosspoint-reader/crosspoint-reader">CrossPoint Reader</a> rebuilt so Arabic, and the
+  languages that share its script, read the way they're supposed to. Ink comes first, then the page: almost
+  everything good here started in Midad. See <a href="#acknowledgments">Acknowledgments</a>.
 </p>
 <p align="center">
   <i>📱 Runs on Xteink <a href="https://www.xteink.com/products/xteink-x4">X4</a> and
@@ -16,12 +17,8 @@
 </p>
 
 <p align="center">
-  <a href="https://www.reddit.com/r/midad_one/s/5cHfK3pZhm"><img src="https://img.shields.io/badge/JOIN%20THE-REDDIT%20COMMUNITY-FF4500?style=for-the-badge&logo=reddit&logoColor=white&labelColor=555555" alt="Join the Midad community on Reddit"></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/sfoulad/midad-by-foulad/releases"><img src="https://img.shields.io/github/v/release/sfoulad/midad-by-foulad?label=release&color=blue&style=flat-square" alt="Latest release"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/github/license/sfoulad/midad-by-foulad?color=brightgreen&style=flat-square" alt="License"></a>
+  <a href="https://github.com/reyhanaditrea/midad-by-foulad/releases"><img src="https://img.shields.io/github/v/release/reyhanaditrea/midad-by-foulad?label=release&color=blue&style=flat-square" alt="Latest release"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/reyhanaditrea/midad-by-foulad?color=brightgreen&style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/Arabic-100%25-orange?style=flat-square" alt="Arabic support">
   <img src="https://img.shields.io/badge/updates-over--the--air-blueviolet?style=flat-square" alt="OTA updates">
 </p>
@@ -39,7 +36,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/home.png" width="380" alt="Midad home screen">
+  <img src="./docs/images/home.png" width="380" alt="Sahifa home screen">
 </p>
 <h3 align="center">🏠 Everything, from one screen.</h3>
 <p align="center">
@@ -50,7 +47,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/reading.png" width="380" alt="Reading the Quran on Midad">
+  <img src="./docs/images/reading.png" width="380" alt="Reading the Quran on Sahifa">
 </p>
 <h3 align="center">🕌 Reads Arabic like it was made for it.</h3>
 <p align="center">
@@ -61,7 +58,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/fonts/font-browser.png" width="380" alt="Font Browser on Midad">
+  <img src="./docs/images/fonts/font-browser.png" width="380" alt="Font Browser on Sahifa">
 </p>
 <h3 align="center">🔤 Download fonts, Arabic and English, on the go.</h3>
 <p align="center">
@@ -71,7 +68,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/stats.png" width="380" alt="Reading statistics on Midad">
+  <img src="./docs/images/stats.png" width="380" alt="Reading statistics on Sahifa">
 </p>
 <h3 align="center">📊 See your reading, at a glance.</h3>
 <p align="center">
@@ -81,7 +78,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/books-apps/books-apps.png" width="380" alt="My Books & Apps grid on Midad">
+  <img src="./docs/images/books-apps/books-apps.png" width="380" alt="My Books & Apps grid on Sahifa">
 </p>
 <h3 align="center">📚 Books and apps, in one place.</h3>
 <p align="center">
@@ -91,7 +88,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/settings-apps/settings-apps.png" width="380" alt="Settings — Apps tab on Midad">
+  <img src="./docs/images/settings-apps/settings-apps.png" width="380" alt="Settings — Apps tab on Sahifa">
 </p>
 <h3 align="center">🎛️ Enable and disable apps, to taste.</h3>
 <p align="center">
@@ -101,7 +98,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/games/games-slideshow-v2.gif" width="380" alt="Snake, Tetris, Sudoku, and Maze on Midad">
+  <img src="./docs/images/games/games-slideshow-v2.gif" width="380" alt="Snake, Tetris, Sudoku, and Maze on Sahifa">
 </p>
 <h3 align="center">🎮 Four games, zero downloads.</h3>
 <p align="center">
@@ -112,7 +109,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/stopwatch/stopwatch.png" width="380" alt="Stop Watch on Midad">
+  <img src="./docs/images/stopwatch/stopwatch.png" width="380" alt="Stop Watch on Sahifa">
 </p>
 <h3 align="center">⏱️ Every second, on the dot.</h3>
 <p align="center">
@@ -122,7 +119,7 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/tasbih/tasbih.png" width="380" alt="Tasbih dhikr counter on Midad">
+  <img src="./docs/images/tasbih/tasbih.png" width="380" alt="Tasbih dhikr counter on Sahifa">
 </p>
 <h3 align="center">📿 Count your dhikr, track your best day.</h3>
 <p align="center">
@@ -133,11 +130,11 @@
 <br>
 
 <p align="center">
-  <img src="./docs/images/devices.png" width="700" alt="Midad running on Xteink X4 and X3">
+  <img src="./docs/images/devices.png" width="700" alt="Sahifa running on Xteink X4 and X3">
 </p>
 <h3 align="center">📱 One firmware, both devices.</h3>
 <p align="center">
-  Midad runs natively on the Xteink X4 and X3, adapting to each device's screen and buttons automatically.
+  Sahifa runs natively on the Xteink X4 and X3, adapting to each device's screen and buttons automatically.
 </p>
 
 <br>
@@ -241,7 +238,7 @@ maintained by the upstream CrossPoint project, not this fork.
 ### 🌐 Easiest: web installer
 
 1. Connect your device via USB-C and wake it up.
-2. Download `firmware.bin` from the [Releases](https://github.com/sfoulad/midad-by-foulad/releases) page.
+2. Download `firmware.bin` from the [Releases](https://github.com/reyhanaditrea/midad-by-foulad/releases) page.
 3. Open the [web flasher](https://crosspointreader.com/#flash-tools), pick your device (X3 or X4), choose **Custom
    .bin**, and upload the file. That's it.
 
@@ -260,7 +257,7 @@ maintained by the upstream CrossPoint project, not this fork.
    pip install esptool
    ```
 
-2. Download `firmware.bin` from the [Releases](https://github.com/sfoulad/midad-by-foulad/releases) page.
+2. Download `firmware.bin` from the [Releases](https://github.com/reyhanaditrea/midad-by-foulad/releases) page.
 3. Connect your device via USB-C.
 4. Find the device port. On Linux, run `dmesg` after connecting. On macOS:
 
@@ -366,7 +363,7 @@ Prefer a different Arabic look? You can swap in your own font too:
 ### Setup
 
 ```bash
-git clone --recursive https://github.com/sfoulad/midad-by-foulad
+git clone --recursive https://github.com/reyhanaditrea/midad-by-foulad
 cd midad-by-foulad
 
 # if cloned without --recursive:
@@ -480,6 +477,21 @@ git merge upstream/develop
 ```
 
 </details>
+
+---
+
+<h2 id="acknowledgments">🤲 Acknowledgments</h2>
+
+Sahifa would not exist without **[Midad by Foulad](https://github.com/sfoulad/midad-by-foulad)**. Midad did the hard
+part: Arabic shaping and right-to-left layout on a tiny e-ink screen, the bundled Uthmani Quran, the Arabic keyboard,
+the Tasbih counter, the reading stats, the games, and the over-the-air updater. Sahifa starts from that work and
+adds to it. The ink-drop logo is Midad's, kept here on purpose: a page is nothing without ink.
+
+Thank you, [@sfoulad](https://github.com/sfoulad), and everyone in the
+[Midad community](https://www.reddit.com/r/midad_one/s/5cHfK3pZhm). If you like Sahifa, go star Midad too.
+
+Midad builds on [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader), and Sahifa owes a debt
+to it as well.
 
 ---
 

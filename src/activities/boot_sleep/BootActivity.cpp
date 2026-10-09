@@ -12,7 +12,7 @@ void BootActivity::onEnter() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  // Brand lockup: mark, then "MIDAD" over "By Foulad". Both are the wordmark
+  // Brand lockup: mark, then "SAHIFA" over "Based on Midad". Both are the wordmark
   // rather than prose -- they read the same in every language, exactly as
   // STR_CROSSPOINT already did -- so they go through tr() to keep every
   // user-facing string in one place, not because either gets translated.
