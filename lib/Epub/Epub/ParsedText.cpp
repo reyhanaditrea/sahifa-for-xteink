@@ -223,6 +223,13 @@ JustifyPlan computeJustifyPlan(const GfxRenderer& renderer, const int fontId, co
                                const std::vector<EpdFontFamily::Style>& lineStylesInOrder) {
   JustifyPlan plan;
   plan.kashidaExtraPerWord.assign(lineWordsInOrder.size(), 0);
+  // An overfull line -- a Mushaf line kept whole by its squeezed gaps (see
+  // layoutAndExtractLines) -- shrinks its gaps, rounding the shrink up so it fits.
+  if (spareSpace < 0 && gapCount > 0) {
+    const int gaps = static_cast<int>(gapCount);
+    plan.gapExtra = -((-spareSpace + gaps - 1) / gaps);
+    return plan;
+  }
   if (spareSpace <= 0) return plan;
 
   const int tatweelPx = renderer.getKashidaGlyphWidth(fontId);
@@ -792,7 +799,26 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
-  if (hyphenationEnabled) {
+  // A justified Mushaf line (text-align-last: justify; one block per printed line)
+  // stays one line if it fits with its word gaps squeezed to half a space: print
+  // sets some lines tighter than this font's natural spacing, and wrapping one of
+  // them leaves its last word alone on a line of its own.
+  if (blockStyle.justifyLast && blockStyle.alignment == CssTextAlign::Justify) {
+    int squeezed = resolveFirstLineIndent(true, renderer, fontId);
+    for (size_t j = 0; j < words.size(); j++) {
+      squeezed += wordWidths[j];
+      if (j == 0 || wordNoSpaceBefore[j]) continue;
+      squeezed += wordContinues[j] ? renderer.getKerning(fontId, lastCodepoint(words[j - 1]), firstCodepoint(words[j]),
+                                                         wordStyles[j - 1])
+                                   : renderer.getSpaceAdvance(fontId, lastCodepoint(words[j - 1]),
+                                                              firstCodepoint(words[j]), wordStyles[j - 1]) /
+                                         2;
+    }
+    if (squeezed <= pageWidth) lineBreakIndices.push_back(words.size());
+  }
+  if (!lineBreakIndices.empty()) {
+    // Kept whole above.
+  } else if (hyphenationEnabled) {
     // Use greedy layout that can split words mid-loop when a hyphenated prefix fits.
     lineBreakIndices =
         computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
@@ -1387,7 +1413,12 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
 
   // Calculate spacing (account for indent reducing effective page width on first line)
   const int effectivePageWidth = pageWidth - firstLineIndent;
-  const bool isLastLine = breakIndex == lineBreakIndices.size() - 1;
+  // text-align-last: justify stretches a block that is a single line -- the
+  // Quran sets each Mushaf line as its own block. A block that wrapped keeps
+  // its last line natural: stretching the leftover words of an overlong line
+  // across the screen reads as broken, not as a Mushaf line.
+  const bool isLastLine =
+      breakIndex == lineBreakIndices.size() - 1 && !(blockStyle.justifyLast && lineBreakIndices.size() == 1);
 
   // For RTL, implicit/default Left alignment becomes Right alignment.
   // Explicit text-align:left must remain left for CSS correctness.

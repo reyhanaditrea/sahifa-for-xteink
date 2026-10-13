@@ -27,4 +27,17 @@ bool isPinned();
 // previous extraction). Returns true when the file is in place afterwards.
 bool ensureExtracted();
 
+// Surah 1..114's transliterated name (quran.com's spelling), e.g. "Al-Fatihah";
+// "" when out of range. Shown beside the Arabic name in the reader's surah list.
+const char* surahName(int surah);
+
+// Juz 1..30's span, from its first ayah to its last; nullptr when out of range.
+struct JuzRange {
+  uint8_t startSurah;
+  uint16_t startAyah;
+  uint8_t endSurah;
+  uint16_t endAyah;
+};
+const JuzRange* juzRange(int juz);
+
 }  // namespace QuranBook

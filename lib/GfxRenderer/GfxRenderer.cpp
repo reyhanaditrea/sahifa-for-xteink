@@ -956,7 +956,51 @@ void splitSurahBannerLabel(const std::string& label, std::string& word, std::str
 
 namespace ArabicTextMarkers {
 bool isBismillah(const char* text) { return parseBismillahMarker(text); }
+bool isAyahMarker(const char* text) {
+  uint32_t digits[3];
+  int digitCount = 0;
+  return parseAyahMarker(text, digits, digitCount);
+}
 }  // namespace ArabicTextMarkers
+
+// Ayah-number digits sit packed by their ink, 1px apart: the digit fonts' side
+// bearings alone would push a three-digit number out of the rosette.
+static constexpr int AYAH_DIGIT_GAP = 1;
+static int ayahDigitsInkWidth(const EpdFontFamily& font, const uint32_t* digits, const int digitCount,
+                              const EpdFontFamily::Style style) {
+  int w = 0;
+  for (int i = 0; i < digitCount; i++) {
+    if (const EpdGlyph* d = font.getGlyph(digits[i], style)) w += d->width + (i > 0 ? AYAH_DIGIT_GAP : 0);
+  }
+  return w;
+}
+
+GfxRenderer::AyahRosette GfxRenderer::ayahRosette(const EpdGlyph& rosette, const EpdFontFamily::Style style,
+                                                  const uint32_t* digits, const int digitCount) const {
+  AyahRosette r;
+  r.digitFontId = arabicDigitFallbackFontId_;
+  // A small reading size (the Quran's Mushaf Page, 11pt) bakes a ~16px rosette with
+  // no room for a legible number: draw it 2x (a whole factor keeps nearest-neighbour
+  // scaling even; 1.5x smeared its rings), as print sets it near letter height.
+  if (rosette.height < 24) {
+    r.scaleNum = 2;
+  }
+  const int width = rosette.width * r.scaleNum / r.scaleDen;
+  const int height = rosette.height * r.scaleNum / r.scaleDen;
+  // The largest digits that fit the rosette's opening (about 2/3 of its ink), per
+  // number: a three-digit ayah may step down a size from its neighbours.
+  for (const int id : ayahDigitFontIds_) {
+    const auto it = fontMap.find(id);
+    if (it == fontMap.end()) continue;
+    r.digitFontId = id;
+    const EpdGlyph* eight = it->second.getGlyph(0x0668, style);
+    if (ayahDigitsInkWidth(it->second, digits, digitCount, style) <= width * 2 / 3 && eight &&
+        eight->height <= height / 2) {
+      break;
+    }
+  }
+  return r;
+}
 
 int GfxRenderer::getArabicTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style,
                                     const int kashidaExtraPx) const {
@@ -981,7 +1025,8 @@ int GfxRenderer::getArabicTextWidth(const int fontId, const char* text, const Ep
     int digitCount = 0;
     if (parseAyahMarker(text, digits, digitCount)) {
       if (const EpdGlyph* rosette = font.getGlyph(0x06DD, style)) {
-        return fp4::toPixel(rosette->advanceX);
+        const AyahRosette r = ayahRosette(*rosette, style, digits, digitCount);
+        return fp4::toPixel(rosette->advanceX) * r.scaleNum / r.scaleDen;
       }
       return ayahRosetteDiameter(*this, resolveArabicFontId(fontId));
     }
@@ -1298,16 +1343,16 @@ void GfxRenderer::drawArabicText(const int fontId, const int x, const int y, con
     int digitCount = 0;
     std::string cartoucheInner;
     if (parseAyahMarker(text, digits, digitCount)) {
-      if (font.getGlyph(0x06DD, style) != nullptr) {
+      if (const EpdGlyph* rosette = font.getGlyph(0x06DD, style)) {
         appendUtf8(shaped, 0x06DD);
-        // Digits always come from arabicDigitFallbackFontId_ now, even when the
-        // rosette glyph itself comes from the reading font -- see the render
-        // branch's comment for why. Record them against that font, not
+        // Digits come from ayahRosette()'s digit font, not the reading font -- see
+        // the render branch's comment for why. Record them against that font, not
         // resolvedArabicFontId, same "must stay in sync" rule as everywhere else
         // in this scan.
         std::string digitsShaped;
         for (int i = 0; i < digitCount; i++) appendUtf8(digitsShaped, digits[i]);
-        fontCacheManager_->recordArabicText(digitsShaped.c_str(), arabicDigitFallbackFontId_);
+        fontCacheManager_->recordArabicText(digitsShaped.c_str(),
+                                            ayahRosette(*rosette, style, digits, digitCount).digitFontId);
       }
       // else: digits come from arabicDigitFallbackFontId_, nothing to record here.
     } else if (parseSurahMedallionMarker(text, digits, digitCount)) {
@@ -1344,31 +1389,35 @@ void GfxRenderer::drawArabicText(const int fontId, const int x, const int y, con
     int digitCount = 0;
     if (parseAyahMarker(text, digits, digitCount)) {
       if (const EpdGlyph* rosette = font.getGlyph(0x06DD, style)) {
-        renderCharImpl<TextRotation::None>(*this, renderMode, font, 0x06DD, x, yPos, black, style);
+        const AyahRosette r = ayahRosette(*rosette, style, digits, digitCount);
+        if (r.scaleNum == r.scaleDen) {
+          renderCharImpl<TextRotation::None>(*this, renderMode, font, 0x06DD, x, yPos, black, style);
+        } else {
+          renderCharUpscaled(*this, renderMode, font, 0x06DD, x, yPos, black, style, r.scaleNum, r.scaleDen);
+        }
         // Digits always come from arabicDigitFallbackFontId_ (a known-complete,
         // properly-sized built-in font), never the reading font -- some reading
         // fonts' own Arabic-Indic digit glyphs are tiny by design (e.g.
         // UthmanicHafs's are only ~4-7px at 18pt, next to a ~26px letter), so
-        // drawing them here -- already at half scale via renderCharScaled below --
-        // produced a barely-visible number even though the rosette itself was
-        // correctly sized. Mirrors the fallback branch below, which already got
-        // this right for fonts lacking U+06DD.
-        const auto digitFontIt = fontMap.find(arabicDigitFallbackFontId_);
+        // drawing them here produced a barely-visible number even though the
+        // rosette itself was correctly sized. They are drawn at full size from the
+        // font ayahRosette() picks to fit -- half-scale digits were unreadable.
+        const auto digitFontIt = fontMap.find(r.digitFontId);
         const EpdFontFamily& digitFont = digitFontIt != fontMap.end() ? digitFontIt->second : font;
-        int digitsW = 0;
-        const int rosetteCenter = rosette->top - rosette->height / 2;  // ink centre above baseline
-        for (int i = 0; i < digitCount; i++) {
-          const EpdGlyph* d = digitFont.getGlyph(digits[i], style);
-          if (d) digitsW += fp4::toPixel(d->advanceX) / 2;
-        }
-        int dx = x + rosette->left + (std::max(0, rosette->width - digitsW)) / 2;
+        const int left = rosette->left * r.scaleNum / r.scaleDen;
+        const int width = rosette->width * r.scaleNum / r.scaleDen;
+        // Ink centre above the baseline.
+        const int rosetteCenter = (rosette->top - rosette->height / 2) * r.scaleNum / r.scaleDen;
+        // Packed by ink (see ayahDigitsInkWidth); each glyph is drawn at dx - left
+        // so its ink, not its advance box, starts at dx.
+        int dx = x + left + (width - ayahDigitsInkWidth(digitFont, digits, digitCount, style)) / 2;
         for (int i = 0; i < digitCount; i++) {
           const EpdGlyph* d = digitFont.getGlyph(digits[i], style);
           if (!d) continue;
-          const int digitCenter = (d->top - d->height / 2) / 2;
-          renderCharScaled(*this, renderMode, digitFont, digits[i], dx, yPos - rosetteCenter + digitCenter, black,
-                           style);
-          dx += fp4::toPixel(d->advanceX) / 2;
+          const int digitCenter = d->top - d->height / 2;
+          renderCharImpl<TextRotation::None>(*this, renderMode, digitFont, digits[i], dx - d->left,
+                                             yPos - rosetteCenter + digitCenter, black, style);
+          dx += d->width + AYAH_DIGIT_GAP;
         }
         return;
       }
@@ -3279,6 +3328,18 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
   }
 
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
+}
+
+int GfxRenderer::getFontDescenderSize(const int fontId) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+
+  // EpdFontData stores the descender as a negative offset from the baseline;
+  // callers want a depth, so hand back the magnitude.
+  return -fontIt->second.getData(EpdFontFamily::REGULAR)->descender;
 }
 
 int GfxRenderer::getLineHeight(const int fontId) const {

@@ -197,7 +197,8 @@ done
 # started flattening the calligraphic stroke shape into a solid blob, 0.3 gave a
 # solidly black stroke while keeping the letterform's shape intact. Not applied
 # to the other Arabic fonts above; they weren't reported as faded.
-for size in ${ARABIC_READING_FONT_SIZES[@]}; do
+# Own sizes, larger than ARABIC_READING_FONT_SIZES: see kBuiltinArabicReadingFontIds.
+for size in 11 16 18 22 26; do
   python fontconvert.py uthmanichafs_${size}_regular ${size} \
     ../builtinFonts/source/UthmanicHafs/UthmanicHafs_V22.ttf \
     --2bit --compress --script arabic --reposition-marks --shape-fallback \

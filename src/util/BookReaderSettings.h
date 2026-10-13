@@ -82,7 +82,7 @@ inline void applyToSettings(const std::string& bookCachePath) {
                                 ? CrossPointSettings::BOOK_NO_OVERRIDE
                                 : static_cast<uint8_t>(12 + legacySlot * 2);
   }
-  SETTINGS.bookArabicFontSize = sanitizeEnum(buf[4], CrossPointSettings::FONT_SIZE_COUNT);
+  SETTINGS.bookArabicFontSize = sanitizeEnum(buf[4], CrossPointSettings::MUSHAF_PAGE_SIZE + 1);
   SETTINGS.bookLineSpacing = sanitizeEnum(buf[5], CrossPointSettings::LINE_COMPRESSION_COUNT);
   SETTINGS.bookParagraphAlignment = sanitizeEnum(buf[6], CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT);
   if (v2 || v3 || v4) {

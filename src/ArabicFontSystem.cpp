@@ -21,8 +21,10 @@ constexpr int
          NOTONASKHARABIC_18_FONT_ID},
         // KFGQPC Uthmanic Hafs: the Madinah Mushaf's own typeface -- the Quran's
         // default reading face (per-book sidecar written at extraction; see
-        // QuranBook::ensureExtracted).
-        {UTHMANICHAFS_12_FONT_ID, UTHMANICHAFS_14_FONT_ID, UTHMANICHAFS_16_FONT_ID, UTHMANICHAFS_18_FONT_ID},
+        // QuranBook::ensureExtracted). Shifted up to 16/18/22/26: memorizing wants
+        // letters near a printed mushaf's size, which X-Large (26pt) gives on the
+        // panel; 12/14 were dropped to pay for it.
+        {UTHMANICHAFS_16_FONT_ID, UTHMANICHAFS_18_FONT_ID, UTHMANICHAFS_22_FONT_ID, UTHMANICHAFS_26_FONT_ID},
         // Tajawal (Boutros International, OFL-licensed): a modern geometric-sans
         // reading option, alongside the two traditional book-printing styles above.
         {TAJAWAL_12_FONT_ID, TAJAWAL_14_FONT_ID, TAJAWAL_16_FONT_ID, TAJAWAL_18_FONT_ID},
@@ -55,6 +57,8 @@ uint8_t arabicSizeEnumToPointSize(const uint8_t sizeEnum) {
       return 16;
     case CrossPointSettings::EXTRA_LARGE:
       return 18;
+    case CrossPointSettings::MUSHAF_PAGE_SIZE:
+      return 11;
     case CrossPointSettings::MEDIUM:
     default:
       return 14;
@@ -86,6 +90,8 @@ void applyArabicMappings(GfxRenderer& renderer, const int readingFontId) {
   // see setArabicDigitFallbackFontId's comment for why (some reading fonts simply
   // don't have Arabic-Indic digit glyphs).
   renderer.setArabicDigitFallbackFontId(NOTOSANSARABIC_12_FONT_ID);
+  renderer.setMushafLayoutFontId(UTHMANICHAFS_11_FONT_ID);
+  renderer.setAyahDigitFontIds({NOTOSANSARABIC_12_FONT_ID, NOTOSANSARABIC_10_FONT_ID, NOTOSANSARABIC_8_FONT_ID});
   // Bismillah always comes from the dedicated QuranCommon font -- see
   // setBismillahFontId's comment for why (UthmanicHafs itself has no glyph for the
   // real ligature, U+FDFD). Single fixed 18pt size regardless of Arabic Font Size:
@@ -109,6 +115,11 @@ void applyArabicMappings(GfxRenderer& renderer, const int readingFontId) {
 
 int ArabicFontSystem::resolveBuiltinReadingFontId(uint8_t family, uint8_t size) {
   if (family >= CrossPointSettings::ARABIC_FONT_FAMILY_COUNT) family = CrossPointSettings::NOTONASKHARABIC;
+  // Uthmanic only: the other families have no cut that small, so take their Small.
+  if (size == CrossPointSettings::MUSHAF_PAGE_SIZE) {
+    if (family == CrossPointSettings::UTHMANICHAFS) return UTHMANICHAFS_11_FONT_ID;
+    size = CrossPointSettings::SMALL;
+  }
   if (size >= CrossPointSettings::FONT_SIZE_COUNT) size = CrossPointSettings::MEDIUM;
   return kBuiltinArabicReadingFontIds[family][size];
 }

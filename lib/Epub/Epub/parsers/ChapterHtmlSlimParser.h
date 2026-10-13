@@ -54,6 +54,14 @@ class ChapterHtmlSlimParser {
   // against either.
   int16_t pendingBottomMargin = 0;
   int fontId;
+  // Laid out line-for-line with the printed Mushaf (the Quran at its Mushaf Page
+  // size). Otherwise its printed-line blocks -- those with -sahifa-page-fill or
+  // text-align-last: justify -- flow as one paragraph per ayah, with a small gap
+  // after each, and their printed page breaks don't apply.
+  bool mushafLayout;
+  static bool isMushafLayout(const GfxRenderer& renderer, int fontId);
+  // The current text block is such a flowing ayah paragraph.
+  bool ayahParagraphs = false;
   float lineCompression;
   bool extraParagraphSpacing;
   uint8_t paragraphAlignment;
@@ -112,6 +120,9 @@ class ChapterHtmlSlimParser {
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;          // deferred until after previous text block is flushed
+  bool pendingPageBreak = false;        // page-break-before block seen; applied with the anchor
+  bool pendingPageFill = false;         // last block opened asks -sahifa-page-fill
+  bool fillCurrentPage = false;         // the page being filled began in such a block
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
@@ -148,6 +159,12 @@ class ChapterHtmlSlimParser {
   void updateEffectiveInlineStyle();
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPendingAnchor();
+  // Completes the current page so the next block starts a fresh one. No-op on
+  // an empty page. False only if the next page could not be allocated.
+  bool breakPage();
+  // Spreads the current page's lines evenly down the viewport, for a page a
+  // -sahifa-page-fill block is about to end with a page break.
+  void fillPage();
   void flushPartWordBuffer();
   void fallbackTableRowToStacked();
   void closeTableCell();
@@ -193,6 +210,7 @@ class ChapterHtmlSlimParser {
         filepath(filepath),
         renderer(renderer),
         fontId(fontId),
+        mushafLayout(isMushafLayout(renderer, fontId)),
         lineCompression(lineCompression),
         extraParagraphSpacing(extraParagraphSpacing),
         paragraphAlignment(paragraphAlignment),

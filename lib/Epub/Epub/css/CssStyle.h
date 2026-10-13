@@ -100,6 +100,14 @@ struct CssPropertyFlags {
   uint16_t display : 1;
   uint16_t direction : 1;
   uint16_t verticalAlign : 1;
+  // page-break-before: always / break-before: page. A flag only: no other value
+  // changes what the reader does, so there is no matching CssStyle field.
+  uint16_t pageBreakBefore : 1;
+  // -sahifa-page-fill: justify. Our own property, so a page cut by a page break
+  // spreads its lines down the whole screen only where a book asks for it.
+  uint16_t pageFill : 1;
+  // text-align-last: justify. A flag only, like pageBreakBefore.
+  uint16_t textAlignLastJustify : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -119,23 +127,27 @@ struct CssPropertyFlags {
         imageWidth(0),
         display(0),
         direction(0),
-        verticalAlign(0) {}
+        verticalAlign(0),
+        pageBreakBefore(0),
+        pageFill(0),
+        textAlignLastJustify(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign;
+           imageWidth || display || direction || verticalAlign || pageBreakBefore || pageFill || textAlignLastJustify;
   }
 
   void clearAll() {
     textAlign = fontStyle = fontWeight = textDecoration = textIndent = 0;
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
-    imageHeight = imageWidth = display = direction = verticalAlign = 0;
+    imageHeight = imageWidth = display = direction = verticalAlign = pageBreakBefore = pageFill = textAlignLastJustify =
+        0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..17.
+// Cache serializes defined flags as uint32_t with bit indices 0..20.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -240,6 +252,9 @@ struct CssStyle {
       verticalAlign = base.verticalAlign;
       defined.verticalAlign = 1;
     }
+    if (base.hasPageBreakBefore()) defined.pageBreakBefore = 1;
+    if (base.hasPageFill()) defined.pageFill = 1;
+    if (base.hasTextAlignLastJustify()) defined.textAlignLastJustify = 1;
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -260,6 +275,9 @@ struct CssStyle {
   [[nodiscard]] bool hasDisplay() const { return defined.display; }
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
+  [[nodiscard]] bool hasPageBreakBefore() const { return defined.pageBreakBefore; }
+  [[nodiscard]] bool hasPageFill() const { return defined.pageFill; }
+  [[nodiscard]] bool hasTextAlignLastJustify() const { return defined.textAlignLastJustify; }
 
   void reset() {
     textAlign = CssTextAlign::Left;

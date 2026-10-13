@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <utility>
 
 #include "ArabicFontSystem.h"
@@ -25,8 +26,9 @@
 
 namespace {
 
-constexpr StrId kSizeLabels[CrossPointSettings::FONT_SIZE_COUNT] = {StrId::STR_SMALL, StrId::STR_MEDIUM,
-                                                                    StrId::STR_LARGE, StrId::STR_X_LARGE};
+// One past FONT_SIZE_COUNT: MUSHAF_PAGE_SIZE, offered only for the Quran.
+constexpr StrId kSizeLabels[CrossPointSettings::MUSHAF_PAGE_SIZE + 1] = {
+    StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE, StrId::STR_MUSHAF_PAGE};
 constexpr StrId kSpacingLabels[CrossPointSettings::LINE_COMPRESSION_COUNT] = {StrId::STR_TIGHT, StrId::STR_NORMAL,
                                                                               StrId::STR_WIDE};
 constexpr StrId kAlignLabels[CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT] = {
@@ -194,7 +196,12 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildNavig
   std::vector<MenuItem> items;
   items.reserve(6);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
-  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+  // The Quran is navigated by surah and juz; a percentage means nothing there.
+  if (epub && epub->getPath() == QuranBook::PATH) {
+    items.push_back({MenuAction::SELECT_JUZ, StrId::STR_SELECT_JUZ});
+  } else {
+    items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+  }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
   if (hasBookmarks) {
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
@@ -274,7 +281,7 @@ void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 
 int EpubReaderMenuActivity::activeItemCount() const {
   if (view == View::CHAPTERS) {
-    return epub ? epub->getTocItemsCount() : 0;
+    return static_cast<int>(tocRows.size());
   }
   if (view == View::DICTIONARY_LIST) {
     return static_cast<int>(DICTIONARIES.getEntries().size());
@@ -405,6 +412,31 @@ void EpubReaderMenuActivity::openSettingEditor(const MenuAction action) {
   switch (action) {
     case MenuAction::FONT_SIZE:
       if (isArabicBook) {
+        if (epub && epub->getPath() == QuranBook::PATH) {
+          // The Quran lists Mushaf Page first, right under Global: it is the size
+          // this book is laid out for. Display order only -- the stored values
+          // stay the shared slots, MUSHAF_PAGE_SIZE past the four.
+          static constexpr uint8_t kQuranSizes[] = {CrossPointSettings::MUSHAF_PAGE_SIZE, CrossPointSettings::SMALL,
+                                                    CrossPointSettings::MEDIUM, CrossPointSettings::LARGE,
+                                                    CrossPointSettings::EXTRA_LARGE};
+          std::vector<std::string> options;
+          options.push_back(globalLabel(I18N.get(
+              kSizeLabels[std::min<uint8_t>(SETTINGS.arabicFontSize, CrossPointSettings::FONT_SIZE_COUNT - 1)])));
+          int current = 0;
+          for (size_t i = 0; i < std::size(kQuranSizes); i++) {
+            options.push_back(I18N.get(kSizeLabels[kQuranSizes[i]]));
+            if (SETTINGS.bookArabicFontSize == kQuranSizes[i]) current = static_cast<int>(i + 1);
+          }
+          optionPopup.show(StrId::STR_FONT_SIZE_GENERIC, options, current, [this](const int idx) {
+            const uint8_t newValue = idx == 0 ? CrossPointSettings::BOOK_NO_OVERRIDE : kQuranSizes[idx - 1];
+            if (SETTINGS.bookArabicFontSize != newValue) {
+              SETTINGS.bookArabicFontSize = newValue;
+              bookSettingsChanged = true;
+            }
+            requestUpdate();
+          });
+          break;
+        }
         showEnumPopup(StrId::STR_FONT_SIZE_GENERIC, kSizeLabels, CrossPointSettings::FONT_SIZE_COUNT,
                       SETTINGS.bookArabicFontSize, SETTINGS.arabicFontSize);
         break;
@@ -565,10 +597,78 @@ void EpubReaderMenuActivity::finishWithAction(const int action, const bool cance
   finish();
 }
 
+namespace {
+// Maps UI_10's Arabic to Uthmanic Hafs while in scope, restoring the UI font after.
+struct MushafUiFont {
+  GfxRenderer& renderer;
+  int saved = 0;
+  MushafUiFont(GfxRenderer& r, const bool on) : renderer(r) {
+    if (!on) return;
+    saved = renderer.getResolvedArabicFontId(UI_10_FONT_ID);
+    renderer.setArabicFontIdForFontId(UI_10_FONT_ID, UTHMANICHAFS_16_FONT_ID, /*matchLatinBaseline=*/true);
+  }
+  ~MushafUiFont() {
+    if (saved) renderer.setArabicFontIdForFontId(UI_10_FONT_ID, saved, /*matchLatinBaseline=*/true);
+  }
+};
+}  // namespace
+
+std::string EpubReaderMenuActivity::juzSpanLabel(const int juz) const {
+  const auto* range = QuranBook::juzRange(juz);
+  if (!range) return "";
+  const auto arabicNumber = [](const int n) {
+    std::string out;
+    for (const char c : std::to_string(n)) {
+      out += static_cast<char>(0xD9);  // U+0660 + digit, as UTF-8
+      out += static_cast<char>(0xA0 + (c - '0'));
+    }
+    return out;
+  };
+  const auto surah = [this](const int n) {
+    return n >= 1 && n <= static_cast<int>(surahArabicNames.size()) ? surahArabicNames[n - 1]
+                                                                    : std::string(QuranBook::surahName(n));
+  };
+  // The list draws a mixed Arabic/number row's runs left to right, so this shows
+  // as written: start on the left, matching the "Juz N" column beside it.
+  return surah(range->startSurah) + " " + arabicNumber(range->startAyah) + " - " + surah(range->endSurah) + " " +
+         arabicNumber(range->endAyah);
+}
+
+void EpubReaderMenuActivity::openTocList(const bool juz) {
+  chapterReturnTo = view;
+  view = View::CHAPTERS;
+  tocRows.clear();
+  chapterSelectedIndex = 0;
+  surahList = false;
+  juzList = false;
+  surahArabicNames.clear();
+  if (epub) {
+    const bool quran = epub->getPath() == QuranBook::PATH;
+    surahList = quran && !juz;
+    juzList = quran && juz;
+    const int current = epub->getTocIndexForSpineIndex(currentSpineIndex);
+    for (int i = 0; i < epub->getTocItemsCount(); i++) {
+      const auto item = epub->getTocItem(i);
+      if (juzList && item.anchor.empty()) {
+        const auto dash = item.title.find(" - ");  // "١ - الفاتحة"
+        surahArabicNames.push_back(dash == std::string::npos ? item.title : item.title.substr(dash + 3));
+      }
+      if (quran && item.anchor.empty() == juz) continue;
+      // Open on the current surah/chapter, or on the last juz starting in or before it.
+      // ponytail: per surah, not per page -- a juz starting later in this surah is picked early.
+      if (juz ? item.spineIndex >= 0 && item.spineIndex <= currentSpineIndex : i == current) {
+        chapterSelectedIndex = static_cast<int>(tocRows.size());
+      }
+      tocRows.push_back(i);
+    }
+  }
+  requestUpdate();
+}
+
 void EpubReaderMenuActivity::handleListConfirm() {
   if (view == View::CHAPTERS) {
     if (!epub) return;
-    const auto tocItem = epub->getTocItem(chapterSelectedIndex);
+    const auto tocItem = epub->getTocItem(tocRows[chapterSelectedIndex]);
     if (tocItem.spineIndex == -1) return;  // non-navigable TOC row
     MenuResult menuResult{static_cast<int>(MenuAction::SELECT_CHAPTER), pendingOrientation, selectedPageTurnOption,
                           bookSettingsChanged};
@@ -605,11 +705,9 @@ void EpubReaderMenuActivity::handleListConfirm() {
   const auto selectedAction = activeItems()[activeIndex()].action;
   switch (selectedAction) {
     case MenuAction::SELECT_CHAPTER:
+    case MenuAction::SELECT_JUZ:
       // Chapter list is an in-drawer drill-down, not a separate full-screen activity.
-      chapterReturnTo = view;
-      view = View::CHAPTERS;
-      chapterSelectedIndex = epub ? std::max(0, epub->getTocIndexForSpineIndex(currentSpineIndex)) : 0;
-      requestUpdate();
+      openTocList(selectedAction == MenuAction::SELECT_JUZ);
       return;
     case MenuAction::ACTIVE_DICTIONARY: {
       DICTIONARIES.ensureScanned();
@@ -681,7 +779,13 @@ void EpubReaderMenuActivity::handleListConfirm() {
 }
 
 void EpubReaderMenuActivity::loop() {
-  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) {
+    // A closed popup closes the drawer too. The drawer only repaints its own area,
+    // so the popup's top half would stay drawn on the page above it, and the next
+    // one would stack on top. The reader applies every pick on close, cancelled or not.
+    if (!optionPopup.isActive()) finishWithAction(-1, /*cancelled=*/true);
+    return;
+  }
 
   // The tab row is a stop in the same up/down flow as the list below it (index
   // -1), mirroring Settings' "category tabs are index 0" pattern -- scrolling
@@ -846,11 +950,34 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   auto* fcm = renderer.getFontCacheManager();
   auto renderRows = [&](FontCacheManager::PrewarmScope* scope) {
     if (view == View::CHAPTERS) {
-      GUI.drawList(renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, itemCount, index, [this](int i) {
-        auto item = epub->getTocItem(i);
-        std::string indent((item.level - 1) * 2, ' ');
-        return indent + item.title;
-      });
+      // The Quran's surah rows read "الفاتحة" on the right, in the Mushaf typeface
+      // the page uses, and "1  Al-Fatihah" on the left, in the value column. Its juz
+      // rows read "الفاتحة ١ - البقرة ١٤١" on the right and "Juz 1" on the left; they
+      // keep the UI font, since Hafs's digits are tiny by design and it has no '-'.
+      const MushafUiFont mushafFont(renderer, surahList);
+      GUI.drawList(
+          renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, itemCount, index,
+          [this](int i) {
+            if (juzList) return juzSpanLabel(i + 1);
+            auto item = epub->getTocItem(tocRows[i]);
+            if (surahList) {
+              // Name only: the number is in the value column. Hafs has no U+0622, and
+              // the Mushaf spells it hamza + alef anyway (ءال عمران).
+              const auto dash = item.title.find(" - ");
+              if (dash != std::string::npos) item.title.erase(0, dash + 3);
+              for (size_t at; (at = item.title.find("\xD8\xA2")) != std::string::npos;) {
+                item.title.replace(at, 2, "\xD8\xA1\xD8\xA7");
+              }
+            }
+            std::string indent((item.level - 1) * 2, ' ');
+            return indent + item.title;
+          },
+          nullptr, nullptr,
+          surahList ? std::function<std::string(int)>(
+                          [](int i) { return std::to_string(i + 1) + "  " + QuranBook::surahName(i + 1); })
+          : juzList ? std::function<std::string(int)>(
+                          [](int i) { return std::string(tr(STR_JUZ)) + " " + std::to_string(i + 1); })
+                    : nullptr);
     } else if (view == View::DICTIONARY_LIST) {
       const auto& entries = DICTIONARIES.getEntries();
       const int activeDictionary = DICTIONARIES.getActiveIndex();

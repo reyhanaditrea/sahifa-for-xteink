@@ -164,4 +164,47 @@ bool ensureExtracted() {
   return true;
 }
 
+const char* surahName(const int surah) {
+  static constexpr const char* kNames[] = {
+      "Al-Fatihah",   "Al-Baqarah",  "Ali 'Imran",    "An-Nisa",        "Al-Ma'idah",
+      "Al-An'am",     "Al-A'raf",    "Al-Anfal",      "At-Tawbah",      "Yunus",
+      "Hud",          "Yusuf",       "Ar-Ra'd",       "Ibrahim",        "Al-Hijr",
+      "An-Nahl",      "Al-Isra",     "Al-Kahf",       "Maryam",         "Taha",
+      "Al-Anbya",     "Al-Hajj",     "Al-Mu'minun",   "An-Nur",         "Al-Furqan",
+      "Ash-Shu'ara",  "An-Naml",     "Al-Qasas",      "Al-'Ankabut",    "Ar-Rum",
+      "Luqman",       "As-Sajdah",   "Al-Ahzab",      "Saba",           "Fatir",
+      "Ya-Sin",       "As-Saffat",   "Sad",           "Az-Zumar",       "Ghafir",
+      "Fussilat",     "Ash-Shuraa",  "Az-Zukhruf",    "Ad-Dukhan",      "Al-Jathiyah",
+      "Al-Ahqaf",     "Muhammad",    "Al-Fath",       "Al-Hujurat",     "Qaf",
+      "Adh-Dhariyat", "At-Tur",      "An-Najm",       "Al-Qamar",       "Ar-Rahman",
+      "Al-Waqi'ah",   "Al-Hadid",    "Al-Mujadila",   "Al-Hashr",       "Al-Mumtahanah",
+      "As-Saf",       "Al-Jumu'ah",  "Al-Munafiqun",  "At-Taghabun",    "At-Talaq",
+      "At-Tahrim",    "Al-Mulk",     "Al-Qalam",      "Al-Haqqah",      "Al-Ma'arij",
+      "Nuh",          "Al-Jinn",     "Al-Muzzammil",  "Al-Muddaththir", "Al-Qiyamah",
+      "Al-Insan",     "Al-Mursalat", "An-Naba",       "An-Nazi'at",     "'Abasa",
+      "At-Takwir",    "Al-Infitar",  "Al-Mutaffifin", "Al-Inshiqaq",    "Al-Buruj",
+      "At-Tariq",     "Al-A'la",     "Al-Ghashiyah",  "Al-Fajr",        "Al-Balad",
+      "Ash-Shams",    "Al-Layl",     "Ad-Duhaa",      "Ash-Sharh",      "At-Tin",
+      "Al-'Alaq",     "Al-Qadr",     "Al-Bayyinah",   "Az-Zalzalah",    "Al-'Adiyat",
+      "Al-Qari'ah",   "At-Takathur", "Al-'Asr",       "Al-Humazah",     "Al-Fil",
+      "Quraysh",      "Al-Ma'un",    "Al-Kawthar",    "Al-Kafirun",     "An-Nasr",
+      "Al-Masad",     "Al-Ikhlas",   "Al-Falaq",      "An-Nas",
+  };
+  static_assert(sizeof(kNames) / sizeof(kNames[0]) == 114, "one name per surah");
+  return surah >= 1 && surah <= 114 ? kNames[surah - 1] : "";
+}
+
+const JuzRange* juzRange(const int juz) {
+  // Same starts as JUZ_STARTS in tools/quran/build_quran_epub_kfgqpc.py.
+  static constexpr JuzRange kJuz[] = {
+      {1, 1, 2, 141},   {2, 142, 2, 252}, {2, 253, 3, 92},  {3, 93, 4, 23},    {4, 24, 4, 147},  {4, 148, 5, 81},
+      {5, 82, 6, 110},  {6, 111, 7, 87},  {7, 88, 8, 40},   {8, 41, 9, 92},    {9, 93, 11, 5},   {11, 6, 12, 52},
+      {12, 53, 14, 52}, {15, 1, 16, 128}, {17, 1, 18, 74},  {18, 75, 20, 135}, {21, 1, 22, 78},  {23, 1, 25, 20},
+      {25, 21, 27, 55}, {27, 56, 29, 45}, {29, 46, 33, 30}, {33, 31, 36, 27},  {36, 28, 39, 31}, {39, 32, 41, 46},
+      {41, 47, 45, 37}, {46, 1, 51, 30},  {51, 31, 57, 29}, {58, 1, 66, 12},   {67, 1, 77, 50},  {78, 1, 114, 6},
+  };
+  static_assert(sizeof(kJuz) / sizeof(kJuz[0]) == 30, "one range per juz");
+  return juz >= 1 && juz <= 30 ? &kJuz[juz - 1] : nullptr;
+}
+
 }  // namespace QuranBook

@@ -407,6 +407,13 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.direction = CssTextDirection::Ltr;
       style.defined.direction = 1;
     }
+  } else if (iequalsAscii(name, "page-break-before") || iequalsAscii(name, "break-before")) {
+    const std::string_view breakValue = stripTrailingImportant(value);
+    if (iequalsAscii(breakValue, "always") || iequalsAscii(breakValue, "page")) style.defined.pageBreakBefore = 1;
+  } else if (iequalsAscii(name, "text-align-last")) {
+    if (iequalsAscii(stripTrailingImportant(value), "justify")) style.defined.textAlignLastJustify = 1;
+  } else if (iequalsAscii(name, "-sahifa-page-fill")) {
+    if (iequalsAscii(stripTrailingImportant(value), "justify")) style.defined.pageFill = 1;
   } else if (iequalsAscii(name, "vertical-align")) {
     if (iequalsAscii(value, "super")) {
       style.verticalAlign = CssVerticalAlign::Super;
@@ -771,6 +778,9 @@ bool CssParser::saveToCache() const {
     if (style.defined.display) definedBits |= 1 << 15;
     if (style.defined.direction) definedBits |= 1 << 16;
     if (style.defined.verticalAlign) definedBits |= 1 << 17;
+    if (style.defined.pageBreakBefore) definedBits |= 1 << 18;
+    if (style.defined.pageFill) definedBits |= 1 << 19;
+    if (style.defined.textAlignLastJustify) definedBits |= 1 << 20;
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
@@ -953,6 +963,9 @@ bool CssParser::loadFromCache() {
     style.defined.display = (definedBits & 1 << 15) != 0;
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+    style.defined.pageBreakBefore = (definedBits & 1 << 18) != 0;
+    style.defined.pageFill = (definedBits & 1 << 19) != 0;
+    style.defined.textAlignLastJustify = (definedBits & 1 << 20) != 0;
 
     rulesBySelector_[selector] = style;
   }

@@ -134,6 +134,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // stored the Latin size in this same 0..3 shape too; fromJson() folds that
   // range up into a point size (see LEGACY_FONT_SIZE_MAX).
   enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, FONT_SIZE_COUNT };
+  // A fifth Arabic size, offered only as the Quran's per-book override: Uthmanic
+  // Hafs at 11pt, small enough that each Madinah Mushaf page (one page-break
+  // paragraph in the Quran EPUB) fits one screen. Never a global arabicFontSize.
+  static constexpr uint8_t MUSHAF_PAGE_SIZE = FONT_SIZE_COUNT;
   static constexpr uint8_t LEGACY_FONT_SIZE_MAX = 3;
   static constexpr uint8_t DEFAULT_FONT_POINT_SIZE = 14;
   // Arabic reading-font family options (built-in only; SD card fonts use

@@ -20,6 +20,8 @@ namespace ArabicTextMarkers {
 // since BlockStyle::fromCssStyle lets the user's setting override the book's
 // CSS unless "Book's Style" is explicitly selected (see its comment).
 bool isBismillah(const char* text);
+// True if `text` is exactly an ayah-end marker (see parseAyahMarker).
+bool isAyahMarker(const char* text);
 }  // namespace ArabicTextMarkers
 
 class FontCacheManager;
@@ -77,6 +79,18 @@ class GfxRenderer {
   // setArabicDigitFallbackFontId() for why this needs to be independent of
   // arabicFontId_.
   int arabicDigitFallbackFontId_ = 0;
+  int mushafLayoutFontId_ = 0;
+  // Fonts for the digits inside the ayah rosette, largest first -- see ayahRosette().
+  std::vector<int> ayahDigitFontIds_;
+  // How an ayah rosette (U+06DD) is drawn: its scale, and the font its digits come
+  // from at full size. Shared by layout, prewarm and render so the three agree.
+  struct AyahRosette {
+    int scaleNum = 1;
+    int scaleDen = 1;
+    int digitFontId = 0;
+  };
+  AyahRosette ayahRosette(const EpdGlyph& rosette, EpdFontFamily::Style style, const uint32_t* digits,
+                          int digitCount) const;
   // Font to source the real Bismillah ligature glyph (U+FDFD) from, for the
   // Bismillah marker in drawArabicText/getArabicTextWidth -- UthmanicHafs itself
   // lacks this glyph (see QuranCommon's font-registration comment in main.cpp).
@@ -254,6 +268,15 @@ class GfxRenderer {
   // to always be registered (e.g. a built-in UI-tier Arabic font set once at boot),
   // not something that depends on user configuration.
   void setArabicDigitFallbackFontId(int fontId) { arabicDigitFallbackFontId_ = fontId; }
+  // The Arabic reading font the Quran is laid out line-for-line with its printed
+  // Mushaf in (the Mushaf Page size); at any other font its printed lines flow
+  // as one paragraph per ayah. 0 = never. See ChapterHtmlSlimParser::mushafLayout.
+  void setMushafLayoutFontId(int fontId) { mushafLayoutFontId_ = fontId; }
+  int getMushafLayoutFontId() const { return mushafLayoutFontId_; }
+  // Candidate fonts for the ayah rosette's digits, largest first; the largest whose
+  // three-digit number fits inside the rosette is used. Same always-registered
+  // requirement as setArabicDigitFallbackFontId.
+  void setAyahDigitFontIds(std::vector<int> fontIds) { ayahDigitFontIds_ = std::move(fontIds); }
   // Font to source the Bismillah ligature glyph (U+FDFD) from. Same "independent of
   // arabicFontId_/whatever reading font is active" reasoning as
   // setArabicDigitFallbackFontId() above -- the Bismillah must render as the real
@@ -498,6 +521,11 @@ class GfxRenderer {
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
+  /// How far a glyph may reach BELOW the baseline, as a positive depth.
+  /// Needed together with the ascender to size a box around display text: the
+  /// line height is not the ink (advanceY is a uint8_t, so a large face can
+  /// report a line box shorter than the glyphs it actually draws).
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,

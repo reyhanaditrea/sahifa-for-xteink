@@ -279,24 +279,47 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   }
 }
 
+void ChapterHtmlSlimParser::fillPage() {
+  // Under half full is a page meant to be short -- the Mushaf's opening pages,
+  // or one a mid-page juz anchor cut -- and spread out it reads as broken.
+  const int extra = viewportHeight - currentPageNextY;
+  if (!currentPage || currentPage->elements.size() < 2 || extra <= 0 || currentPageNextY * 2 < viewportHeight) return;
+  auto& elements = currentPage->elements;
+  const int gaps = static_cast<int>(elements.size()) - 1;
+  for (int i = 1; i <= gaps; i++) elements[i]->yPos = static_cast<int16_t>(elements[i]->yPos + extra * i / gaps);
+}
+
+bool ChapterHtmlSlimParser::breakPage() {
+  if (!currentPage || currentPage->elements.empty()) return true;
+  completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+  completedPageCount++;
+  currentPage.reset(new (std::nothrow) Page());
+  if (!currentPage) {
+    LOG_ERR("EHP", "Failed to create page after page break");
+    return false;
+  }
+  currentPageNextY = 0;
+  pendingBottomMargin = 0;
+  currentPageVisibleOffsetSet = false;
+  return true;
+}
+
 void ChapterHtmlSlimParser::flushPendingAnchor() {
+  // A page-break-before block: the previous block is flushed by now, so the
+  // page it ended on is complete.
+  if (pendingPageBreak) {
+    pendingPageBreak = false;
+    if (fillCurrentPage) fillPage();
+    if (!breakPage()) return;
+  }
+  fillCurrentPage = pendingPageFill;
+
   if (pendingAnchorId.empty()) return;
 
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
-    if (currentPage && !currentPage->elements.empty()) {
-      completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
-      completedPageCount++;
-      currentPage.reset(new (std::nothrow) Page());
-      if (!currentPage) {
-        LOG_ERR("EHP", "Failed to create page after TOC anchor page break");
-        return;
-      }
-      currentPageNextY = 0;
-      pendingBottomMargin = 0;
-      currentPageVisibleOffsetSet = false;
-    }
+    if (!breakPage()) return;
   }
 
   // Record deferred anchor after previous block is flushed (and any TOC page break)
@@ -313,6 +336,11 @@ void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
 }
 
 // flush the contents of partWordBuffer to currentTextBlock
+bool ChapterHtmlSlimParser::isMushafLayout(const GfxRenderer& renderer, const int fontId) {
+  return renderer.getMushafLayoutFontId() != 0 &&
+         renderer.getArabicFontIdFor(fontId) == renderer.getMushafLayoutFontId();
+}
+
 void ChapterHtmlSlimParser::flushPartWordBuffer() {
   if (!currentTextBlock) {
     partWordBufferIndex = 0;
@@ -353,9 +381,18 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
       fallbackTableRowToStacked();
     }
   }
+  const bool endsAyah = ayahParagraphs && ArabicTextMarkers::isAyahMarker(partWordBuffer);
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
+
+  // A flowing ayah paragraph ends at its ayah marker; the next starts a third of
+  // a line lower.
+  if (endsAyah) {
+    BlockStyle next = currentTextBlock->getBlockStyle().withoutTop().withoutBottom();
+    next.marginTop = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression) / 3);
+    startNewTextBlock(next);
+  }
 }
 
 // start a new text block if needed
@@ -772,6 +809,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->depth += 1;
     return;
   }
+
+  // Applied by the next startNewTextBlock, once the previous block is on its pages.
+  // A printed-line block outside the Mushaf layout flows on; see mushafLayout.
+  const bool flowingMushafLine = !self->mushafLayout && (cssStyle.hasPageFill() || cssStyle.hasTextAlignLastJustify());
+  if (cssStyle.hasPageBreakBefore() && isHeaderOrBlock(name) && !flowingMushafLine) self->pendingPageBreak = true;
+  if (isHeaderOrBlock(name)) self->pendingPageFill = cssStyle.hasPageFill() && !flowingMushafLine;
 
   // Buffer one simple row; oversized rows fall back to full-width flow.
   if (strcmp(name, "table") == 0) {
@@ -1374,8 +1417,16 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->startNewTextBlock(brStyle);
     } else {
       self->currentCssStyle = cssStyle;
-      const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
-                                                                                  BlockStyle::CombineAxis::Horizontal);
+      auto blockStyle = userAlignmentBlockStyle;
+      // A printed Mushaf line outside the Mushaf layout: no stretching, and it
+      // continues the ayah the previous line left open (see mushafLayout).
+      const bool flowingMushafLine = !self->mushafLayout && blockStyle.justifyLast;
+      blockStyle.justifyLast = blockStyle.justifyLast && !flowingMushafLine;
+      const bool continuesAyah =
+          flowingMushafLine && self->ayahParagraphs && self->currentTextBlock && !self->currentTextBlock->isEmpty();
+      self->ayahParagraphs = flowingMushafLine;
+      const auto accumulated =
+          self->blockStyleStack.back().getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Horizontal);
       self->blockStyleStack.push_back(accumulated);
       // A block tag nested directly inside a fresh <li> (the common <li><p>text</p>
       // structure) must NOT start a new text block: the li's block only holds the
@@ -1384,7 +1435,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // real Arabic EPUB). Keep appending into the bullet's block instead.
       const bool blockIsLoneBullet =
           self->currentTextBlock && self->currentTextBlock->containsSingleWord("\xe2\x80\xa2");
-      if (!blockIsLoneBullet) {
+      if (!blockIsLoneBullet && !continuesAyah) {
         self->startNewTextBlock(accumulated.withoutBottom());
       }
       self->updateEffectiveInlineStyle();
@@ -1950,8 +2001,10 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       }
       self->blockStyleStack.pop_back();
       // Start a new text block with the parent style to prevent subsequent bare text
-      // from inheriting the closed block style (e.g. alignment or margins).
-      self->startNewTextBlock(self->blockStyleStack.back());
+      // from inheriting the closed block style (e.g. alignment or margins) -- unless
+      // a flowing Mushaf line closes mid-ayah: the next line continues it.
+      const bool midAyah = self->ayahParagraphs && self->currentTextBlock && !self->currentTextBlock->isEmpty();
+      if (!midAyah) self->startNewTextBlock(self->blockStyleStack.back());
     }
 
     // </li> closes: if the bullet never got inline text (empty <li> or <li> with only
@@ -2230,8 +2283,10 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageNextY += blockStyle.paddingBottom;
   }
 
-  // Extra paragraph spacing if enabled (default behavior)
-  if (extraParagraphSpacing) {
+  // Extra paragraph spacing if enabled (default behavior). Not after a block
+  // that justifies its last line: that is one line of a set page (the Quran's
+  // Mushaf lines), and a gap after each would push the page off the screen.
+  if (extraParagraphSpacing && !blockStyle.justifyLast) {
     currentPageNextY += lineHeight / 2;
   }
 }

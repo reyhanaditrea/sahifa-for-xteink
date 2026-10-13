@@ -58,7 +58,11 @@ namespace {
 // positioned columns (this fork's earlier #980/#372 table support upgraded to
 // upstream's column layout) instead of flattened paragraphs with synthetic
 // row/cell labels (#2654). Both change layout output for affected books.
-constexpr uint8_t SECTION_FILE_VERSION = 42;
+// v43: a block with page-break-before: always (or break-before: page) now
+// starts a new page -- the Quran EPUB uses it to keep the Madinah Mushaf's
+// page boundaries -- and -sahifa-page-fill: justify spreads the lines of a
+// page so cut down the whole screen.
+constexpr uint8_t SECTION_FILE_VERSION = 43;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

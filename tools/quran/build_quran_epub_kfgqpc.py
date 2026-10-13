@@ -18,11 +18,8 @@ Transformations applied per surah:
      bismillah-table -- correct per tradition) and folds it into ayah 1's own
      text for Surah 1 (Al-Fatiha, where it IS the first ayah). Every other
      surah has a separate bismillah-table with no vocalization; we detect its
-     presence and prepend the real ligature glyph, U+FDFD, wrapped in our
-     U+E005/U+E006 marker convention -- GfxRenderer::drawArabicText's Bismillah
-     branch renders it from a tiny dedicated font (QuranCommon) bundled just
-     for this glyph, since UthmanicHafs itself lacks it (see main.cpp's font
-     registration comment).
+     presence and set al-Fatihah's vocalized first ayah above the surah as
+     plain text, in the same font as the ayat.
   4. Surah headers: a single-row banner styled after the Madinah Mushaf's own
      surah-heading design -- rule lines above/below, ayah-count label (right),
      the surah's calligraphic name (center, baked from the source's own
@@ -42,6 +39,7 @@ source changes produces a byte-identical asset.
 Usage: python3 build_quran_epub_kfgqpc.py   (from tools/quran/)
 """
 
+import json
 import re
 import shutil
 import sys
@@ -67,18 +65,6 @@ ARABIC_INDIC = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
 # GfxRenderer::parseAyahMarker recognizes this exact byte sequence.
 AYAH_MARKER = "﴿{}﴾"
 
-BASMALA_VOCALIZED = "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ"  # kept as a documented fallback; unused below
-
-# Logical order: U+E005, the real Bismillah ligature (U+FDFD), U+E006. Same
-# build-tool-controlled PUA-sentinel convention as AYAH_MARKER above --
-# GfxRenderer::parseBismillahMarker recognizes this exact byte sequence. A
-# space on each side for the same reason AYAH_MARKER needs one (see below):
-# the marker must be its own isolated token, or GfxRenderer's exact-match
-# parse never fires and the whole thing falls through to the plain-text path,
-# where U+FDFD has no glyph in any general-purpose reading font and silently
-# vanishes.
-BISMILLAH_MARKER = " ﷽ "
-
 # Standard chronological (nuzul) revelation order, index = revelation order
 # (1-based), value = Mushaf surah number -- the widely-published Al-Azhar
 # committee chronology (matches Wikipedia's "Chronological order of the
@@ -101,6 +87,16 @@ REVELATION_ORDER = [
 ]
 assert len(REVELATION_ORDER) == SURAH_COUNT and set(REVELATION_ORDER) == set(range(1, SURAH_COUNT + 1))
 REVELATION_ORDER_FOR_SURAH = {surah: order for order, surah in enumerate(REVELATION_ORDER, start=1)}
+
+# Where each of the 30 juz begins, as (surah, ayah), juz 1..30 in order --
+# the standard Madinah Mushaf division. Each gets its own TOC entry so the
+# chapter list can jump straight to a juz, which surah-only entries can't do
+# for the 21 that start mid-surah.
+JUZ_STARTS = [
+    (1, 1), (2, 142), (2, 253), (3, 93), (4, 24), (4, 148), (5, 82), (6, 111), (7, 88), (8, 41),
+    (9, 93), (11, 6), (12, 53), (15, 1), (17, 1), (18, 75), (21, 1), (23, 1), (25, 21), (27, 56),
+    (29, 46), (33, 31), (36, 28), (39, 32), (41, 47), (46, 1), (51, 31), (58, 1), (67, 1), (78, 1),
+]
 
 # Must match GfxRenderer.cpp's SURAH_BANNER_NAME_BASE_CP -- surah n's calligraphic
 # name glyph (baked via fontconvert.py --glyph-map, see
@@ -137,6 +133,15 @@ def surah_banner_marker(surah: int, ayah_count: int, revelation_order: int) -> s
 # directly).
 STRIP_CHARS = "⁠​"
 
+# Stands in for the source's Mushaf pagebreak spans between extract_surah_text
+# and build_surah_html, which turns each page into a page-break-before
+# paragraph so the reader's pages follow the Madinah Mushaf's 604.
+PAGE_MARK = "\x00"
+
+# Where each Madinah Mushaf line begins, per surah, as (ayah, word index) into
+# the ayah's words -- see fetch_mushaf_lines.py, which writes it.
+MUSHAF_LINES = json.loads((HERE / "source" / "mushaf_lines.json").read_text(encoding="utf-8"))
+
 
 def arabic_digits(n: str) -> str:
     return n.translate(ARABIC_INDIC)
@@ -148,9 +153,9 @@ def local_tag(elem: ET.Element) -> str:
 
 def extract_surah_text(div: ET.Element) -> str:
     """Concatenate a <div class="surah-text">'s content in document order,
-    rewriting <span class="ayah-number"> into our marker convention and
-    dropping pagebreak spans (and the WJ/ZWS characters around ayah numbers)
-    entirely. Any other inline element (e.g. a hizb-marker span) is treated
+    rewriting <span class="ayah-number"> into our marker convention,
+    pagebreak spans into PAGE_MARK, and dropping the WJ/ZWS characters around
+    ayah numbers entirely. Any other inline element (e.g. a hizb-marker span) is treated
     as plain text -- its .text/.tail still gets included normally."""
     parts = []
     if div.text:
@@ -168,6 +173,8 @@ def extract_surah_text(div: ET.Element) -> str:
             # and silently vanish -- leaving just a bare digit with no ayah rosette
             # (confirmed via simulator: every marker logged matched=0).
             parts.append(" " + AYAH_MARKER.format(digits) + " ")
+        elif child.get("role") == "doc-pagebreak":
+            parts.append(PAGE_MARK)
         elif child.text:
             parts.append(child.text)
         if child.tail:
@@ -195,8 +202,60 @@ def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bis
     # -- NOT concatenated into the ayah_text paragraph below, where it would flow
     # inline as the first "word" of the first ayah's line instead of standing alone
     # above it, the way every printed Mushaf sets it.
-    bismillah_line = f'<p class="block_" dir="rtl">{bismillah}</p>' if bismillah else '<p class="block_" dir="rtl"> </p>'
-    body = f'{bismillah_line}<p class="block_" dir="rtl">{ayah_text}</p><p class="block_1" dir="rtl"> </p>'
+    # Set as plain text in the reading font (al-Fatihah's own first ayah), not as
+    # the U+FDFD ligature glyph, so it matches the ayat around it at every size.
+    # <h2>: a header keeps its CSS centering over the reader's alignment setting.
+    bismillah_line = f'<h2 class="block_" dir="rtl">{bismillah}</h2>' if bismillah else '<p class="block_" dir="rtl"> </p>'
+    # One paragraph per Mushaf LINE (MUSHAF_LINES), so the reader's lines end
+    # where the printed page's do: .mline justifies even a single-line block,
+    # and a line too wide for the screen wraps once and the next one starts
+    # fresh. A line opening a Mushaf page also starts a reader page (.page) --
+    # except the surah's first, which would lose its banner to the page before.
+    # Each surah is its own spine item, so a surah opening mid-page starts a
+    # reader page all the same. .mushaf spreads a finished page's lines down
+    # the screen, as the printed page always runs its full 15 lines.
+    line_starts = {tuple(start) for start in MUSHAF_LINES[str(surah)]}
+    paras = []  # [classes, id, tokens, (ayah, word) of the first token]
+    new_page = False
+    # The Mushaf's first two pages (al-Fatihah, al-Baqarah 1-5) set their few
+    # lines narrower, inside the opening ornament, and are not spread down the
+    # page.
+    opening = surah in (1, 2)
+    ayah, word = 1, 0
+    for token in ayah_text.replace(PAGE_MARK, f" {PAGE_MARK} ").split():
+        if token == PAGE_MARK:
+            new_page = bool(paras)
+            opening = opening and not new_page
+            continue
+        pos = (ayah, word)
+        if token.startswith(AYAH_MARKER[0]):
+            ayah, word = ayah + 1, 0
+        else:
+            word += 1
+        if not paras or new_page or pos in line_starts:
+            classes = "block_ mline opening" if opening else "block_ mushaf mline"
+            paras.append([classes + (" page" if new_page else ""), "", [], pos])
+            new_page = False
+        paras[-1][2].append(token)
+    # A juz carries its TOC anchor on the line that opens it: the reader records
+    # anchors per block (ChapterHtmlSlimParser), so an inline anchor would
+    # resolve to the end of the surah. Juz 4, 7 and 11 open mid-line; that line
+    # is split there, so its first part sits alone on a screen line.
+    for juz, (juz_surah, juz_ayah) in enumerate(JUZ_STARTS, start=1):
+        if juz_surah != surah or juz_ayah == 1:
+            continue
+        k = max(k for k, para in enumerate(paras) if para[3] <= (juz_ayah, 0))
+        if paras[k][3] == (juz_ayah, 0):
+            paras[k][1] = f"juz_{juz}"
+        else:
+            cls, _, tokens, pos = paras[k]
+            cut = tokens.index(AYAH_MARKER.format(arabic_digits(str(juz_ayah - 1)))) + 1
+            paras[k : k + 1] = [[cls, "", tokens[:cut], pos], ["block_ mushaf mline", f"juz_{juz}", tokens[cut:], (juz_ayah, 0)]]
+    text_html = ""
+    for cls, para_id, tokens, _ in paras:
+        id_attr = f' id="{para_id}"' if para_id else ""
+        text_html += f'<p class="{cls}"{id_attr} dir="rtl">{" ".join(tokens)}</p>'
+    body = f'{bismillah_line}{text_html}<p class="block_1" dir="rtl"> </p>'
     return (
         "<?xml version='1.0' encoding='utf-8'?>\n"
         '<html xmlns="http://www.w3.org/1999/xhtml" lang="ar" xml:lang="ar">\n'
@@ -212,7 +271,20 @@ def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bis
     )
 
 
-STYLESHEET_CSS = """.block_ {
+STYLESHEET_CSS = """.page {
+  page-break-before: always;
+}
+.mushaf {
+  -sahifa-page-fill: justify;
+}
+.mline {
+  text-align-last: justify;
+}
+.opening {
+  margin-left: 1em;
+  margin-right: 1em;
+}
+.block_ {
   direction: rtl;
   display: block;
   font-weight: bold;
@@ -320,15 +392,24 @@ def build_toc_ncx(surah_names: list[str]) -> str:
         # trap for RTL text. Show the bare name directly, e.g. "44 - الدخان" not
         # "44 - سورة الدخان".
         bare_name = name[len("سورة "):] if name.startswith("سورة ") else name
-        label = f"{arabic_digits(str(n))} - {bare_name}"
-        nav_points.append(
-            f'    <navPoint id="num_{n}" playOrder="{n}" class="chapter">\n'
-            f"      <navLabel>\n"
-            f"        <text>{label}</text>\n"
-            f"      </navLabel>\n"
-            f'      <content src="text/surah-{n:03d}.html"/>\n'
-            f"    </navPoint>"
-        )
+        entries = [(f"{arabic_digits(str(n))} - {bare_name}", f"num_{n}", f"text/surah-{n:03d}.html")]
+        # Juz entries sit in reading order among the surahs. One starting at
+        # ayah 1 goes AFTER its surah (anchored on the banner): the reader names
+        # the current chapter after a file's FIRST TOC entry, which must stay
+        # the surah.
+        for juz, (juz_surah, juz_ayah) in enumerate(JUZ_STARTS, start=1):
+            if juz_surah == n:
+                anchor = f"toc_id_{n}" if juz_ayah == 1 else f"juz_{juz}"
+                entries.append((f"الجزء {arabic_digits(str(juz))}", f"juz_{juz}", f"text/surah-{n:03d}.html#{anchor}"))
+        for label, nav_id, src in entries:
+            nav_points.append(
+                f'    <navPoint id="{nav_id}" playOrder="{len(nav_points) + 1}" class="chapter">\n'
+                f"      <navLabel>\n"
+                f"        <text>{label}</text>\n"
+                f"      </navLabel>\n"
+                f'      <content src="{src}"/>\n'
+                f"    </navPoint>"
+            )
     return (
         "<?xml version='1.0' encoding='utf-8'?>\n"
         '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="ara">\n'
@@ -373,19 +454,23 @@ def main() -> int:
             return 1
         ayah_text = extract_surah_text(div)
         ayah_count = len(div.findall('.//x:span[@class="ayah-number"]', NS))
-        bismillah = BISMILLAH_MARKER if "bismillah-table" in raw else ""
+        if n == 1:
+            # The source leaves other surahs' Bismillah unvocalized; al-Fatihah's
+            # first ayah is the vocalized text every one of them is printed with.
+            bismillah_text = ayah_text.split(AYAH_MARKER.format(arabic_digits("1")))[0].replace(PAGE_MARK, "").strip()
+        bismillah = bismillah_text if "bismillah-table" in raw else ""
 
         (WORK / "text" / f"surah-{n:03d}.html").write_text(
-            build_surah_html(n, name, ayah_text, ayah_count, bismillah), encoding="utf-8"
+            build_surah_html(n, name, ayah_text, ayah_count, bismillah), encoding="utf-8", newline="\n"
         )
 
-    (WORK / "stylesheet.css").write_text(STYLESHEET_CSS, encoding="utf-8")
-    (WORK / "titlepage.xhtml").write_text(TITLEPAGE_XHTML, encoding="utf-8")
-    (WORK / "content.opf").write_text(build_content_opf(surah_names), encoding="utf-8")
-    (WORK / "toc.ncx").write_text(build_toc_ncx(surah_names), encoding="utf-8")
-    (WORK / "META-INF" / "container.xml").write_text(CONTAINER_XML, encoding="utf-8")
+    (WORK / "stylesheet.css").write_text(STYLESHEET_CSS, encoding="utf-8", newline="\n")
+    (WORK / "titlepage.xhtml").write_text(TITLEPAGE_XHTML, encoding="utf-8", newline="\n")
+    (WORK / "content.opf").write_text(build_content_opf(surah_names), encoding="utf-8", newline="\n")
+    (WORK / "toc.ncx").write_text(build_toc_ncx(surah_names), encoding="utf-8", newline="\n")
+    (WORK / "META-INF" / "container.xml").write_text(CONTAINER_XML, encoding="utf-8", newline="\n")
     (WORK / "images" / "cover.png").write_bytes(COVER.read_bytes())
-    (WORK / "mimetype").write_text("application/epub+zip", encoding="utf-8")
+    (WORK / "mimetype").write_text("application/epub+zip", encoding="utf-8", newline="\n")
 
     names = ["mimetype", "META-INF/container.xml", "content.opf", "toc.ncx", "titlepage.xhtml", "stylesheet.css",
              "images/cover.png"] + [f"text/surah-{n:03d}.html" for n in range(1, SURAH_COUNT + 1)]

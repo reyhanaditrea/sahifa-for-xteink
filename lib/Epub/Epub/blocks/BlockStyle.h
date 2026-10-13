@@ -31,6 +31,9 @@ struct BlockStyle {
   bool textAlignDefined = false;   // true if text-align was explicitly set in CSS
   bool isRtl = false;              // true if resolved direction is RTL
   bool directionDefined = false;   // true if direction was explicitly set in CSS/HTML
+  // text-align-last: justify -- a one-line block is justified too. Layout-time
+  // only (lines are positioned when built), so not serialized with the block.
+  bool justifyLast = false;
 
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
@@ -143,6 +146,7 @@ struct BlockStyle {
     } else {
       blockStyle.alignment = paragraphAlignment;
     }
+    blockStyle.justifyLast = cssStyle.hasTextAlignLastJustify();
     // RTL direction from CSS/HTML
     if (cssStyle.hasDirection()) {
       blockStyle.isRtl = (cssStyle.direction == CssTextDirection::Rtl);

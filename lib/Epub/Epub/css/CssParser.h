@@ -38,7 +38,10 @@ class CssParser {
   // (physical) values for those declarations.
   // v9: rules with no supported properties are no longer stored (upstream #2604), so cached rule
   // sets built under v8 contain entries the parser would no longer produce.
-  static constexpr uint8_t CSS_CACHE_VERSION = 9;
+  // v10: page-break-before / break-before, -sahifa-page-fill and text-align-last: justify
+  // parsed (defined bits 18-20) --
+  // v9 caches dropped those declarations, and rules holding nothing else were not stored.
+  static constexpr uint8_t CSS_CACHE_VERSION = 10;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

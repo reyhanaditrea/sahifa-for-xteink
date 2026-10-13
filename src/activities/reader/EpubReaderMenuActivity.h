@@ -60,7 +60,10 @@ class EpubReaderMenuActivity final : public Activity {
     // Opens the installed-dictionary list as a drill-down; picking a row calls
     // DICTIONARIES.setActiveIndex() and returns to the Dictionary tab.
     ACTIVE_DICTIONARY,
-    DEFINITION_TEXT_SIZE
+    DEFINITION_TEXT_SIZE,
+    // The Quran's juz list: the same drill-down as SELECT_CHAPTER, over the TOC's
+    // juz rows instead of its surah rows (see openTocList).
+    SELECT_JUZ
   };
 
   // `epub` is non-owning: the reader keeps the Epub alive for the whole time
@@ -113,6 +116,11 @@ class EpubReaderMenuActivity final : public Activity {
   void openSettingEditor(MenuAction action);
   void finishWithAction(int action, bool cancelled);
   void handleListConfirm();
+  // Opens the CHAPTERS drill-down. The Quran's TOC interleaves surahs and juz;
+  // its surah rows have no anchor and its juz rows do, so each list keeps one kind.
+  void openTocList(bool juz);
+  // A juz row's span, e.g. "الفاتحة ١ - البقرة ١٤١".
+  std::string juzSpanLabel(int juz) const;
 
   const std::vector<MenuItem>& activeItems() const {
     switch (view) {
@@ -160,6 +168,14 @@ class EpubReaderMenuActivity final : public Activity {
   int navigateSelectedIndex = 0;
   int settingsSelectedIndex = 0;
   int chapterSelectedIndex = 0;
+  // The TOC indices the CHAPTERS list shows, in order; chapterSelectedIndex indexes this.
+  std::vector<int> tocRows;
+  // The Quran's surah list: row i is surah i + 1, shown with its transliterated name.
+  bool surahList = false;
+  // The Quran's juz list: row i is juz i + 1. Holds each surah's Arabic name
+  // (index surah - 1), read off the TOC, for the rows' surah:ayah spans.
+  bool juzList = false;
+  std::vector<std::string> surahArabicNames;
   int dictionarySelectedIndex = 0;
   // The tab each drill-down was opened from, so Back returns there. Chapters is
   // only reachable from Navigate today, but storing it costs a byte and stops the

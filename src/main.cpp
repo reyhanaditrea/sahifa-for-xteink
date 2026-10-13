@@ -147,15 +147,17 @@ EpdFontFamily notosansarabic12FontFamily(&notosansarabic12RegularFont);
 // modification not permitted -- see conversion note in
 // lib/EpdFont/builtinFonts/source/UthmanicHafs/): the Madinah Mushaf's own
 // typeface, Hafs 'an 'Asim riwayah -- the built-in Quranic reading family (see
-// QuranBook.h). Same four reading sizes as Naskh.
-EpdFont uthmanichafs12RegularFont(&uthmanichafs_12_regular);
-EpdFontFamily uthmanichafs12FontFamily(&uthmanichafs12RegularFont);
-EpdFont uthmanichafs14RegularFont(&uthmanichafs_14_regular);
-EpdFontFamily uthmanichafs14FontFamily(&uthmanichafs14RegularFont);
+// QuranBook.h). Four reading sizes, plus 11pt for the Quran's Mushaf Page size.
+EpdFont uthmanichafs11RegularFont(&uthmanichafs_11_regular);
+EpdFontFamily uthmanichafs11FontFamily(&uthmanichafs11RegularFont);
 EpdFont uthmanichafs16RegularFont(&uthmanichafs_16_regular);
 EpdFontFamily uthmanichafs16FontFamily(&uthmanichafs16RegularFont);
 EpdFont uthmanichafs18RegularFont(&uthmanichafs_18_regular);
 EpdFontFamily uthmanichafs18FontFamily(&uthmanichafs18RegularFont);
+EpdFont uthmanichafs22RegularFont(&uthmanichafs_22_regular);
+EpdFontFamily uthmanichafs22FontFamily(&uthmanichafs22RegularFont);
+EpdFont uthmanichafs26RegularFont(&uthmanichafs_26_regular);
+EpdFontFamily uthmanichafs26FontFamily(&uthmanichafs26RegularFont);
 
 // Tajawal (Boutros International, OFL-licensed, from Google Fonts): a modern
 // geometric-sans reading option, alongside the two traditional book-printing
@@ -552,10 +554,11 @@ void setupDisplayAndFonts(bool seamless = false, bool uiOnlyFonts = false) {
   renderer.insertFont(NOTONASKHARABIC_14_FONT_ID, notonaskharabic14FontFamily);
   renderer.insertFont(NOTONASKHARABIC_16_FONT_ID, notonaskharabic16FontFamily);
   renderer.insertFont(NOTONASKHARABIC_18_FONT_ID, notonaskharabic18FontFamily);
-  renderer.insertFont(UTHMANICHAFS_12_FONT_ID, uthmanichafs12FontFamily);
-  renderer.insertFont(UTHMANICHAFS_14_FONT_ID, uthmanichafs14FontFamily);
+  renderer.insertFont(UTHMANICHAFS_11_FONT_ID, uthmanichafs11FontFamily);
   renderer.insertFont(UTHMANICHAFS_16_FONT_ID, uthmanichafs16FontFamily);
   renderer.insertFont(UTHMANICHAFS_18_FONT_ID, uthmanichafs18FontFamily);
+  renderer.insertFont(UTHMANICHAFS_22_FONT_ID, uthmanichafs22FontFamily);
+  renderer.insertFont(UTHMANICHAFS_26_FONT_ID, uthmanichafs26FontFamily);
   renderer.insertFont(TAJAWAL_8_FONT_ID, tajawal8FontFamily);
   renderer.insertFont(TAJAWAL_10_FONT_ID, tajawal10FontFamily);
   renderer.insertFont(TAJAWAL_12_FONT_ID, tajawal12FontFamily);
