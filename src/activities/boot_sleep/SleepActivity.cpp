@@ -35,8 +35,9 @@
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
-#include "images/MidadLogo120.h"
 #include "images/MoonIcon.h"
+#include "images/SahifahMark.h"
+#include "images/SahifahWordmark.h"
 #include "reading/ReadingStatsStore.h"
 
 namespace {
@@ -689,10 +690,18 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
+  // Boot screen's lockup (see BootActivity): mark, wordmark, then "Sleeping".
+  // drawImage blits whole bytes, so both bitmaps land on multiples of 8, and the
+  // non-square wordmark passes its panel-oriented (swapped) dimensions.
+  const int groupHeight = SAHIFAHMARK_HEIGHT + 40 + SAHIFAHWORDMARK_HEIGHT + 10 + renderer.getLineHeight(SMALL_FONT_ID);
+  const int markY = (pageHeight - groupHeight) / 2 / 8 * 8;
+  const int wordY = markY + SAHIFAHMARK_HEIGHT + 40;
+
   renderer.clearScreen();
-  renderer.drawImage(MidadLogo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_BRAND_MIDAD), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
+  renderer.drawImage(SahifahMark, (pageWidth - SAHIFAHMARK_WIDTH) / 2, markY, SAHIFAHMARK_WIDTH, SAHIFAHMARK_HEIGHT);
+  renderer.drawImage(SahifahWordmark, (pageWidth - SAHIFAHWORDMARK_WIDTH) / 2, wordY, SAHIFAHWORDMARK_HEIGHT,
+                     SAHIFAHWORDMARK_WIDTH);
+  renderer.drawCenteredText(SMALL_FONT_ID, wordY + SAHIFAHWORDMARK_HEIGHT + 10, tr(STR_SLEEPING));
 
   // Make sleep screen dark unless light is selected in settings
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {

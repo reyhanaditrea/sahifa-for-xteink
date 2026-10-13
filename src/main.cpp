@@ -39,6 +39,7 @@
 #include "TasbihStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/boot_sleep/BootActivity.h"
 #include "activities/settings/OtaRollbackRecoveryActivity.h"
 #include "activities/settings/OtaUpdateActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
@@ -536,7 +537,8 @@ void enterDeepSleep(bool fromTimeout = false) {
 // show book text and always ends in another reboot (the OTA screens) -- see setup()'s
 // otaBoot. Everything skipped here is reachable on demand later (ensureLoaded /
 // ensureExtracted), so this is a latency trade, not a functional one.
-void setupDisplayAndFonts(bool seamless = false, bool uiOnlyFonts = false) {
+// splash: show the boot screen once the built-in fonts are in, and step its bar.
+void setupDisplayAndFonts(bool seamless = false, bool uiOnlyFonts = false, bool splash = false) {
 #if !FREEINK_MCU_C3
   // C3 resolves its controller in HalGPIO::begin() before SPI claims the
   // display pins. X4 Pro skips that C3-only path, so probe here before
@@ -610,9 +612,18 @@ void setupDisplayAndFonts(bool seamless = false, bool uiOnlyFonts = false) {
     return;
   }
 
+  // The boot screen goes up before the slow SD work below so its bar can track it.
+  // Built-in fonts are all in by now; the Arabic UI mappings cover an Arabic
+  // interface's "Booting" label until arabicFontSystem.begin() redoes them.
+  if (splash) {
+    arabicFontSystem.beginUiOnly(renderer);
+    activityManager.goToBoot();
+  }
+
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);
   arabicFontSystem.begin(renderer);
+  if (splash) BootActivity::showProgress(renderer, 2, 3);
 
   // Self-heal the extracted Quran (and its default-font sidecar) at boot for
   // devices where the toggle is already on -- covers SD swaps, torn writes,
@@ -620,6 +631,8 @@ void setupDisplayAndFonts(bool seamless = false, bool uiOnlyFonts = false) {
   if (MIDAD_APP_SETTINGS.quranEnabled) {
     QuranBook::ensureExtracted();
   }
+  // Full while Home or the last book opens behind it.
+  if (splash) BootActivity::showProgress(renderer, 3, 3);
 
   LOG_DBG("MAIN", "Fonts setup");
 }
@@ -806,7 +819,7 @@ void setup() {
       resume == BootResume::Silent && !recoveryFirmwareMode && !HalSystem::isRebootFromPanic() &&
       (snapshotTarget == SILENT_REBOOT_TARGET_OTA_CHECK || snapshotTarget == SILENT_REBOOT_TARGET_OTA_INSTALL);
 
-  setupDisplayAndFonts(resume != BootResume::Splash, otaBoot);
+  setupDisplayAndFonts(resume != BootResume::Splash, otaBoot, resume == BootResume::Splash);
 
 #ifdef TLS_HEAP_MEASURE_HARNESS
   // Debug-only entry point (default_tls_measure env, see platformio.ini):
@@ -851,8 +864,7 @@ void setup() {
       }
       break;
     case BootResume::Splash:
-      activityManager.goToBoot();
-      break;
+      break;  // shown by setupDisplayAndFonts
   }
 
   // Output polarity is resolved per render by ActivityManager (night mode
