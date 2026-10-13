@@ -294,7 +294,7 @@ void StopwatchActivity::renderPomodoro(const int pageWidth, const int pageHeight
                                      /*maxLines=*/2, true, EpdFontFamily::BOLD);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_STOPWATCH), "", "", /*rtlSwap=*/false);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_STOPWATCH_HINT), "", "", /*rtlSwap=*/false);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   GUI.drawSideButtonHints(renderer, phaseFinished ? tr(STR_START) : (running ? tr(STR_PAUSE) : tr(STR_START)),
                           running || phaseFinished ? tr(STR_SKIP) : tr(STR_RESET));
@@ -347,7 +347,7 @@ void StopwatchActivity::renderStopwatch(const int pageWidth, const int pageHeigh
   // buttons have their own dedicated hint widget.
   const char* startPauseLabel = running ? tr(STR_PAUSE) : tr(STR_START);
   const char* lapResetLabel = running ? tr(STR_LAP) : tr(STR_RESET);
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_POMODORO), "", "", /*rtlSwap=*/false);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_POMODORO_HINT), "", "", /*rtlSwap=*/false);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   GUI.drawSideButtonHints(renderer, startPauseLabel, lapResetLabel);
 }

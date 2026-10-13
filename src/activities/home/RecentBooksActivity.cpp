@@ -377,8 +377,8 @@ RecentBooksActivity::GridGeometry RecentBooksActivity::computeGridGeometry() con
 }
 
 int RecentBooksActivity::getGridTitleHeight() const {
-  const int lineHeight =
-      std::max(renderer.getLineHeight(SMALL_FONT_ID), renderer.getLineHeight(NOTOSANSARABIC_8_FONT_ID));
+  const int lineHeight = std::max(renderer.getLineHeight(SMALL_FONT_ID),
+                                  renderer.getLineHeight(renderer.getResolvedArabicFontId(SMALL_FONT_ID)));
   return GRID_TITLE_TOP_GAP + lineHeight * GRID_TITLE_LINES;
 }
 

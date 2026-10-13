@@ -30,7 +30,7 @@ int XtcReaderChapterSelectionActivity::getRowHeight() const {
   }
   if (!hasArabic) return latinLineHeight + ROW_VERTICAL_PADDING;
 
-  const int arabicLineHeight = renderer.getLineHeight(NOTOSANSARABIC_10_FONT_ID);
+  const int arabicLineHeight = renderer.getLineHeight(renderer.getResolvedArabicFontId(UI_10_FONT_ID));
   return std::max(latinLineHeight, arabicLineHeight) + ROW_VERTICAL_PADDING;
 }
 
