@@ -187,6 +187,24 @@ def draw_prayer(d):
     line(d, 2.8, 19.2, 21.2, 19.2)    # base
 
 
+
+def draw_kidsread(d):
+    # A book seen front-on with "Aa" on the cover: the object a small child
+    # already knows a story comes out of, carrying the letter pair the Latin
+    # tracks teach. The spine line is what keeps the outline from reading as a
+    # plain frame, and the bowl of the "a" is as much curve as a 1-bit
+    # threshold at tile size will hold. The cover is wider than it is tall
+    # because two letters side by side need the width more than the book needs
+    # to look portrait -- at 72px an upright cover fused the "a" to its edge.
+    rect(d, 2.6, 4.4, 21.4, 19.6)     # cover
+    line(d, 5.0, 4.4, 5.0, 19.6)      # spine
+    line(d, 7.2, 16.0, 9.8, 8.6)      # A, left leg
+    line(d, 9.8, 8.6, 12.4, 16.0)     # A, right leg
+    line(d, 8.1, 13.3, 11.5, 13.3)    # A, crossbar
+    circle(d, 16.6, 13.4, 2.3)        # a, bowl
+    line(d, 18.9, 10.8, 18.9, 16.0)   # a, stem
+
+
 ICONS = [
     ("AppQuran72Icon", "appquran72", draw_quran),
     ("AppGames72Icon", "appgames72", draw_games),
@@ -195,6 +213,7 @@ ICONS = [
     ("AppStopwatch72Icon", "appstopwatch72", draw_stopwatch),
     ("AppPomodoro72Icon", "apppomodoro72", draw_pomodoro),
     ("AppPrayer72Icon", "appprayer72", draw_prayer),
+    ("AppKidsRead72Icon", "appkidsread72", draw_kidsread),
 ]
 
 

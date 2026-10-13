@@ -85,6 +85,16 @@ void applyArabicMappings(GfxRenderer& renderer, const int readingFontId) {
   renderer.setArabicFontIdForFontId(SMALL_FONT_ID, uiFont8, /*matchLatinBaseline=*/true);
   renderer.setArabicFontIdForFontId(UI_10_FONT_ID, uiFont10, /*matchLatinBaseline=*/true);
   renderer.setArabicFontIdForFontId(UI_12_FONT_ID, uiFont12, /*matchLatinBaseline=*/true);
+  // Belajar Baca's card face. Without this mapping, Arabic text drawn with
+  // KIDSLATIN_96_FONT_ID would fall through to the reading font (12-18pt) and a
+  // flashcard letter would silently come out tiny. matchLatinBaseline=false: the
+  // card centres the glyph itself and harakat need the full Arabic line box.
+  renderer.setArabicFontIdForFontId(KIDSLATIN_96_FONT_ID, KIDSARABIC_88_FONT_ID,
+                                    /*matchLatinBaseline=*/false);
+  renderer.setArabicFontIdForFontId(KIDSLATIN_48_FONT_ID, KIDSARABIC_48_FONT_ID,
+                                    /*matchLatinBaseline=*/false);
+  renderer.setArabicFontIdForFontId(KIDSLATIN_32_FONT_ID, KIDSARABIC_32_FONT_ID,
+                                    /*matchLatinBaseline=*/false);
   renderer.setArabicFontId(readingFontId);
   // Ayah-marker digits always come from this built-in font, never readingFontId --
   // see setArabicDigitFallbackFontId's comment for why (some reading fonts simply

@@ -88,6 +88,32 @@ EpdFontFamily tasbih32FontFamily(&tasbih32BoldFont);
 EpdFont stopwatch32BoldFont(&stopwatch_32_bold);
 EpdFontFamily stopwatch32FontFamily(&stopwatch32BoldFont);
 
+// Belajar Baca display faces: one huge glyph per card for a 3-4 year old. Both are
+// letters-only cuts (see convert-builtin-fonts.sh) -- Andika 96pt for Latin, because
+// it is drawn for early literacy (single-storey 'a'/'g'), and Noto Naskh 80pt for
+// Arabic, mark-repositioned so harakat sit correctly. Arabic is the smaller point
+// size because its marks need vertical headroom the Latin cut doesn't.
+EpdFont kidsLatin96Font(&kidslatin_96_regular);
+EpdFontFamily kidsLatin96FontFamily(&kidsLatin96Font);
+// Picture-card cut, Latin only (see convert-builtin-fonts.sh).
+EpdFont kidsLatin72Font(&kidslatin_72_regular);
+EpdFontFamily kidsLatin72FontFamily(&kidsLatin72Font);
+EpdFont kidsArabic88Font(&kidsarabic_88_regular);
+EpdFontFamily kidsArabic88FontFamily(&kidsArabic88Font);
+// Word-size cuts of the same two faces: a card falls back to these when the big
+// glyph would not fit the panel (see KidsReadActivity::drawBigGlyph).
+EpdFont kidsLatin48Font(&kidslatin_48_regular);
+EpdFontFamily kidsLatin48FontFamily(&kidsLatin48Font);
+EpdFont kidsArabic48Font(&kidsarabic_48_regular);
+EpdFontFamily kidsArabic48FontFamily(&kidsArabic48Font);
+// Grid cut: the introduce-the-letters screen shows a whole set at once, and a
+// Latin cell carries both cases ("Aa"), which needs a smaller size to fit more
+// than two to a row.
+EpdFont kidsLatin32Font(&kidslatin_32_regular);
+EpdFontFamily kidsLatin32FontFamily(&kidsLatin32Font);
+EpdFont kidsArabic32Font(&kidsarabic_32_regular);
+EpdFontFamily kidsArabic32FontFamily(&kidsArabic32Font);
+
 EpdFont lexenddeca12RegularFont(&lexenddeca_12_regular);
 EpdFont lexenddeca12BoldFont(&lexenddeca_12_bold);
 EpdFontFamily lexenddeca12FontFamily(&lexenddeca12RegularFont, &lexenddeca12BoldFont);
@@ -539,6 +565,13 @@ void setupDisplayAndFonts(bool seamless = false, bool uiOnlyFonts = false) {
 #ifndef OMIT_FONTS
   renderer.insertFont(TASBIH_32_FONT_ID, tasbih32FontFamily);
   renderer.insertFont(STOPWATCH_32_FONT_ID, stopwatch32FontFamily);
+  renderer.insertFont(KIDSLATIN_96_FONT_ID, kidsLatin96FontFamily);
+  renderer.insertFont(KIDSLATIN_72_FONT_ID, kidsLatin72FontFamily);
+  renderer.insertFont(KIDSARABIC_88_FONT_ID, kidsArabic88FontFamily);
+  renderer.insertFont(KIDSLATIN_48_FONT_ID, kidsLatin48FontFamily);
+  renderer.insertFont(KIDSARABIC_48_FONT_ID, kidsArabic48FontFamily);
+  renderer.insertFont(KIDSLATIN_32_FONT_ID, kidsLatin32FontFamily);
+  renderer.insertFont(KIDSARABIC_32_FONT_ID, kidsArabic32FontFamily);
   renderer.insertFont(LEXENDDECA_12_FONT_ID, lexenddeca12FontFamily);
   renderer.insertFont(LEXENDDECA_16_FONT_ID, lexenddeca16FontFamily);
   renderer.insertFont(LEXENDDECA_18_FONT_ID, lexenddeca18FontFamily);

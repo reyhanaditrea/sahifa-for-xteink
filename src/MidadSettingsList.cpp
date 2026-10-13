@@ -24,6 +24,14 @@ void appendMidadAppSettings(std::vector<SettingInfo>& appsSettings) {
         MIDAD_APP_SETTINGS.saveToFile();
       },
       "prayerEnabled", StrId::STR_CAT_APPS));
+  // Learn to Read toggle: the flashcard app for small children.
+  appsSettings.push_back(SettingInfo::DynamicToggle(
+      StrId::STR_KIDS_READ, [] { return MIDAD_APP_SETTINGS.kidsReadEnabled; },
+      [](uint8_t val) {
+        MIDAD_APP_SETTINGS.kidsReadEnabled = val;
+        MIDAD_APP_SETTINGS.saveToFile();
+      },
+      "kidsReadEnabled", StrId::STR_CAT_APPS));
   // Games toggle: pins a "Games" tile in My Books that opens a Snake/Tetris
   // picker. No extraction step needed -- unlike Quran, nothing but the
   // toggle itself is required.

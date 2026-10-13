@@ -22,6 +22,7 @@ void MidadAppSettings::toJson(JsonDocument& doc) const {
   doc["pomodoroShortBreakMin"] = pomodoroShortBreakMin;
   doc["pomodoroLongBreakMin"] = pomodoroLongBreakMin;
   doc["debugLoggingEnabled"] = debugLoggingEnabled;
+  doc["kidsReadEnabled"] = kidsReadEnabled;
   doc["prayerEnabled"] = prayerEnabled;
   doc["prayerMethod"] = prayerMethod;
   doc["prayerAsrSchool"] = prayerAsrSchool;
@@ -51,6 +52,7 @@ bool MidadAppSettings::fromJson(JsonVariantConst doc) {
 
   debugLoggingEnabled = clampToggle(doc["debugLoggingEnabled"] | debugLoggingEnabled, debugLoggingEnabled);
 
+  kidsReadEnabled = clampToggle(doc["kidsReadEnabled"] | kidsReadEnabled, kidsReadEnabled);
   prayerEnabled = clampToggle(doc["prayerEnabled"] | prayerEnabled, prayerEnabled);
   const uint8_t method = doc["prayerMethod"] | prayerMethod;
   prayerMethod = method < PrayerMethods::count() ? method : prayerMethod;

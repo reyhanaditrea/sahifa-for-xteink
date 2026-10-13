@@ -46,15 +46,15 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
 
   // Settings -> Apps -> Tasbih: pins a synthetic "Tasbih" tile that opens the
   // built-in dhikr counter (TasbihActivity). No SD extraction needed.
-  uint8_t tasbihEnabled = 1;
+  uint8_t tasbihEnabled = 0;
 
   // Settings -> Apps -> Stop Watch: pins a synthetic "Stop Watch" tile that
   // opens the built-in stopwatch (StopwatchActivity).
-  uint8_t stopwatchEnabled = 1;
+  uint8_t stopwatchEnabled = 0;
 
   // Settings -> Apps -> Pomodoro: pins a synthetic "Pomodoro" tile that opens
   // StopwatchActivity with its Pomodoro mode preselected.
-  uint8_t pomodoroEnabled = 1;
+  uint8_t pomodoroEnabled = 0;
 
   // Phase lengths in minutes. Read live at each phase change by
   // ReaderPomodoro/StopwatchActivity rather than cached, so an edit mid-cycle
@@ -66,6 +66,10 @@ class MidadAppSettings : public PersistableStore<MidadAppSettings> {
   uint8_t pomodoroLongBreakMin = 15;
   // Focus phases completed before a long break replaces the short one.
   static constexpr uint8_t POMODORO_CYCLES_BEFORE_LONG_BREAK = 4;
+
+  // Settings -> Apps -> Learn to Read: pins a tile that opens KidsReadActivity,
+  // the parent-led letter/syllable/word flashcards.
+  uint8_t kidsReadEnabled = 1;
 
   // Settings -> Apps -> Prayer Times: pins a "Prayer Times" tile that opens
   // PrayerActivity: today's timings, computed on the device from the city.

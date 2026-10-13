@@ -851,6 +851,7 @@ STR_CHESS_TIPTEXT_KINGS_GAMBIT_2: "Nf3 develops and prevents Qh4+, which would o
 STR_CHESS_TIP_KINGS_GAMBIT_3: "Pay for the initiative"
 STR_CHESS_TIPTEXT_KINGS_GAMBIT_3: "White castles and accepts being a pawn down for open lines and faster development. Play actively or the pawn simply counts."
 STR_PRAYER_TIMES: "Prayer Times"
+STR_KIDS_READ: "Baca"
 STR_PRAYER_COUNTRY: "Country"
 STR_PRAYER_CITY: "City"
 STR_PRAYER_SET_LOCATION: "Set location"

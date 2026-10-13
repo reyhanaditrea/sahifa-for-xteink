@@ -3,6 +3,13 @@
 
 #define TASBIH_32_FONT_ID (-1832077162)
 #define STOPWATCH_32_FONT_ID (-969373732)
+#define KIDSLATIN_96_FONT_ID (1172922945)
+#define KIDSLATIN_72_FONT_ID (-1507598635)
+#define KIDSARABIC_88_FONT_ID (-813868060)
+#define KIDSLATIN_48_FONT_ID (-1761392473)
+#define KIDSARABIC_48_FONT_ID (394682860)
+#define KIDSLATIN_32_FONT_ID (-2071552228)
+#define KIDSARABIC_32_FONT_ID (1655947199)
 #define LEXENDDECA_12_FONT_ID (-1776708632)
 #define LEXENDDECA_14_FONT_ID (352373379)
 #define LEXENDDECA_16_FONT_ID (518536303)
@@ -34,6 +41,13 @@
 // Font ID 0 is reserved as the "not found" sentinel.
 static_assert(TASBIH_32_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(STOPWATCH_32_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(KIDSLATIN_96_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(KIDSLATIN_72_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(KIDSARABIC_88_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(KIDSLATIN_48_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(KIDSARABIC_48_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(KIDSLATIN_32_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(KIDSARABIC_32_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(LEXENDDECA_12_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(LEXENDDECA_14_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(LEXENDDECA_16_FONT_ID != 0, "Font ID collision with sentinel");

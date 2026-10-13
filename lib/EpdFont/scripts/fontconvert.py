@@ -29,6 +29,7 @@ parser.add_argument("--shape-fallback", dest="shape_fallback", action="store_tru
 parser.add_argument("--reposition-marks", dest="reposition_marks", action="store_true", help="Move combining marks (harakat) to fixed above/below-baseline heights. For fonts that anchor marks at the baseline and rely on OpenType GPOS mark attachment, which the firmware renderer doesn't run.")
 parser.add_argument("--contrast-gamma", dest="contrast_gamma", type=float, default=1.0, help="Gamma-correct each glyph's raw anti-aliased coverage before quantizing: v' = min(255, round(255 * (v/255)**gamma)). gamma<1.0 boosts mid-gray coverage toward black -- for fonts whose fine strokes anti-alias into mostly-gray pixels at small e-ink sizes, which then read as faded once quantized to --2bit's 4 levels. 1.0 (default) is a no-op. Only affects ink darkness, never glyph metrics (advance/bearing), so it can't perturb layout or kashida-point math.")
 parser.add_argument("--script", dest="script", choices=["latin", "arabic", "none"], default="latin", help="Base code point interval set to export. 'latin' (default) is the existing Latin/Cyrillic/etc. set used by all bundled reading fonts. 'arabic' swaps in a minimal set (basic Latin punctuation/digits + Arabic blocks) sized for a dedicated Arabic-only font, not the full multi-script coverage. 'none' starts from an empty base set, relying entirely on --additional-intervals -- for narrow single-purpose fonts (e.g. a font bundling just one specific ligature glyph) where even 'arabic''s minimal set would pull in unwanted incidental cmap entries.")
+parser.add_argument("--line-height", dest="line_height", type=int, default=0, help="Override the emitted newline distance (EpdFontData::advanceY) with this pixel value instead of the face's own. advanceY is a uint8_t, so a face whose natural line height exceeds 255px cannot be emitted at all -- which caps the point size of a display face well below what the glyph fields (also uint8_t, but per glyph) would allow. Only for faces that draw one centred line and never wrap or stack rows: getLineHeight() returns this value, so anything laying out running text with it would set its lines too close. Ignored when 0.")
 parser.add_argument("--glyph-map", dest="glyph_map", help="Path to a TSV file mapping arbitrary trigger strings to target codepoints, for fonts that only expose glyphs via GSUB contextual substitution triggered by a specific input string (no direct cmap entry, and no Unicode presentation-form decomposition for --shape-fallback to key off). Each line: '<hex-codepoint>\\t<trigger-string>\\t<shaped-glyph-index>' -- the trigger is shaped once via HarfBuzz against the FIRST fontstack face, and the glyph at the given index in the shaped output is baked as that codepoint's glyph (must also appear in --additional-intervals to actually be exported). Same load_glyph() override mechanism as --pnum/--shape-fallback.")
 args = parser.parse_args()
 
@@ -1232,7 +1233,12 @@ print(f"    {font_name}Bitmaps,")
 print(f"    {font_name}Glyphs,")
 print(f"    {font_name}Intervals,")
 print(f"    {len(intervals)},")
-print(f"    {norm_ceil(font_stack[0].size.height)},")
+natural_line_height = norm_ceil(font_stack[0].size.height)
+line_height = args.line_height if args.line_height > 0 else natural_line_height
+if line_height > 255:
+    sys.exit(f"ERROR: line height {line_height}px exceeds EpdFontData::advanceY's uint8_t range. "
+             f"Reduce the point size, or pass --line-height for a display face that never wraps.")
+print(f"    {line_height},")
 print(f"    {norm_ceil(font_stack[0].size.ascender)},")
 print(f"    {norm_floor(font_stack[0].size.descender)},")
 print(f"    {'true' if is2Bit else 'false'},")

@@ -243,6 +243,74 @@ python fontconvert.py surah_banner_24_regular 24 \
 rm -f "$surah_banner_glyphmap_tsv"
 echo "Generated ../builtinFonts/surah_banner_24_regular.h"
 
+# Belajar Baca (kids learn-to-read app) display faces. Both are deliberately
+# huge -- a 3-4 year old reads one glyph at arm's length -- and deliberately
+# narrow in coverage, which is what keeps a face this large affordable in flash.
+#
+# Both pass --line-height 255 because EpdFontData::advanceY is a uint8_t: Andika's
+# own line height is 322px at 96pt and Noto Naskh's 284px at 88pt, neither of which
+# fits. Clamping it is safe *here* and nowhere else -- a card draws one centred
+# line and never wraps, so the only consumer of the value is the activity's own
+# vertical centring. Per-glyph metrics are untouched, so the letters are full size.
+#
+# Latin: Andika (SIL, OFL, source/Andika/) rather than the Bitter/Lexend faces
+# used elsewhere. Andika is drawn specifically for early literacy: single-storey
+# 'a' and 'g' matching how a child is taught to write them, and unambiguous
+# I/l/1 and 0/O. Letters only (A-Z, a-z) -- digits and punctuation never appear
+# on a card, and every excluded glyph is pure flash saving at this size.
+python fontconvert.py kidslatin_96_regular 96 ../builtinFonts/source/Andika/Andika-Regular.ttf \
+  --2bit --compress --script none --line-height 255 \
+  --additional-intervals 0x41,0x5A --additional-intervals 0x61,0x7A \
+  > ../builtinFonts/kidslatin_96_regular.h
+echo "Generated ../builtinFonts/kidslatin_96_regular.h"
+
+# Picture-card cut, Latin only: a card with a picture has room for more than
+# 48pt but not for 96pt. No Arabic twin -- only Latin stages carry pictures,
+# and KidsReadActivity keeps this cut off Arabic tracks.
+python fontconvert.py kidslatin_72_regular 72 ../builtinFonts/source/Andika/Andika-Regular.ttf   --2bit --compress --script none --line-height 255   --additional-intervals 0x41,0x5A --additional-intervals 0x61,0x7A   > ../builtinFonts/kidslatin_72_regular.h
+echo "Generated ../builtinFonts/kidslatin_72_regular.h"
+
+# Arabic: Noto Naskh at 88pt (below the Latin cut -- Arabic needs headroom above
+# and below the baseline for harakat, so it fills a line at a smaller point size).
+# Same --reposition-marks as the reading sizes above, so fathah/kasrah/dammah sit
+# at fixed heights instead of relying on GPOS the renderer doesn't implement.
+# Intervals: base letters + harakat (0x0621-0x0652) and Presentation Forms-B
+# (0xFE70-0xFEFC) so ArabicShaper's initial/medial/final lookups all resolve --
+# a kid's card shows joined words like "kataba", not just isolated letters.
+python fontconvert.py kidsarabic_88_regular 88 \
+  ../builtinFonts/source/NotoNaskhArabic/NotoNaskhArabic-Regular.ttf \
+  --2bit --compress --reposition-marks --script none --line-height 255 \
+  --additional-intervals 0x0621,0x0652 --additional-intervals 0xFE70,0xFEFC \
+  > ../builtinFonts/kidsarabic_88_regular.h
+echo "Generated ../builtinFonts/kidsarabic_88_regular.h"
+
+# Word-card cuts of the same two faces. A single letter or a two-letter syllable
+# fits the panel at the sizes above; a four-letter word like "mama" does not, so the card
+# measures its glyph and drops to these when the big cut would overflow. Same
+# coverage, so the fallback can never hit a missing glyph.
+python fontconvert.py kidslatin_48_regular 48 ../builtinFonts/source/Andika/Andika-Regular.ttf \
+  --2bit --compress --script none \
+  --additional-intervals 0x41,0x5A --additional-intervals 0x61,0x7A \
+  > ../builtinFonts/kidslatin_48_regular.h
+echo "Generated ../builtinFonts/kidslatin_48_regular.h"
+
+python fontconvert.py kidsarabic_48_regular 48 \
+  ../builtinFonts/source/NotoNaskhArabic/NotoNaskhArabic-Regular.ttf \
+  --2bit --compress --reposition-marks --script none \
+  --additional-intervals 0x0621,0x0652 --additional-intervals 0xFE70,0xFEFC \
+  > ../builtinFonts/kidsarabic_48_regular.h
+echo "Generated ../builtinFonts/kidsarabic_48_regular.h"
+
+# Grid cuts. The introduce-the-letters screen shows a whole set at once, and a
+# Latin cell now carries BOTH cases ("Aa"), which is about 150px wide at 48pt --
+# two columns and seven pages for the alphabet. At 32pt the same pair fits three
+# to a row and the set lands in three pages, still far above reading size.
+python fontconvert.py kidslatin_32_regular 32 ../builtinFonts/source/Andika/Andika-Regular.ttf   --2bit --compress --script none   --additional-intervals 0x41,0x5A --additional-intervals 0x61,0x7A   > ../builtinFonts/kidslatin_32_regular.h
+echo "Generated ../builtinFonts/kidslatin_32_regular.h"
+
+python fontconvert.py kidsarabic_32_regular 32   ../builtinFonts/source/NotoNaskhArabic/NotoNaskhArabic-Regular.ttf   --2bit --compress --reposition-marks --script none   --additional-intervals 0x0621,0x0652 --additional-intervals 0xFE70,0xFEFC   > ../builtinFonts/kidsarabic_32_regular.h
+echo "Generated ../builtinFonts/kidsarabic_32_regular.h"
+
 echo ""
 echo "Running compression verification..."
 python verify_compression.py ../builtinFonts/

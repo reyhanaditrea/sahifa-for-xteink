@@ -2,6 +2,13 @@
 
 #include <builtinFonts/tasbih_32_bold.h>
 #include <builtinFonts/stopwatch_32_bold.h>
+#include <builtinFonts/kidslatin_96_regular.h>
+#include <builtinFonts/kidslatin_72_regular.h>
+#include <builtinFonts/kidsarabic_88_regular.h>
+#include <builtinFonts/kidslatin_48_regular.h>
+#include <builtinFonts/kidsarabic_48_regular.h>
+#include <builtinFonts/kidslatin_32_regular.h>
+#include <builtinFonts/kidsarabic_32_regular.h>
 #include <builtinFonts/lexenddeca_12_bold.h>
 #include <builtinFonts/lexenddeca_12_regular.h>
 #include <builtinFonts/lexenddeca_14_bold.h>

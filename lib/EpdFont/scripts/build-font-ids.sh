@@ -21,6 +21,13 @@ echo ""
 
 echo "#define TASBIH_32_FONT_ID ($(id_for ./tasbih_32_bold.h))"
 echo "#define STOPWATCH_32_FONT_ID ($(id_for ./stopwatch_32_bold.h))"
+echo "#define KIDSLATIN_96_FONT_ID ($(id_for ./kidslatin_96_regular.h))"
+echo "#define KIDSLATIN_72_FONT_ID ($(id_for ./kidslatin_72_regular.h))"
+echo "#define KIDSARABIC_88_FONT_ID ($(id_for ./kidsarabic_88_regular.h))"
+echo "#define KIDSLATIN_48_FONT_ID ($(id_for ./kidslatin_48_regular.h))"
+echo "#define KIDSARABIC_48_FONT_ID ($(id_for ./kidsarabic_48_regular.h))"
+echo "#define KIDSLATIN_32_FONT_ID ($(id_for ./kidslatin_32_regular.h))"
+echo "#define KIDSARABIC_32_FONT_ID ($(id_for ./kidsarabic_32_regular.h))"
 for size in 12 14 16 18; do
   echo "#define LEXENDDECA_${size}_FONT_ID ($(id_for ./lexenddeca_${size}_regular.h ./lexenddeca_${size}_bold.h))"
 done

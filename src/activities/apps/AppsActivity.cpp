@@ -13,12 +13,14 @@
 #include "QuranBook.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
+#include "activities/apps/KidsReadActivity.h"
 #include "activities/apps/PrayerActivity.h"
 #include "activities/apps/StopwatchActivity.h"
 #include "activities/apps/TasbihActivity.h"
 #include "activities/games/GamesMenuActivity.h"
 #include "components/UITheme.h"
 #include "components/icons/appgames72.h"
+#include "components/icons/appkidsread72.h"
 #include "components/icons/appnews72.h"
 #include "components/icons/apppomodoro72.h"
 #include "components/icons/appprayer72.h"
@@ -98,6 +100,11 @@ const std::vector<AppsActivity::AppEntry>& AppsActivity::entries() {
          MIDAD_APP_SETTINGS.pomodoroEnabled = v;
          MIDAD_APP_SETTINGS.saveToFile();
        }},
+      {AppId::KidsRead, StrId::STR_KIDS_READ, [] { return MIDAD_APP_SETTINGS.kidsReadEnabled; },
+       [](uint8_t v) {
+         MIDAD_APP_SETTINGS.kidsReadEnabled = v;
+         MIDAD_APP_SETTINGS.saveToFile();
+       }},
   };
   return kEntries;
 }
@@ -114,6 +121,7 @@ const uint8_t* AppsActivity::iconFor(const AppId id) {
       AppStopwatch72Icon,  // Stopwatch
       AppPomodoro72Icon,   // Pomodoro
       AppPrayer72Icon,     // Prayer
+      AppKidsRead72Icon,   // KidsRead
   };
   const size_t index = static_cast<size_t>(id);
   return index < std::size(ICONS) ? ICONS[index] : nullptr;
@@ -198,6 +206,9 @@ bool AppsActivity::launch(const AppEntry& entry) {
       return true;
     case AppId::Prayer:
       startActivityForResult(std::make_unique<PrayerActivity>(renderer, mappedInput), [](const ActivityResult&) {});
+      return true;
+    case AppId::KidsRead:
+      startActivityForResult(std::make_unique<KidsReadActivity>(renderer, mappedInput), [](const ActivityResult&) {});
       return true;
   }
   return false;

@@ -36,7 +36,7 @@ class AppsActivity final : public Activity {
   // Identity rather than a path sentinel. My Books had to use fake paths
   // ("/Pomodoro") because it was a list of books and an app had to pass for one;
   // a screen that is only ever apps can just say which app it is.
-  enum class AppId : uint8_t { Quran, Games, Tasbih, News, Stopwatch, Pomodoro, Prayer };
+  enum class AppId : uint8_t { Quran, Games, Tasbih, News, Stopwatch, Pomodoro, Prayer, KidsRead };
 
   struct AppEntry {
     AppId id;
