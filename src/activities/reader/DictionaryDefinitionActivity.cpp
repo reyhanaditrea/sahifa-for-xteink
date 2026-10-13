@@ -74,9 +74,11 @@ TokenScript tokenScript(const std::string& token) {
   return TokenScript::NEUTRAL;
 }
 
-// The direction of a paragraph is the direction of its first letter that has one
-// (Unicode's own rule, UBA P2/P3), and every line the paragraph wraps to keeps it.
-bool paragraphIsRtl(const std::string& line) {
+// The direction of a run of text is the direction of its first letter that has one
+// (Unicode's own rule, UBA P2/P3). NEUTRAL means it has no letter with a direction
+// at all -- a line of digits or reference marks -- and the caller decides what such
+// a line follows.
+TokenScript textDirection(const std::string& line) {
   size_t pos = 0;
   while (pos < line.size()) {
     while (pos < line.size() && line[pos] == ' ') ++pos;
@@ -84,9 +86,9 @@ bool paragraphIsRtl(const std::string& line) {
     while (pos < line.size() && line[pos] != ' ') ++pos;
     if (start == pos) break;
     const TokenScript script = tokenScript(line.substr(start, pos - start));
-    if (script != TokenScript::NEUTRAL) return script == TokenScript::ARABIC;
+    if (script != TokenScript::NEUTRAL) return script;
   }
-  return false;
+  return TokenScript::NEUTRAL;
 }
 
 // U+2022, and the gap the dictionary writes after it.
@@ -337,21 +339,25 @@ void DictionaryDefinitionActivity::wrapText() {
     while (!line.empty() && line.back() == ' ') line.pop_back();
   };
 
-  // Which side of the box the paragraph hangs off. Splitting a mixed line by script
-  // keeps each line drawable, but it also lets an English sentence quoting Arabic
-  // alternate sides down the page -- the English flush left, the quoted words flush
-  // right, the rest left again. Unicode settles this the same way for a paragraph
-  // (UBA P2/P3): the first letter with a direction of its own decides, and every
-  // line the paragraph wraps to keeps that side. So a bullet reads as one block.
+  // Which side of the box the paragraph hangs off, for the lines that cannot say
+  // for themselves. A line of digits or reference marks carries no direction, so it
+  // follows the paragraph it belongs to (UBA P2/P3) rather than picking a side.
   bool paragraphRtl = false;
 
+  // Every other line takes the side its own script reads from: Arabic flush right,
+  // Latin flush left. The wrap keeps a line to one script, so a side is always the
+  // edge the line actually starts at -- an Arabic line hung off the left margin
+  // ends at the margin instead of beginning there, which is what read as
+  // disorienting when a paragraph's own direction was imposed on all its lines.
   auto appendWrappedLine = [&](std::string line) {
     if (wrappedLines.size() >= MAX_WRAPPED_DEFINITION_LINES) {
       wrapLimitReached = true;
       return false;
     }
+    const TokenScript direction = textDirection(line);
+    const bool rtl = direction == TokenScript::NEUTRAL ? paragraphRtl : direction == TokenScript::ARABIC;
     wrappedLines.push_back(std::move(line));
-    lineRtl.push_back(paragraphRtl ? 1 : 0);
+    lineRtl.push_back(rtl ? 1 : 0);
     return true;
   };
 
@@ -428,10 +434,16 @@ void DictionaryDefinitionActivity::wrapText() {
     const std::string firstPrefix = sourceLine.substr(0, std::min<size_t>(firstText, 4));
     const std::string continuationPrefix = continuationPrefixFor(sourceLine, firstPrefix);
 
-    paragraphRtl = paragraphIsRtl(sourceLine);
+    paragraphRtl = textDirection(sourceLine) == TokenScript::ARABIC;
 
     std::string currentLine = firstPrefix;
     bool hasContent = false;
+    // The direction of what is already on the line. Runs let a mixed line be drawn
+    // correctly, but drawn correctly is not the same as readable: an English sense
+    // with an Arabic quotation in it puts the eye through a reversal and back mid
+    // line, and on a page of them the left edge stops being where a line starts.
+    // So a script change ends the line instead, and each side keeps its own edge.
+    TokenScript lineScript = TokenScript::NEUTRAL;
     size_t pos = firstText;
     while (pos < sourceLine.size()) {
       size_t spaces = 0;
@@ -445,11 +457,24 @@ void DictionaryDefinitionActivity::wrapText() {
       while (pos < sourceLine.size() && sourceLine[pos] != ' ') ++pos;
       const std::string token = sourceLine.substr(tokenStart, pos - tokenStart);
 
+      // Script change on a line that already has directional content: break here
+      // even though the token would still fit, so neither run has to share a line
+      // with the other. Punctuation and digits are NEUTRAL and never break.
+      const TokenScript script = tokenScript(token);
+      if (hasContent && script != TokenScript::NEUTRAL && lineScript != TokenScript::NEUTRAL && script != lineScript) {
+        trimTrailingSpaces(currentLine);
+        if (!appendWrappedLine(currentLine)) return;
+        currentLine = continuationPrefix;
+        hasContent = false;
+        lineScript = TokenScript::NEUTRAL;
+      }
+
       const std::string separator = hasContent ? (spaces > 1 ? "  " : " ") : "";
       const std::string test = currentLine + separator + token;
       if (measureDefinitionText(test.c_str()) <= maxWidth) {
         currentLine = test;
         hasContent = true;
+        if (script != TokenScript::NEUTRAL) lineScript = script;
         continue;
       }
 
@@ -458,6 +483,7 @@ void DictionaryDefinitionActivity::wrapText() {
         if (!appendWrappedLine(currentLine)) return;
         currentLine = continuationPrefix;
         hasContent = false;
+        lineScript = TokenScript::NEUTRAL;
       }
 
       const std::string prefixedToken = currentLine + token;
@@ -465,8 +491,11 @@ void DictionaryDefinitionActivity::wrapText() {
         currentLine = prefixedToken;
         hasContent = true;
       } else {
+        // Every continuation line appendLongToken emits carries the same token,
+        // so the line script is unchanged by where it chose to split.
         appendLongToken(token, currentLine, currentLine, continuationPrefix, hasContent);
       }
+      if (script != TokenScript::NEUTRAL) lineScript = script;
     }
 
     trimTrailingSpaces(currentLine);

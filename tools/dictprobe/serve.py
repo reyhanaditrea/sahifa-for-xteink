@@ -635,14 +635,19 @@ function wrapDefinition(text) {
   }
   for (const source of (text || '').split('\n')) {
     const line = openBulletGap(source.replace(/\t/g, '  ').replace(/\s+$/, ''));
-    // Unicode decides a paragraph's side by its first letter that has one (UBA
-    // P2/P3), and every line the paragraph wraps to keeps that side. Without it a
-    // bullet of English quoting Arabic alternates edges as it wraps.
-    let rtl = false;
-    for (const token of line.split(/ +/)) {
-      const s = tokenScript(token);
-      if (s !== 'neutral') { rtl = s === 'ar'; break; }
-    }
+    // The side a line hangs off is the side its own script reads from: Arabic flush
+    // right, Latin flush left. The wrap keeps a line to one script, so that side is
+    // always the edge the line actually starts at. A line with no letter that has a
+    // direction -- digits, reference marks -- has no side of its own and follows the
+    // paragraph it belongs to (UBA P2/P3, the direction of its first such letter).
+    const directionOf = t => {
+      for (const token of t.split(/ +/)) {
+        const d = tokenScript(token);
+        if (d !== 'neutral') return d;
+      }
+      return 'neutral';
+    };
+    const paragraphRtl = directionOf(line) === 'ar';
     // Only the FIRST line of a paragraph opens the gap: the lines it wraps to are
     // the same claim, and air inside one would break it up rather than set it off.
     // Nor above one the source already separated with a blank line -- that gap is
@@ -658,7 +663,8 @@ function wrapDefinition(text) {
     // than the two lines it is meant to be.
     const blankAbove = out.length > 0 && !out[out.length - 1].text;
     const push = t => {
-      out.push({text: t, rtl: rtl,
+      const d = directionOf(t);
+      out.push({text: t, rtl: d === 'neutral' ? paragraphRtl : d === 'ar',
                 lead: heading ? (blankAbove ? M.blockLead - M.blankPitch : M.blockLead)
                               : (first ? M.paraLead : 0)});
       first = false;
@@ -667,9 +673,19 @@ function wrapDefinition(text) {
     const indent = /^ */.exec(line)[0];
     const continuation = indent + (/^ *\u2022/.test(line) ? bulletIndent() : '');
     let cur = indent, has = false;
+    // The direction of what is already on the line. Runs let a mixed line be drawn
+    // correctly, but drawn correctly is not the same as readable: an English sense
+    // with an Arabic quotation in it puts the eye through a reversal and back mid
+    // line. So a script change ends the line and each side keeps its own edge --
+    // DictionaryDefinitionActivity::wrapText breaks at the same token.
+    let lineScript = 'neutral';
     const tokens = /( *)([^ ]+)/g;
     let m;
     while ((m = tokens.exec(line)) !== null) {
+      const s2 = tokenScript(m[2]);
+      if (has && s2 !== 'neutral' && lineScript !== 'neutral' && s2 !== lineScript) {
+        push(cur.replace(/ +$/, '')); cur = continuation; has = false; lineScript = 'neutral';
+      }
       // A gap the dictionary widened stays wide: it is what sets the bullet apart.
       const separator = has ? (m[1].length > 1 ? '  ' : ' ') : '';
       const test = cur + separator + m[2];
@@ -678,6 +694,7 @@ function wrapDefinition(text) {
       } else {
         push(cur.replace(/ +$/, '')); cur = continuation + m[2]; has = true;
       }
+      if (s2 !== 'neutral') lineScript = s2;
     }
     if (has) push(cur.replace(/ +$/, ''));
     if (out.length >= MAX_WRAPPED_LINES) { truncated = true; break; }
@@ -992,7 +1009,7 @@ function renderBrief() {
   document.getElementById('sideup').hidden = !navigable;
   document.getElementById('sidedown').hidden = !navigable;
   setHints([cameFromReadings ? '\u00ab Readings' : '\u00ab Back',
-            altIndex >= 0 ? 'Open' : 'Read more', '', '']);
+            altIndex >= 0 ? 'Open' : 'More', '', '']);
 
   // offsetHeight, not the rect: the screen is CSS-scaled and the device's own
   // layout is in unscaled pixels.
@@ -1219,7 +1236,7 @@ function moveAlt(step) {
   }
   altRows.forEach((el, i) => el.classList.toggle('sel', i === altIndex));
   setHints([cameFromReadings ? '\u00ab Readings' : '\u00ab Back',
-            altIndex >= 0 ? 'Open' : 'Read more', '', '']);
+            altIndex >= 0 ? 'Open' : 'More', '', '']);
 }
 
 function openHighlightedAlt() {

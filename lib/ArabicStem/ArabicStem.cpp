@@ -1666,6 +1666,22 @@ std::vector<Candidate> fallbackCandidates(const std::string& word, const bool sp
     addAlefGuesses(folded);
     for (const std::string& form : natural) addAlefGuesses(form);
 
+    // Two letters and a taa marbuta is a root with a weak letter the noun dropped:
+    // aaya is keyed under ayy (spelled with a maqsura), lugha under lghw, sila under
+    // wsl. The stem alone is under the three-letter floor, so nothing above reaches it.
+    // Only when the word itself ends in one: a plural strip restores a taa marbuta of
+    // its own (utuu -> uta), and guessing a root off that one answers the wrong word.
+    const bool endsInTaaMarbuta = folded.ends_with("\xD8\xA9");
+    const auto addWeakRootGuesses = [&guessAdd, endsInTaaMarbuta](const std::string& form) {
+      if (!endsInTaaMarbuta || form.size() != 6 || !form.ends_with("\xD8\xA9")) return;
+      const std::string stem = form.substr(0, 4);
+      guessAdd(stem + "\xD9\x89");  // final yaa, as a maqsura
+      guessAdd(stem + "\xD9\x88");  // final waw
+      guessAdd("\xD9\x88" + stem);  // initial waw
+    };
+    addWeakRootGuesses(folded);
+    for (const std::string& form : natural) addWeakRootGuesses(form);
+
     // The same reading, for a word whose vowels did not prove it: last, so it can
     // only answer where everything derived off the word as written has missed.
     if (!vowelledAsContractedHollow(word, hollowStart)) addHollowPerfect(false);

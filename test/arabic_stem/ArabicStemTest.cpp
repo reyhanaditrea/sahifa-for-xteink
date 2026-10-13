@@ -163,6 +163,10 @@ TEST(ArabicStemFallbackForms, QuranicOrthography) {
   resolves("وَيَسۡفِكُ", "سفك");
   // Adam is written hamza + alef where ordinary text writes the madda alef.
   resolves("ءَادَمَ", "ادم");
+  // Two letters and a taa marbuta: the root's weak third letter fell off the noun.
+  resolves("ءَايَةٌ", "ايى");
+  resolves("لُغَةٌ", "لغو");
+  resolves("صِلَةَ", "وصل");
   // The interrogative particle is a bare hamza on the front of the verb.
   resolves("أَتَجۡعَلُ", "جعل");
   // A superscript alef is the long vowel the letter would otherwise spell.
