@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #ffffff; color: #000000; }
+    a { color: #000000; } a:hover { color: #000000; }
+    .row { display: flex; align-items: center; gap: 20px; padding: 14px 24px; border-bottom: 1px solid #000; }
+    .sw { width: 88px; height: 88px; border: 2px solid #000; box-sizing: border-box; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .sw.inv { background: #000; }
+    .meta { display: flex; flex-direction: column; gap: 4px; }
+    .name { font-size: 16px; font-weight: 700; }
+    .note { font-size: 12px; font-weight: 500; line-height: 1.35; }
+  </style>
+</helmet>
+
+<div style="width: 528px; height: 792px; background: #ffffff; position: relative; overflow: hidden; display: flex; flex-direction: column;">
+
+  <div style="padding: 18px 24px 14px; border-bottom: 2px solid #000;">
+    <div style="font-size: 16px; font-weight: 700;">Games icon — options</div>
+    <div style="font-size: 12px; font-weight: 500; margin-top: 4px;">Shown at 56px, normal and inverted. The app holds Snake, Tetris, Sudoku and Maze.</div>
+  </div>
+
+  <!-- A: gamepad (current draft) -->
+  <div class="row">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.5" y="7.5" width="19" height="9" rx="3.5"/>
+        <path d="M6.5 10.5v3M5 12h3"/>
+        <circle cx="16.5" cy="11" r="1"/>
+        <circle cx="18.5" cy="13.5" r="1"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.5" y="7.5" width="19" height="9" rx="3.5"/>
+        <path d="M6.5 10.5v3M5 12h3"/>
+        <circle cx="16.5" cy="11" r="1"/>
+        <circle cx="18.5" cy="13.5" r="1"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">A — Gamepad</div>
+      <div class="note">Universally read as "games". But the device has no gamepad, and the 1px pips get muddy at 1-bit.</div>
+    </div>
+  </div>
+
+  <!-- B: tetromino -->
+  <div class="row">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="7" height="7"/>
+        <rect x="10.5" y="10.5" width="7" height="7"/>
+        <rect x="3.5" y="10.5" width="7" height="7"/>
+        <rect x="10.5" y="3.5" width="7" height="7" stroke-dasharray="0"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="7" height="7"/>
+        <rect x="10.5" y="10.5" width="7" height="7"/>
+        <rect x="3.5" y="10.5" width="7" height="7"/>
+        <rect x="10.5" y="3.5" width="7" height="7"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">B — Blocks</div>
+      <div class="note">Four squares: Tetris, and a nod to the four games. Straight lines on a whole-pixel grid — the cleanest of the set at 1-bit.</div>
+    </div>
+  </div>
+
+  <!-- C: die -->
+  <div class="row">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="3"/>
+        <circle cx="8.5" cy="8.5" r="1.3" fill="#000"/>
+        <circle cx="15.5" cy="8.5" r="1.3" fill="#000"/>
+        <circle cx="12" cy="12" r="1.3" fill="#000"/>
+        <circle cx="8.5" cy="15.5" r="1.3" fill="#000"/>
+        <circle cx="15.5" cy="15.5" r="1.3" fill="#000"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="3"/>
+        <circle cx="8.5" cy="8.5" r="1.3" fill="#fff"/>
+        <circle cx="15.5" cy="8.5" r="1.3" fill="#fff"/>
+        <circle cx="12" cy="12" r="1.3" fill="#fff"/>
+        <circle cx="8.5" cy="15.5" r="1.3" fill="#fff"/>
+        <circle cx="15.5" cy="15.5" r="1.3" fill="#fff"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">C — Die</div>
+      <div class="note">Reads as "games" instantly. Risk: five filled dots sit close to Tasbih's eight beads in the same grid.</div>
+    </div>
+  </div>
+
+  <!-- D: joystick -->
+  <div class="row">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="5.5" r="2.6"/>
+        <path d="M12 8.1V14"/>
+        <path d="M4.5 19.5c0-2.4 3.4-4 7.5-4s7.5 1.6 7.5 4z"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="5.5" r="2.6"/>
+        <path d="M12 8.1V14"/>
+        <path d="M4.5 19.5c0-2.4 3.4-4 7.5-4s7.5 1.6 7.5 4z"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">D — Joystick</div>
+      <div class="note">Arcade connotation, distinct silhouette. Slightly retro for a Quran reader's tone.</div>
+    </div>
+  </div>
+
+  <!-- E: puzzle piece -->
+  <div class="row">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.75 3.75 H8.54 A2.31 2.31 0 0 0 13.16 3.75 H17.95 V8.54 A2.31 2.31 0 0 1 17.95 13.16 V17.95 H13.16 A2.31 2.31 0 0 1 8.54 17.95 H3.75 V13.16 A2.31 2.31 0 0 0 3.75 8.54 Z"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.75 3.75 H8.54 A2.31 2.31 0 0 0 13.16 3.75 H17.95 V8.54 A2.31 2.31 0 0 1 17.95 13.16 V17.95 H13.16 A2.31 2.31 0 0 1 8.54 17.95 H3.75 V13.16 A2.31 2.31 0 0 0 3.75 8.54 Z"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">E — Puzzle piece</div>
+      <div class="note">Fits Sudoku and Maze better than Tetris. Busiest outline here — the tabs soften at 56px.</div>
+    </div>
+  </div>
+
+  <!-- F: maze / grid -->
+  <div class="row" style="border-bottom: none;">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/>
+        <path d="M3.5 9.5h6M14.5 3.5v6M9.5 14.5h11M14.5 14.5v6M9.5 9.5v5"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/>
+        <path d="M3.5 9.5h6M14.5 3.5v6M9.5 14.5h11M14.5 14.5v6M9.5 9.5v5"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">F — Maze</div>
+      <div class="note">Covers Maze and Sudoku's grid at once, and stays crisp — every stroke is horizontal or vertical.</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

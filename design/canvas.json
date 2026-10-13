@@ -1,0 +1,98 @@
+{
+  "artboards": [
+    {
+      "file": "Current.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 528,
+      "h": 792,
+      "title": "Today"
+    },
+    {
+      "file": "Main.dc.html",
+      "x": 660,
+      "y": 0,
+      "w": 528,
+      "h": 792,
+      "title": "A — Icon grid (3-up)"
+    },
+    {
+      "file": "WideCard.dc.html",
+      "x": 1320,
+      "y": 0,
+      "w": 528,
+      "h": 792,
+      "title": "B — Wide card (2-up)"
+    },
+    {
+      "file": "GamesIcon.dc.html",
+      "x": 1980,
+      "y": 0,
+      "w": 528,
+      "h": 792,
+      "title": "Games icon — options"
+    },
+    {
+      "file": "PuzzleIcon.dc.html",
+      "x": 2640,
+      "y": 0,
+      "w": 528,
+      "h": 792,
+      "title": "Puzzle icon — reworked"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": 0,
+      "y": -190,
+      "w": 528,
+      "text": "Apps screen — Xteink X3, 528×792 portrait, 1-bit e-ink.\nMatched to the firmware: Inter Medium/Bold at 10/12pt, 45px header, 60px content top, 40px hint bar, 12px gutter."
+    },
+    {
+      "id": "note-today",
+      "x": 0,
+      "y": 830,
+      "w": 528,
+      "text": "TODAY — drawTileCover: solid black fill, white inset frame, centred label. Eight identical black slabs; the name is the only thing telling them apart, and the selected tile is black-on-black."
+    },
+    {
+      "id": "note-a",
+      "x": 660,
+      "y": 830,
+      "w": 528,
+      "text": "A — Icon grid. Squares at 3-up (160×160), 56px stroke icon over a 13px name. Reads as a launcher at a glance. Selection inverts the whole card, so it stays obvious on e-ink.\nCost: MIN_CELL_WIDTH 200 → 160, and eight new icons to draw."
+    },
+    {
+      "id": "note-b",
+      "x": 1320,
+      "y": 830,
+      "w": 528,
+      "text": "B — Wide card. Keeps today's exact geometry (2-up, 246×135) and changes only the tile interior: 46px icon left, name right.\nCheapest to ship — no layout constants change — and long labels stop shrinking the font."
+    },
+    {
+      "id": "note-games",
+      "x": 1980,
+      "y": 830,
+      "w": 528,
+      "text": "Six candidates for Games. B (Blocks) and F (Maze) hold up best at 1-bit — every stroke is horizontal or vertical, so nothing softens when the tile inverts. C (Die) is the most instantly readable but its filled dots read close to Tasbih's beads two tiles away."
+    },
+    {
+      "id": "note-icons",
+      "x": 660,
+      "y": 1010,
+      "w": 1188,
+      "text": "Both directions need new icons. The UIIcon enum has Folder, Text, Image, Book, File, Recent, Settings, Transfer, Library, Wifi, Hotspot, Bookmark, Stats, Apps — nothing for Games, Tasbih, Stop Watch, Pomodoro, Gym, Quran or BLE. The ones drawn here are stroke-based on a 24px grid so they scale and invert cleanly; they would need converting to the firmware's icon format."
+    },
+    {
+      "id": "note-puzzle",
+      "x": 2640,
+      "y": 830,
+      "w": 528,
+      "text": "The first puzzle path was malformed - lopsided tabs, arcs joined at inconsistent points, bounding box off-centre. Rebuilt from geometry: 16px square, r=2.6 semicircular knobs at each edge midpoint, silhouette centred on (12,12).\n\nThe left edge was also clipping: its arc carried sweep=1, which runs bottom-left-top and pushes the curve out to x=0.1 (x=-0.7 once the 1.6 stroke is counted), past the viewBox. It needed sweep=0 - bottom-right-top - which is the socket that was intended. P1 is now in both direction artboards."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #ffffff; color: #000000; }
+    a { color: #000000; } a:hover { color: #000000; }
+    .row { display: flex; align-items: center; gap: 18px; padding: 16px 24px; border-bottom: 1px solid #000; }
+    .sw { width: 92px; height: 92px; border: 2px solid #000; box-sizing: border-box; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .sw.inv { background: #000; }
+    .meta { display: flex; flex-direction: column; gap: 5px; }
+    .name { font-size: 16px; font-weight: 700; }
+    .note { font-size: 12px; font-weight: 500; line-height: 1.35; }
+  </style>
+</helmet>
+
+<div style="width: 528px; height: 792px; background: #ffffff; position: relative; overflow: hidden; display: flex; flex-direction: column;">
+
+  <div style="padding: 18px 24px 14px; border-bottom: 2px solid #000;">
+    <div style="font-size: 16px; font-weight: 700;">Puzzle icon — reworked</div>
+    <div style="font-size: 12px; font-weight: 500; margin-top: 5px;">16px square, r=2.6 knobs on each edge midpoint, silhouette centred on (12,12). Shown at 56px, normal and inverted.</div>
+  </div>
+
+  <!-- P1: classic four-feature piece -->
+  <div class="row">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M3.75 3.75 H8.54 A2.31 2.31 0 0 0 13.16 3.75 H17.95 V8.54 A2.31 2.31 0 0 1 17.95 13.16 V17.95 H13.16 A2.31 2.31 0 0 1 8.54 17.95 H3.75 V13.16 A2.31 2.31 0 0 0 3.75 8.54 Z"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M3.75 3.75 H8.54 A2.31 2.31 0 0 0 13.16 3.75 H17.95 V8.54 A2.31 2.31 0 0 1 17.95 13.16 V17.95 H13.16 A2.31 2.31 0 0 1 8.54 17.95 H3.75 V13.16 A2.31 2.31 0 0 0 3.75 8.54 Z"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">P1 — Four features</div>
+      <div class="note">Two sockets in (top, left), two knobs out (right, bottom). The classic silhouette, now symmetric about both axes.</div>
+    </div>
+  </div>
+
+  <!-- P2: two-feature piece -->
+  <div class="row">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M3.75 4.9 H17.95 V9.69 A2.31 2.31 0 0 1 17.95 14.31 V19.1 H3.75 V14.31 A2.31 2.31 0 0 0 3.75 9.69 Z"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M3.75 4.9 H17.95 V9.69 A2.31 2.31 0 0 1 17.95 14.31 V19.1 H3.75 V14.31 A2.31 2.31 0 0 0 3.75 9.69 Z"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">P2 — Two features</div>
+      <div class="note">Socket left, knob right, flat top and bottom. Calmest of the three: four of the eight strokes are straight runs, so least to soften at 1-bit.</div>
+    </div>
+  </div>
+
+  <!-- P3: interlocking pair -->
+  <div class="row" style="border-bottom: none;">
+    <div class="sw">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M2.4 5.5 H10.4 V9.9 A2.1 2.1 0 0 1 10.4 14.1 V18.5 H2.4 Z"/>
+        <path d="M13.6 5.5 H21.6 V18.5 H13.6 V14.1 A2.1 2.1 0 0 0 13.6 9.9 Z"/>
+      </svg>
+    </div>
+    <div class="sw inv">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M2.4 5.5 H10.4 V9.9 A2.1 2.1 0 0 1 10.4 14.1 V18.5 H2.4 Z"/>
+        <path d="M13.6 5.5 H21.6 V18.5 H13.6 V14.1 A2.1 2.1 0 0 0 13.6 9.9 Z"/>
+      </svg>
+    </div>
+    <div class="meta">
+      <div class="name">P3 — Interlocking pair</div>
+      <div class="note">Two pieces, knob meeting socket. Says "puzzle" most explicitly, but carries twice the outline — the one most at risk in the 1-bit tile.</div>
+    </div>
+  </div>
+
+  <!-- In place, at tile scale -->
+  <div style="margin-top: auto; border-top: 2px solid #000; padding: 20px 24px 24px;">
+    <div style="font-size: 12px; font-weight: 700; margin-bottom: 14px;">P1 in the 160px tile, normal and selected</div>
+    <div style="display: flex; gap: 12px;">
+      <div style="width: 160px; height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round">
+          <path d="M3.75 3.75 H8.54 A2.31 2.31 0 0 0 13.16 3.75 H17.95 V8.54 A2.31 2.31 0 0 1 17.95 13.16 V17.95 H13.16 A2.31 2.31 0 0 1 8.54 17.95 H3.75 V13.16 A2.31 2.31 0 0 0 3.75 8.54 Z"/>
+        </svg>
+        <div style="font-size: 16px; font-weight: 700;">Games</div>
+      </div>
+      <div style="width: 160px; height: 160px; background: #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round">
+          <path d="M3.75 3.75 H8.54 A2.31 2.31 0 0 0 13.16 3.75 H17.95 V8.54 A2.31 2.31 0 0 1 17.95 13.16 V17.95 H13.16 A2.31 2.31 0 0 1 8.54 17.95 H3.75 V13.16 A2.31 2.31 0 0 0 3.75 8.54 Z"/>
+        </svg>
+        <div style="font-size: 16px; font-weight: 700; color: #fff;">Games</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

@@ -1,17 +1,17 @@
 """
-PlatformIO pre-build script: inject git branch and short SHA into
-CROSSPOINT_VERSION for development environments.
+PlatformIO pre-build script: inject the short git SHA into CROSSPOINT_VERSION
+for development environments.
 
-Results in a version string like:  1.1.0-dev-05c6cf8-feat-kosync-xpath
+Results in a version string like:  ra-build-05c6cf8
 Release environments are unaffected; they set CROSSPOINT_VERSION in the ini.
 
-The short SHA sits right after "dev", not at the end: the header that shows
-this string truncates from the right (BaseTheme::drawHeader), and a long
-branch name would otherwise push the SHA -- the only part that actually
-identifies which build is running -- off the visible edge.
+"ra" is the developer's own initials, not a project prefix: this build
+naming is a personal convention, picked deliberately short so the SHA -- the
+only part that actually identifies which build is running -- survives
+BaseTheme::drawHeader's right-side truncation of the subtitle even on the
+narrowest header.
 """
 
-import configparser
 import os
 import subprocess
 import sys
@@ -52,33 +52,10 @@ def run_git_value(project_dir, args, label):
         return 'unknown'
 
 
-def get_git_branch(project_dir):
-    branch = run_git_value(
-        project_dir, ['rev-parse', '--abbrev-ref', 'HEAD'], 'branch'
-    )
-    # Detached HEAD has no branch name.
-    if branch == 'HEAD':
-        return 'detached'
-    return branch
-
-
 def get_git_short_sha(project_dir):
     return run_git_value(
         project_dir, ['rev-parse', '--short', 'HEAD'], 'short SHA'
     )
-
-
-def get_base_version(project_dir):
-    ini_path = os.path.join(project_dir, 'platformio.ini')
-    if not os.path.isfile(ini_path):
-        warn(f'platformio.ini not found at {ini_path}; base version will be "0.0.0"')
-        return '0.0.0'
-    config = configparser.ConfigParser()
-    config.read(ini_path, encoding='utf-8')
-    if not config.has_option('crosspoint', 'version'):
-        warn('No [crosspoint] version in platformio.ini; base version will be "0.0.0"')
-        return '0.0.0'
-    return config.get('crosspoint', 'version')
 
 
 def inject_version(env):
@@ -88,10 +65,8 @@ def inject_version(env):
         return
 
     project_dir = env['PROJECT_DIR']
-    base_version = get_base_version(project_dir)
-    branch = get_git_branch(project_dir)
     short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-dev-{short_sha}-{branch}'
+    version_string = f'ra-build-{short_sha}'
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')
