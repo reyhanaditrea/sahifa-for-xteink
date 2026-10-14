@@ -123,6 +123,7 @@ class ChapterHtmlSlimParser {
   bool pendingPageBreak = false;        // page-break-before block seen; applied with the anchor
   bool pendingPageFill = false;         // last block opened asks -sahifa-page-fill
   bool fillCurrentPage = false;         // the page being filled began in such a block
+  bool pendingMushafLine = false;       // last block opened is a printed Mushaf line
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;

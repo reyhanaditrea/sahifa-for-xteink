@@ -62,7 +62,7 @@ namespace {
 // starts a new page -- the Quran EPUB uses it to keep the Madinah Mushaf's
 // page boundaries -- and -sahifa-page-fill: justify spreads the lines of a
 // page so cut down the whole screen.
-constexpr uint8_t SECTION_FILE_VERSION = 43;
+constexpr uint8_t SECTION_FILE_VERSION = 44;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

@@ -317,8 +317,10 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
   if (pendingAnchorId.empty()) return;
 
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
-  // block is flushed so the chapter starts on a fresh page.
-  if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
+  // block is flushed so the chapter starts on a fresh page. Not on a printed
+  // Mushaf line: a juz opens mid-page, and breaking there strands the page's
+  // first half on a screen of its own.
+  if (!pendingMushafLine && std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
     if (!breakPage()) return;
   }
 
@@ -812,7 +814,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   // Applied by the next startNewTextBlock, once the previous block is on its pages.
   // A printed-line block outside the Mushaf layout flows on; see mushafLayout.
-  const bool flowingMushafLine = !self->mushafLayout && (cssStyle.hasPageFill() || cssStyle.hasTextAlignLastJustify());
+  const bool mushafLine = cssStyle.hasPageFill() || cssStyle.hasTextAlignLastJustify();
+  const bool flowingMushafLine = !self->mushafLayout && mushafLine;
+  if (isHeaderOrBlock(name)) self->pendingMushafLine = mushafLine;
   if (cssStyle.hasPageBreakBefore() && isHeaderOrBlock(name) && !flowingMushafLine) self->pendingPageBreak = true;
   if (isHeaderOrBlock(name)) self->pendingPageFill = cssStyle.hasPageFill() && !flowingMushafLine;
 
@@ -1418,6 +1422,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     } else {
       self->currentCssStyle = cssStyle;
       auto blockStyle = userAlignmentBlockStyle;
+      // A printed Mushaf line is justified whatever the alignment setting: the
+      // book's own CSS centers it, which "Book's Style" would otherwise keep.
+      if (blockStyle.justifyLast) blockStyle.alignment = CssTextAlign::Justify;
       // A printed Mushaf line outside the Mushaf layout: no stretching, and it
       // continues the ayah the previous line left open (see mushafLayout).
       const bool flowingMushafLine = !self->mushafLayout && blockStyle.justifyLast;
