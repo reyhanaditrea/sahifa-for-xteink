@@ -239,18 +239,14 @@ def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bis
         paras[-1][2].append(token)
     # A juz carries its TOC anchor on the line that opens it: the reader records
     # anchors per block (ChapterHtmlSlimParser), so an inline anchor would
-    # resolve to the end of the surah. Juz 4, 7 and 11 open mid-line; that line
-    # is split there, so its first part sits alone on a screen line.
+    # resolve to the end of the surah. Juz 4, 7 and 11 open mid-line; the whole
+    # line takes the anchor, as splitting it left the previous ayah's tail (e.g.
+    # al-Ma'idah's lone 81 marker) on a screen line of its own.
     for juz, (juz_surah, juz_ayah) in enumerate(JUZ_STARTS, start=1):
         if juz_surah != surah or juz_ayah == 1:
             continue
         k = max(k for k, para in enumerate(paras) if para[3] <= (juz_ayah, 0))
-        if paras[k][3] == (juz_ayah, 0):
-            paras[k][1] = f"juz_{juz}"
-        else:
-            cls, _, tokens, pos = paras[k]
-            cut = tokens.index(AYAH_MARKER.format(arabic_digits(str(juz_ayah - 1)))) + 1
-            paras[k : k + 1] = [[cls, "", tokens[:cut], pos], ["block_ mushaf mline", f"juz_{juz}", tokens[cut:], (juz_ayah, 0)]]
+        paras[k][1] = f"juz_{juz}"
     text_html = ""
     for cls, para_id, tokens, _ in paras:
         id_attr = f' id="{para_id}"' if para_id else ""
