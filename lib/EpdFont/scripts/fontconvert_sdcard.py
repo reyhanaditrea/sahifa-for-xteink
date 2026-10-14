@@ -30,6 +30,7 @@ import os
 import re
 import math
 import argparse
+import unicodedata
 from collections import namedtuple
 
 from cpfont_version import CPFONT_VERSION
@@ -45,10 +46,19 @@ INTERVAL_PRESETS = {
     "greek":       [(0x0370, 0x03FF), (0x1F00, 0x1FFF)],
     "cyrillic":    [(0x0400, 0x04FF), (0x0500, 0x052F)],
     "hebrew":      [(0x0590, 0x05FF), (0xFB1D, 0xFB4F)],
+    # Arabic block, Supplement, and Presentation Forms-B (the contextual
+    # isolated/initial/medial/final glyph forms ArabicShaper.cpp maps codepoints
+    # to at render time -- without these the shaper produces codepoints with no
+    # matching glyph in the font). Combine with a base preset for ASCII/digits/
+    # punctuation, e.g. --intervals reading,arabic
+    "arabic":      [(0x0600, 0x06FF), (0x0750, 0x077F), (0xFB56, 0xFB59), (0xFB7A, 0xFB7D),
+                    (0xFB8A, 0xFB95), (0xFBA4, 0xFBA5), (0xFBD3, 0xFBD6), (0xFBFC, 0xFBFF), (0xFD3E, 0xFD3F),
+                    (0xFDF2, 0xFDF2), (0xFE70, 0xFEFF)],
     "georgian":    [(0x10A0, 0x10FF), (0x2D00, 0x2D2F)],
     "armenian":    [(0x0530, 0x058F)],
     "ethiopic":    [(0x1200, 0x137F), (0x1380, 0x139F), (0x2D80, 0x2DDF)],
     "vietnamese":  [(0x01A0, 0x01B0), (0x1EA0, 0x1EF9)],
+    "ipa-chars":   [(0x0250, 0x02AF), (0x02B0, 0x02FF)],
     "punctuation": [(0x2000, 0x206F)],
     "cjk":         [(0x3000, 0x303F), (0x3040, 0x309F), (0x30A0, 0x30FF),
                     (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0xFF00, 0xFFEF)],
@@ -191,6 +201,51 @@ STANDARD_LIGATURE_MAP = {
     (0x17F, 0x74):      0xFB05,  # long-s + t
     (0x73, 0x74):       0xFB06,  # st
 }
+
+
+def extract_ligature_glyph_indices_fonttools(font_path):
+    """Map standard ligature codepoints without a cmap entry to their glyph IDs.
+
+    Most fonts use unencoded glyphs such as ``f_f`` for standard ligatures.
+    The reader represents those substitutions with the Unicode compatibility
+    codepoints, so rasterize the GSUB target directly instead of falling back
+    to another font for a codepoint that the primary cmap does not contain.
+    """
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(font_path)
+    cmap = font.getBestCmap() or {}
+    glyph_to_cp = {gname: cp for cp, gname in cmap.items()}
+    glyph_indices = {gname: index for index, gname in enumerate(font.getGlyphOrder())}
+    overrides = {}
+
+    if 'GSUB' in font:
+        gsub = font['GSUB'].table
+        liga_lookup_indices = set()
+        if gsub.FeatureList:
+            for fr in gsub.FeatureList.FeatureRecord:
+                if fr.FeatureTag in ('liga', 'rlig'):
+                    liga_lookup_indices.update(fr.Feature.LookupListIndex)
+
+        for li in liga_lookup_indices:
+            lookup = gsub.LookupList.Lookup[li]
+            for st in lookup.SubTable:
+                actual = st.ExtSubTable if lookup.LookupType == 7 and hasattr(st, 'ExtSubTable') else st
+                if not hasattr(actual, 'ligatures'):
+                    continue
+                for first_glyph, ligature_list in actual.ligatures.items():
+                    if first_glyph not in glyph_to_cp:
+                        continue
+                    for lig in ligature_list:
+                        if any(component not in glyph_to_cp for component in lig.Component):
+                            continue
+                        seq = tuple([glyph_to_cp[first_glyph]] + [glyph_to_cp[component] for component in lig.Component])
+                        lig_cp = STANDARD_LIGATURE_MAP.get(seq)
+                        if lig_cp is not None and lig_cp not in cmap:
+                            overrides[lig_cp] = glyph_indices[lig.LigGlyph]
+
+    font.close()
+    return overrides
 
 
 def _extract_pairpos_subtable(subtable, glyph_to_cp, raw_kern):
@@ -519,8 +574,244 @@ def extract_ligatures_fonttools(font_path, codepoints):
     return pairs
 
 
+# Arabic Presentation Forms ranges (the "arabic" preset's Presentation-Forms
+# sub-ranges live inside these).
+_PRESENTATION_FORM_RANGES = ((0xFB50, 0xFDFF), (0xFE70, 0xFEFF))
+
+
+def _intervals_touch_presentation_forms(intervals):
+    """Cheap overlap test -- avoids running GSUB analysis on fonts/interval
+    sets that never asked for Arabic presentation forms in the first place."""
+    for i_start, i_end in intervals:
+        for p_start, p_end in _PRESENTATION_FORM_RANGES:
+            if i_start <= p_end and p_start <= i_end:
+                return True
+    return False
+
+
+def synthesize_presentation_forms(font_path, intervals):
+    """Build a {codepoint: glyph_id} override map for Arabic presentation-form
+    codepoints that have no cmap entry but ARE reachable through the font's
+    own GSUB init/medi/fina/isol substitutions (plus rlig/liga/ccmp ligatures
+    for lam-alef). cmap always wins -- callers only consult this map for a
+    codepoint after face.get_char_index() has already returned 0 for it, so a
+    font that maps presentation forms directly in cmap (Amiri, Cairo) is
+    completely unaffected and converts byte-identical to before.
+
+    Needed because modern Arabic fonts (Aref Ruqaa and most Google Fonts
+    Arabic families) implement joining purely via GSUB contextual features
+    and carry NO presentation-form codepoints in cmap at all -- previously
+    that meant the "arabic" interval preset emitted nothing at those
+    codepoints, the device's ArabicShaper fell back to isolated base letters,
+    and joined Arabic text rendered as disconnected letters.
+
+    Returns {} immediately (without opening the font a second time via
+    fontTools) if `intervals` never touches the presentation-form ranges.
+    """
+    if not _intervals_touch_presentation_forms(intervals):
+        return {}
+
+    # Restrict to the overlap between requested intervals and the
+    # presentation-form ranges -- avoids scanning unrelated (possibly huge,
+    # e.g. CJK) requested ranges just to build this candidate list.
+    candidate_cps = []
+    for i_start, i_end in intervals:
+        for p_start, p_end in _PRESENTATION_FORM_RANGES:
+            lo, hi = max(i_start, p_start), min(i_end, p_end)
+            if lo <= hi:
+                candidate_cps.extend(range(lo, hi + 1))
+
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(font_path)
+    cmap = font.getBestCmap() or {}
+
+    missing_cps = [cp for cp in candidate_cps if cp not in cmap]
+    if not missing_cps or 'GSUB' not in font:
+        font.close()
+        return {}
+
+    gsub = font['GSUB'].table
+
+    def collect_single_subst(feature_tags):
+        """feature_tag -> {input_glyph_name: output_glyph_name}, merging every
+        lookup behind every FeatureRecord with a matching tag (mirrors
+        extract_ligatures_fonttools's approach -- don't over-filter by
+        script/lang system)."""
+        result = {tag: {} for tag in feature_tags}
+        lookup_indices_by_tag = {tag: set() for tag in feature_tags}
+        if gsub.FeatureList:
+            for fr in gsub.FeatureList.FeatureRecord:
+                if fr.FeatureTag in feature_tags:
+                    lookup_indices_by_tag[fr.FeatureTag].update(fr.Feature.LookupListIndex)
+        for tag, lookup_indices in lookup_indices_by_tag.items():
+            for li in lookup_indices:
+                lookup = gsub.LookupList.Lookup[li]
+                for st in lookup.SubTable:
+                    actual = st
+                    # Unwrap Extension (lookup type 7) wrappers, same as extract_ligatures_fonttools.
+                    if lookup.LookupType == 7 and hasattr(st, 'ExtSubTable'):
+                        actual = st.ExtSubTable
+                    if not hasattr(actual, 'mapping'):
+                        continue
+                    # SingleSubst (lookup type 1) -- fontTools normalizes both
+                    # its on-disk formats to a flat {glyph: glyph} .mapping.
+                    # MultipleSubst (lookup type 2) -- some font toolchains
+                    # (confirmed: Aref Ruqaa) encode a contextual single-
+                    # letterform swap as a 1-element MultipleSubst instead of
+                    # a SingleSubst; its .mapping values are lists. Treat a
+                    # single-element list the same as a SingleSubst entry. A
+                    # genuine multi-glyph expansion isn't a letterform swap,
+                    # so anything longer is left alone (not collected).
+                    for in_glyph, out in actual.mapping.items():
+                        if isinstance(out, str):
+                            result[tag][in_glyph] = out
+                        elif isinstance(out, (list, tuple)) and len(out) == 1:
+                            result[tag][in_glyph] = out[0]
+        return result
+
+    def collect_two_glyph_ligatures(feature_tags):
+        """(first_glyph, second_glyph) -> ligature_glyph, 2-component ligatures
+        only -- all lam-alef presentation forms decompose to exactly 2 base
+        codepoints, so that's all this needs."""
+        result = {}
+        lookup_indices = set()
+        if gsub.FeatureList:
+            for fr in gsub.FeatureList.FeatureRecord:
+                if fr.FeatureTag in feature_tags:
+                    lookup_indices.update(fr.Feature.LookupListIndex)
+        for li in lookup_indices:
+            lookup = gsub.LookupList.Lookup[li]
+            for st in lookup.SubTable:
+                actual = st
+                if lookup.LookupType == 7 and hasattr(st, 'ExtSubTable'):
+                    actual = st.ExtSubTable
+                if not hasattr(actual, 'ligatures'):
+                    continue
+                for first_glyph, ligature_list in actual.ligatures.items():
+                    for lig in ligature_list:
+                        if len(lig.Component) == 1:
+                            result[(first_glyph, lig.Component[0])] = lig.LigGlyph
+        return result
+
+    feature_map = collect_single_subst(('init', 'medi', 'fina', 'isol'))
+    ligature_map = collect_two_glyph_ligatures(('rlig', 'liga', 'ccmp'))
+
+    overrides = {}
+    for cp in missing_cps:
+        # unicodedata.decomposition() returns e.g. "<initial> 0628" for a
+        # compatibility decomposition, or "" / a bare (untagged) canonical
+        # decomposition for anything else -- only the tagged form describes a
+        # contextual letterform, so skip anything not starting with "<"
+        # (same parsing idiom as fontconvert.py's --shape-fallback).
+        decomp = unicodedata.decomposition(chr(cp))
+        if not decomp.startswith('<'):
+            continue
+        tag, _, rest = decomp.partition('> ')
+        tag += '>'
+        base_cps = [int(h, 16) for h in rest.split()]
+
+        if len(base_cps) == 1:
+            base_cp = base_cps[0]
+            if base_cp not in cmap:
+                continue
+            base_glyph = cmap[base_cp]
+            if tag == '<isolated>':
+                # The cmap glyph IS the isolated form when there's no isol feature.
+                form_glyph = feature_map['isol'].get(base_glyph, base_glyph)
+            elif tag == '<initial>':
+                form_glyph = feature_map['init'].get(base_glyph)
+            elif tag == '<medial>':
+                form_glyph = feature_map['medi'].get(base_glyph)
+            elif tag == '<final>':
+                form_glyph = feature_map['fina'].get(base_glyph)
+            else:
+                continue
+            if form_glyph is None:
+                continue
+            overrides[cp] = font.getGlyphID(form_glyph)
+
+        elif len(base_cps) == 2:
+            # Lam-alef ligatures (U+FEF5-FEFC and the isolated forms in
+            # FB50-FDFF): apply contextual forms to each base letter first,
+            # then look up the pair in the ligature map.
+            lam_cp, alef_cp = base_cps
+            if lam_cp not in cmap or alef_cp not in cmap:
+                continue
+            lam_glyph = cmap[lam_cp]
+            alef_glyph = cmap[alef_cp]
+            if tag == '<final>':
+                first = feature_map['medi'].get(lam_glyph) or feature_map['init'].get(lam_glyph) or lam_glyph
+                second = feature_map['fina'].get(alef_glyph, alef_glyph)
+            elif tag == '<isolated>':
+                first = feature_map['init'].get(lam_glyph) or feature_map['isol'].get(lam_glyph) or lam_glyph
+                second = feature_map['fina'].get(alef_glyph) or feature_map['isol'].get(alef_glyph) or alef_glyph
+            else:
+                continue
+            lig_glyph = ligature_map.get((first, second))
+            if lig_glyph is None:
+                # No ligature glyph -- skip. The device shaper draws lam+alef
+                # as two separately-joined letters instead, which now looks
+                # correct thanks to the synthesized init/fina forms above.
+                continue
+            overrides[cp] = font.getGlyphID(lig_glyph)
+
+    font.close()
+    return overrides
+
+
+def extract_ligature_glyph_indices_fonttools(font_path):
+    """Map standard ligature codepoints without a cmap entry to their glyph IDs.
+
+    Most fonts implement standard Latin ligatures (fi, fl, ffi...) purely via a
+    GSUB 'liga'/'rlig' substitution triggered by the decomposed letter sequence,
+    with no cmap entry for the precomposed ligature codepoint itself (U+FB00-FB06).
+    That's fine for extract_ligatures_fonttools's runtime substitution table (built
+    from the decomposed sequence), but if the EPUB text already contains the
+    precomposed codepoint directly (common when copy-pasted from a source that
+    applied typographic ligatures), face.get_char_index() finds nothing and the
+    codepoint would be silently dropped from the rasterized set, rendering as
+    tofu. This finds the GSUB target glyph directly so it rasterizes anyway.
+    """
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(font_path)
+    cmap = font.getBestCmap() or {}
+    glyph_to_cp = {gname: cp for cp, gname in cmap.items()}
+    glyph_indices = {gname: index for index, gname in enumerate(font.getGlyphOrder())}
+    overrides = {}
+
+    if 'GSUB' in font:
+        gsub = font['GSUB'].table
+        liga_lookup_indices = set()
+        if gsub.FeatureList:
+            for fr in gsub.FeatureList.FeatureRecord:
+                if fr.FeatureTag in ('liga', 'rlig'):
+                    liga_lookup_indices.update(fr.Feature.LookupListIndex)
+
+        for li in liga_lookup_indices:
+            lookup = gsub.LookupList.Lookup[li]
+            for st in lookup.SubTable:
+                actual = st.ExtSubTable if lookup.LookupType == 7 and hasattr(st, 'ExtSubTable') else st
+                if not hasattr(actual, 'ligatures'):
+                    continue
+                for first_glyph, ligature_list in actual.ligatures.items():
+                    if first_glyph not in glyph_to_cp:
+                        continue
+                    for lig in ligature_list:
+                        if any(component not in glyph_to_cp for component in lig.Component):
+                            continue
+                        seq = tuple([glyph_to_cp[first_glyph]] + [glyph_to_cp[c] for c in lig.Component])
+                        lig_cp = STANDARD_LIGATURE_MAP.get(seq)
+                        if lig_cp is not None and lig_cp not in cmap:
+                            overrides[lig_cp] = glyph_indices[lig.LigGlyph]
+
+    font.close()
+    return overrides
+
+
 def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=False,
-                         fallback_fontfile=None):
+                         fallback_fontfile=None, reposition_marks=False):
     """Rasterize all glyphs for one font style. Returns StyleRasterData."""
     import freetype
 
@@ -533,6 +824,7 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     # it before set_char_size() would waste work at the default size and risk
     # Invalid_Size_Handle on some fonts.
     face.set_char_size(size << 6, size << 6, 150, 150)
+    ligature_glyph_indices = extract_ligature_glyph_indices_fonttools(fontfile)
     fallback_face = None
     if fallback_fontfile:
         fallback_face = freetype.Face(fallback_fontfile)
@@ -542,10 +834,38 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     if force_autohint:
         load_flags |= freetype.FT_LOAD_FORCE_AUTOHINT
 
+    # GSUB-synthesized overrides -- only ever consulted below after
+    # face.get_char_index() has already returned 0 for a codepoint, so a font
+    # with direct cmap coverage (for presentation forms or ligatures alike) is
+    # unaffected and converts byte-identical to before either of these existed.
+    # presentation_form_overrides: Arabic init/medi/fina/isol + lam-alef forms
+    # (see synthesize_presentation_forms's docstring). ligature_glyph_overrides:
+    # standard Latin ligature codepoints (U+FB00-FB06) reachable only via a
+    # 'liga'/'rlig' GSUB substitution, not a cmap entry (see
+    # extract_ligature_glyph_indices_fonttools's docstring) -- complements
+    # extract_ligatures_fonttools's runtime decomposed-sequence substitution
+    # table, which doesn't help when the EPUB text already has the precomposed
+    # ligature codepoint.
+    presentation_form_overrides = synthesize_presentation_forms(fontfile, intervals)
+    if presentation_form_overrides:
+        print(f"  [{style_label}] GSUB-synthesized {len(presentation_form_overrides)} presentation forms "
+              f"(font has no cmap coverage for them)", file=sys.stderr)
+    glyph_overrides = dict(presentation_form_overrides)
+    ligature_glyph_overrides = extract_ligature_glyph_indices_fonttools(fontfile)
+    if ligature_glyph_overrides:
+        print(f"  [{style_label}] GSUB-synthesized {len(ligature_glyph_overrides)} standard ligatures "
+              f"(font has no cmap coverage for them)", file=sys.stderr)
+    glyph_overrides.update(ligature_glyph_overrides)
+
     def load_glyph(code_point):
         glyph_index = face.get_char_index(code_point)
+        if glyph_index == 0:
+            glyph_index = ligature_glyph_indices.get(code_point, 0)
         if glyph_index > 0:
             face.load_glyph(glyph_index, load_flags)
+            return face
+        if code_point in glyph_overrides:
+            face.load_glyph(glyph_overrides[code_point], load_flags)
             return face
         if fallback_face:
             fallback_glyph_index = fallback_face.get_char_index(code_point)
@@ -563,9 +883,10 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     for i_start, i_end in intervals:
         start = i_start
         for code_point in range(i_start, i_end + 1):
-            has_primary = face.get_char_index(code_point) != 0
+            has_primary = face.get_char_index(code_point) != 0 or code_point in ligature_glyph_indices
             has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
-            if not has_primary and not has_fallback:
+            has_override = code_point in glyph_overrides
+            if not has_primary and not has_fallback and not has_override:
                 if start < code_point:
                     validated_intervals.append((start, code_point - 1))
                 start = code_point + 1
@@ -650,12 +971,39 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
                 pixels2b.append(px)
 
             packed = bytes(pixels2b)
+
+            # --reposition-marks: GPOS-reliant fonts anchor combining marks at the
+            # baseline; without mark attachment (which this rasterizer doesn't run)
+            # they'd draw on top of the letter bodies or float away from their base
+            # letter entirely. Move them to fixed em-relative heights instead,
+            # tiered by Unicode's canonical combining class so a shadda and a vowel
+            # mark stacked on the same letter (very common in vocalized Arabic --
+            # e.g. "الرَّحْمَٰنِ") don't collide at one shared height. Ported verbatim
+            # from fontconvert.py's --reposition-marks (built-in fonts), which fixed
+            # the identical bug there. Horizontal centering happens at RUNTIME
+            # (GfxRenderer::drawArabicText), not here -- keep the font's own
+            # bitmap_left as that centering's markLeft term.
+            glyph_top = f.glyph.bitmap_top
+            glyph_left = f.glyph.bitmap_left
+            if reposition_marks and unicodedata.category(chr(code_point)) == 'Mn':
+                em_px = size * 150 / 72.0
+                below_marks = {0x0650, 0x064D, 0x0655, 0x0656, 0x065C}  # kasra, kasratan, hamza/subscript below
+                ccc = unicodedata.combining(chr(code_point))
+                if code_point in below_marks:
+                    glyph_top = -max(1, round(em_px * 0.05))
+                elif code_point == 0x0651:  # shadda: innermost above-mark
+                    glyph_top = round(em_px * 0.75)
+                elif ccc in (27, 28, 30, 31, 34, 35):  # tanwin/fatha/damma/sukun/dagger-alef
+                    glyph_top = round(em_px * 0.9)
+                else:  # outer: maddah, hamza-above, Quranic small-high annotation marks
+                    glyph_top = round(em_px * 1.05)
+
             glyph = GlyphProps(
                 width=bitmap.width,
                 height=bitmap.rows,
                 advance_x=fp4_from_ft16_16(f.glyph.linearHoriAdvance),
-                left=f.glyph.bitmap_left,
-                top=f.glyph.bitmap_top,
+                left=glyph_left,
+                top=glyph_top,
                 data_length=len(packed),
                 data_offset=total_bitmap_size,
                 code_point=code_point,
@@ -776,7 +1124,7 @@ def style_sections_total_size(sections):
 # --- File writers ---
 
 def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
-                               force_autohint=False, fallback_style_fonts=None):
+                               force_autohint=False, fallback_style_fonts=None, reposition_marks=False):
     """Generate a multi-style v4 .cpfont file.
 
     style_fonts: dict of {style_id: fontfile_path} e.g. {0: "Regular.ttf", 2: "Italic.ttf"}
@@ -798,7 +1146,8 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
         raster_data[style_id] = rasterize_font_style(
             fontfile, size, intervals, style_id=style_id,
             force_autohint=force_autohint,
-            fallback_fontfile=fallback_fontfile)
+            fallback_fontfile=fallback_fontfile,
+            reposition_marks=reposition_marks)
 
     # Pack binary sections for each style
     packed_sections = {}  # style_id -> tuple of section bytearrays
@@ -893,6 +1242,14 @@ def main():
                         help="Font family name for output filenames (default: derived from font filename).")
     parser.add_argument("--force-autohint", dest="force_autohint", action="store_true",
                         help="Force FreeType auto-hinter instead of native font hinting.")
+    parser.add_argument("--reposition-marks", dest="reposition_marks", action="store_true",
+                        help="Move Arabic combining marks (harakat) to fixed above/below-baseline heights, "
+                             "tiered by Unicode combining class so stacked marks (e.g. shadda+fatha) don't "
+                             "collide. For fonts that anchor marks via OpenType GPOS mark attachment, which "
+                             "this rasterizer doesn't run. Strongly recommended for any Arabic/Ottoman-Turkish "
+                             "font converted with --intervals arabic -- without it, diacritics commonly render "
+                             "overlapping or over the wrong letter. Matches fontconvert.py's built-in-font flag "
+                             "of the same name.")
     parser.add_argument("-o", "--output", dest="output",
                         help="Output file path (for single-size mode).")
     parser.add_argument("--output-dir", dest="output_dir",
@@ -1016,7 +1373,8 @@ def main():
         total_size += generate_cpfont_multistyle(
             style_fonts, sz, intervals, output_path,
             force_autohint=args.force_autohint,
-            fallback_style_fonts=fallback_style_fonts)
+            fallback_style_fonts=fallback_style_fonts,
+            reposition_marks=args.reposition_marks)
     print(f"\nTotal: {len(sizes)} files, {total_size / 1024 / 1024:.2f} MB", file=sys.stderr)
 
 

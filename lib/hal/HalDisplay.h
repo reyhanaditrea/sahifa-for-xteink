@@ -38,14 +38,63 @@ class HalDisplay {
   void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                             bool fromProgmem = false) const;
 
-  void displayBuffer(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
+  // forceCleanBaseOnHalf: on X3, HALF_REFRESH normally also forces a resync
+  // (requestResync) so the panel starts from a guaranteed-clean base -- needed
+  // when the caller is clearing arbitrary prior content (e.g. before a
+  // grayscale/image render, see displayGrayscaleBase's own comment). That
+  // resync makes the SDK driver chain a forced-full-sync pass plus its
+  // post-condition and settle passes on top of the requested HALF_REFRESH --
+  // three physical panel waveforms instead of one (~3.4s vs ~800ms measured
+  // on-device). The reader's own periodic ghost-cleanup HALF_REFRESH (every
+  // getRefreshFrequency() pages) doesn't need that guarantee: it's already a
+  // full-pixel scrub of the CURRENT page, not a base-clearing operation, so it
+  // passes false here (see ReaderUtils::displayWithRefreshCycle). Defaults to
+  // true so every other existing call site's behavior is unchanged.
+  void displayBuffer(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false,
+                     bool forceCleanBaseOnHalf = true);
+  // Non-blocking refresh: pushes the frame, starts the panel waveform, and
+  // returns (~25ms) while the panel refreshes on its own (~0.3-2s). The
+  // caller must not touch the framebuffer until waitRefreshComplete()
+  // (refreshBusy()==false / any blocking display call also drains it first),
+  // and must rebuild the differential baseline itself before the next
+  // differential update -- the tiled-grayscale cleanup path already does
+  // this via cleanupGrayscaleWithFrameBuffer(). Same X3 forceCleanBaseOnHalf
+  // resync-gating as displayBuffer() above; see that comment for why.
+  // Falls back to the blocking path on panels that don't support deferral
+  // (supportsAsyncRefresh() reports which).
+  void displayBufferAsync(RefreshMode mode = RefreshMode::FAST_REFRESH, bool forceCleanBaseOnHalf = true);
+  // Block until a pending async refresh completes (no-op when none is).
+  void waitRefreshComplete();
+  // True when displayBufferAsync() genuinely overlaps (panel driver defers
+  // the wait); false where it silently falls back to a blocking refresh, in
+  // which case overlap scaffolding upstream (e.g. whole-plane grayscale
+  // buffers) has nothing to overlap and should skip itself.
+  bool supportsAsyncRefresh() const;
   void refreshDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
+
+  // Output polarity. The framebuffer remains in normal polarity; inversion is
+  // applied by the display driver while sending it to the panel.
+  void setInverted(bool inverted);
+  bool toggleInverted();
+  bool isInverted() const;
 
   // Power management
   void deepSleep();
 
+  // Install the slice hook that replaces the BUSY poll delay on proven-long
+  // waits (see EpdBus::setBusyWaitSliceHook for the contract)
+  void setBusyWaitSliceHook(bool (*sliceHook)(int8_t busyPin, uint8_t busyLevel));
+
   // Access to frame buffer
   uint8_t* getFrameBuffer() const;
+
+  // Lend the framebuffer's ~48 KB STORAGE to a memory-hungry phase (chapter
+  // builds) without freeing it: the allocation never moves, so repeated loans
+  // cannot fragment the heap (free+realloc measurably did). No display calls
+  // between lend and return; the panel keeps its last refreshed image. The
+  // buffer comes back white -- redraw fully. Returns nullptr if already lent.
+  uint8_t* lendFrameBufferStorage(uint32_t* sizeOut);
+  void returnFrameBufferStorage();
 
   // X3 grayscale preconditioning (OEM "AA-pre-BW(mid)" settle pass), windowed
   // to the gray region in physical panel coordinates (no-arg = full frame).
@@ -72,6 +121,13 @@ class HalDisplay {
   // EInkDisplay::writeGrayscalePlaneStrip.
   void writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows);
   bool supportsStripGrayscale() const;
+
+  // True when displayGrayscaleBase() defers the base activation so the gray
+  // planes join it in a single waveform (Paper Mono). Callers should then route
+  // the base of a grayscale page through displayGrayscaleBase() instead of
+  // displayBuffer(): a separate B/W refresh first makes the gray pass re-drive
+  // the whole text body (a visible flash).
+  bool combinesGrayscaleBase() const;
 
   // Runtime geometry passthrough
   uint16_t getDisplayWidth() const;

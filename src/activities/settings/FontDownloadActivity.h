@@ -15,7 +15,7 @@
 #define FONTS_MANIFEST_VERSION 1
 
 #ifndef FONT_MANIFEST_URL
-// Manifest + .cpfont assets are published by .github/workflows/release-fonts.yml
+// Manifest + .cpfont assets published by .github/workflows/release-fonts.yml
 // to the crosspoint-fonts repo under the "sd-fonts-m<META>-b<BIN>" tag. The tag
 // pattern must stay in sync with the workflow; it derives its version numbers
 // from lib/EpdFont/scripts/cpfont_version.py.
@@ -41,6 +41,7 @@ class FontDownloadActivity : public Activity {
            // during downloading.
            state_ == COMPLETE || state_ == ERROR;
   }
+  const char* activityDebugName() const override { return "FontDownloadActivity"; }
   bool skipLoopDelay() override { return true; }
 
  private:
@@ -67,6 +68,9 @@ class FontDownloadActivity : public Activity {
     size_t totalSize = 0;
     bool installed = false;
     bool hasUpdate = false;
+    // True when the family's "scripts" list includes "arabic". Drives the list's
+    // language filter.
+    bool arabic = false;
   };
 
   State state_ = WIFI_SELECTION;
@@ -77,6 +81,15 @@ class FontDownloadActivity : public Activity {
   std::string baseUrl_;
   std::vector<ManifestFamily> families_;
   int selectedIndex_ = 0;
+  // Language filter: a fixed tab bar above the list (same widget/idiom as
+  // SettingsActivity's own category tabs), switched with Left/Right
+  // (NavNext/NavPrevious) -- free on this screen since the list already owns
+  // Up/Down (ScrollNext/ScrollPrevious) for scrolling. Unlike the list's
+  // rows, the tab bar isn't part of the ButtonNavigator index space at all,
+  // so there's no virtual "row 0" to keep in sync with the real list size.
+  // visible_ holds indices into families_ matching the filter.
+  bool showArabic_ = true;
+  std::vector<int> visible_;
 
   // Download progress
   size_t currentFileIndex_ = 0;
@@ -86,9 +99,14 @@ class FontDownloadActivity : public Activity {
   int downloadingFamilyIndex_ = 0;
   std::string errorMessage_;
   bool cancelRequested_ = false;
+  // Set when the cancel came from the home gesture (consumed by the download
+  // callback's own input pump); exit to home after the abort unwinds.
+  bool goHomeRequested_ = false;
 
   void onWifiSelectionComplete(bool success);
   bool fetchAndParseManifest();
+  bool fetchManifestFrom(const char* url);
+  void rebuildVisibleList();
   void downloadFamily(ManifestFamily& family);
   void downloadAll();
   void updateAll();
@@ -101,7 +119,9 @@ class FontDownloadActivity : public Activity {
   bool isSelectedFamilyDeletable() const;
   void promptDeleteSelectedFamily();
   void onDeleteConfirmationResult(const ActivityResult& result);
-  int familyIndexFromList(int listIndex) const { return listIndex - specialRowCount(); }
+  // Maps a list row to a families_ index through the language filter, or -1
+  // for the filter row / special rows / out of range.
+  int familyIndexFromList(int listIndex) const;
   int listItemCount() const;
   size_t totalDownloadSize() const;
   size_t totalUpdateSize() const;

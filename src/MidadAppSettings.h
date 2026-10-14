@@ -1,0 +1,106 @@
+#pragma once
+
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
+#include <cstdint>
+
+// Persisted state for the Apps screen (AppsActivity) and the diagnostic
+// logging toggle -- Midad features with no CrossPoint upstream equivalent.
+// Split out of CrossPointSettings/SettingsList.h so a `git merge` of
+// upstream's develop never has to touch this file: see
+// docs/upstream-sync-architecture.md's Phase B (Settings extraction).
+//
+// Every field here used to live on CrossPointSettings with the same name and
+// the same JSON key -- see loadFromFile() for the one-time migration that
+// carries an existing user's values over from settings.json the first time
+// this store's own file doesn't exist yet.
+class MidadAppSettings : public PersistableStore<MidadAppSettings> {
+ private:
+  MidadAppSettings() = default;
+  ~MidadAppSettings() = default;
+
+  friend class PersistableStore<MidadAppSettings>;
+
+ public:
+  static const char* getFilePath() { return "/.crosspoint/midad_apps.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
+
+  // Overridden to seed a first-time store from CrossPointSettings' legacy
+  // keys before falling back to the struct defaults below -- see the .cpp.
+  bool loadFromFile();
+
+  // Settings -> Apps -> Quran: the firmware-embedded Quran EPUB is extracted
+  // to SD and pinned as the first book in My Books (see QuranBook.h).
+  uint8_t quranEnabled = 0;
+
+  // Apps -> News: pins the News tile, which syncs RSS/Atom feeds over WiFi and
+  // reads them offline. The name and JSON key predate that rewrite and are kept
+  // for settings.json and web-sync compatibility.
+  uint8_t rssEnabled = 1;
+
+  // Settings -> Apps -> Games: pins a synthetic "Games" tile that opens a
+  // picker for the built-in Snake/Tetris activities. No SD extraction needed.
+  uint8_t gamesEnabled = 1;
+
+  // Settings -> Apps -> Tasbih: pins a synthetic "Tasbih" tile that opens the
+  // built-in dhikr counter (TasbihActivity). No SD extraction needed.
+  uint8_t tasbihEnabled = 0;
+
+  // Settings -> Apps -> Stop Watch: pins a synthetic "Stop Watch" tile that
+  // opens the built-in stopwatch (StopwatchActivity).
+  uint8_t stopwatchEnabled = 0;
+
+  // Settings -> Apps -> Pomodoro: pins a synthetic "Pomodoro" tile that opens
+  // StopwatchActivity with its Pomodoro mode preselected.
+  uint8_t pomodoroEnabled = 0;
+
+  // Phase lengths in minutes. Read live at each phase change by
+  // ReaderPomodoro/StopwatchActivity rather than cached, so an edit mid-cycle
+  // applies at the next phase instead of needing a restart. Ranges in
+  // SettingsList.h exclude 0, but these persist to JSON that the bidirectional
+  // web settings sync could write anything into, so consumers clamp a 0 to 1.
+  uint8_t pomodoroFocusMin = 25;
+  uint8_t pomodoroShortBreakMin = 5;
+  uint8_t pomodoroLongBreakMin = 15;
+  // Focus phases completed before a long break replaces the short one.
+  static constexpr uint8_t POMODORO_CYCLES_BEFORE_LONG_BREAK = 4;
+
+  // Settings -> Apps -> Learn to Read: pins a tile that opens KidsReadActivity,
+  // the parent-led letter/syllable/word flashcards.
+  uint8_t kidsReadEnabled = 1;
+
+  // Settings -> Apps -> Prayer Times: pins a "Prayer Times" tile that opens
+  // PrayerActivity: today's timings, computed on the device from the city.
+  uint8_t prayerEnabled = 1;
+  // Index into PrayerMethods' table; 0 = Auto (resolved from prayerCountryIso).
+  uint8_t prayerMethod = 0;
+  // Which school's Asr the app shows: 0 = Auto (Hanafi where that is the
+  // prevailing school, majority position elsewhere), 1 = Standard
+  // (Shafi/Maliki/Hanbali), 2 = Hanafi. Not part of the method: every
+  // authority in the list publishes both, and a Hanafi user in a country
+  // whose ministry prints the majority time still wants the Hanafi one.
+  uint8_t prayerAsrSchool = 0;
+  // Chosen location -- the only thing the app needs, since the timings are
+  // computed from it (src/prayer/PrayerCalc.h) rather than fetched.
+  // prayerCountryIso is "" while nothing is chosen; the
+  // custom-coordinates pseudo-country stores "XX". prayerHasCity flips once a
+  // city (or a custom coordinate pair) is set, which is what the timings need.
+  // Coordinates are hundredths of a degree, matching the city table
+  // (src/prayer/PrayerCityTable.h) so a picked city round-trips exactly.
+  char prayerCountryIso[3] = "";
+  uint8_t prayerHasCity = 0;
+  int32_t prayerLatE2 = 0;
+  int32_t prayerLngE2 = 0;
+  char prayerCityName[32] = "";
+  static constexpr const char* PRAYER_CUSTOM_ISO = "XX";
+
+  // Settings -> Apps -> Debug: gates whether ANY diagnostic entries get
+  // written to the single shared SD log (see src/util/DebugLogging.h). Off by
+  // default. Does NOT gate crash_report.txt (HalSystem::checkPanic) -- that's
+  // a one-shot panic capture on an actual crash, not routine verbose logging.
+  uint8_t debugLoggingEnabled = 0;
+};
+
+#define MIDAD_APP_SETTINGS MidadAppSettings::getInstance()

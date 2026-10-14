@@ -4,29 +4,31 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
-#include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "SilentRestart.h"
+#include "activities/stats/StatsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "reading/ReadingStatsStore.h"
+#include "util/CoverThumbs.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // File Browser, Recents, File transfer, Settings
+  int count = 4;  // Files, Stats, Apps, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
-  }
-  if (hasOpdsServers) {
-    count++;
   }
   return count;
 }
@@ -56,48 +58,128 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   bool showingLoading = false;
   Rect popupRect;
 
+  // If any cover actually needs generating, release the ~38KB home-cover frame
+  // snapshot (storeCoverBuffer) first: the JPEG/PNG cover converters need large
+  // contiguous heap blocks (the PNG inflate ring buffer alone is 32KB), and with
+  // the snapshot held, generation reliably failed HERE while succeeding for the
+  // SAME book at the SAME size from the My Books grid, which holds no such
+  // buffer -- confirmed on device (Home blank -> open grid, covers appear ->
+  // back Home, covers now show, because Home could then just read the files the
+  // grid had converted). The snapshot is rebuilt on the next render from the
+  // freshly cached thumb files.
+  bool anyToGenerate = false;      // invalid thumb (missing or failure marker), not yet attempted this boot
+  bool anyNeverAttempted = false;  // thumb file absent entirely -- never attempted since the cache was cleared
+  for (const RecentBook& book : recentBooks) {
+    if (book.coverBmpPath.empty()) continue;
+    const std::string thumbPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
+    if (Bitmap::isValidCachedBmp(thumbPath) || CoverThumbs::wasAttemptedThisBoot(thumbPath)) continue;
+    anyToGenerate = true;
+    if (!Storage.exists(thumbPath.c_str())) anyNeverAttempted = true;
+  }
+
+  if (anyToGenerate) {
+    // Free the ~38KB frame snapshot and the reading-stats vectors before
+    // converting: after a cache clear, generation means a FULL EPUB metadata
+    // re-parse (content.opf/expat/BookMetadataCache) on top of the image decode
+    // (PNG's inflate ring buffer alone is 32KB), and Home needs every spare
+    // block for it. Both are rebuilt/reloaded on demand afterward.
+    freeCoverBuffer();
+    coverRendered = false;
+    READING_STATS.releaseMemory();
+  }
+
+  // Fresh-boot rule, learned the hard way across three on-device iterations:
+  // generation in a used session fails on Home in ways no amount of freeing our
+  // own caches fixed (a heap-threshold heuristic in v1.6.45 also missed), while
+  // generation right after a silent reboot demonstrably succeeds for every book
+  // ("go to Update [which reboots] and back -> covers load everywhere"). So:
+  // never-attempted covers are only generated on a fresh boot -- reboot to get
+  // one if needed. Freshness is TIME SINCE BOOT only -- an earlier version also
+  // counted bootWasSilentRestart(), but that flag stays true for the whole boot,
+  // so a session that STARTED as a silent restart (e.g. the post-download
+  // auto-open-reader path) still counted as fresh after a long reading session
+  // and generated inline in a used heap, failing until the grid rescued it.
+  // Cycle guards: (a) the fresh boot's inline attempt writes the empty marker
+  // BMP on genuine failure; (b) marker-bearing thumbs (attempted on a fresh heap
+  // and truly impossible, e.g. no cover art in the EPUB) never justify a reboot,
+  // only the cheap once-per-boot inline retry.
+  constexpr unsigned long kFreshBootWindowMs = 60000;
+  const bool freshBoot = millis() < kFreshBootWindowMs;
+  if (anyToGenerate) {
+    CoverThumbs::diagLog(std::string("HOME scan: neverAttempted=") + (anyNeverAttempted ? "1" : "0") + " fresh=" +
+                         (freshBoot ? "1" : "0") + (anyNeverAttempted && !freshBoot ? " -> reboot" : " -> inline"));
+  }
+  if (anyNeverAttempted && !freshBoot) {
+    silentRestart();  // does not return
+  }
+
   int progress = 0;
   for (RecentBook& book : recentBooks) {
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-      if (!Storage.exists(coverPath.c_str())) {
+      // Bitmap::isValidCachedBmp (not a plain existence check) so a stale marker
+      // from a PRIOR failed attempt doesn't permanently block a retry once the
+      // underlying failure is fixed; CoverThumbs bounds those retries to once
+      // per boot so a genuinely coverless book doesn't re-attempt (and re-show
+      // the loading popup) on every Home entry.
+      if (!Bitmap::isValidCachedBmp(coverPath) && !CoverThumbs::wasAttemptedThisBoot(coverPath)) {
+        CoverThumbs::markAttempted(coverPath);
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
-          // Skip loading css since we only need metadata here
-          epub.load(false, true);
-
-          // Try to generate thumbnail image for Continue Reading card
-          if (!showingLoading) {
-            showingLoading = true;
-            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+          // Skip loading css since we only need metadata here. Only generate if
+          // the metadata actually loaded (matching the My Books grid) --
+          // generateThumbBmp can't do anything without it.
+          bool loaded = epub.load(false, true);
+          bool built = false;
+          if (!loaded) {
+            // No metadata cache: the book was downloaded but never opened, or
+            // the user cleared the SD cache -- the confirmed "covers never come
+            // back until each book is reopened" case from /cover_diag_log.txt.
+            // Build it now: a one-time OPF/TOC indexing pass per book, behind
+            // the same loading popup the thumb conversion already shows.
+            if (!showingLoading) {
+              showingLoading = true;
+              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+            }
+            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+            loaded = built = epub.load(true, true);
           }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-          bool success = epub.generateThumbBmp(coverHeight);
-          if (!success) {
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-            book.coverBmpPath = "";
-          }
-          coverRendered = false;
-          requestUpdate();
-        } else if (FsHelpers::hasXtcExtension(book.path)) {
-          // Handle XTC file
-          Xtc xtc(book.path, "/.crosspoint");
-          if (xtc.load()) {
+          bool generated = false;
+          if (loaded) {
             // Try to generate thumbnail image for Continue Reading card
             if (!showingLoading) {
               showingLoading = true;
               popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
             }
             GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-            bool success = xtc.generateThumbBmp(coverHeight);
-            if (!success) {
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-              book.coverBmpPath = "";
-            }
+            // Failure leaves book.coverBmpPath untouched (not cleared to "") --
+            // see the isValidCachedBmp comment above for why a retry must stay
+            // possible instead of being disabled forever.
+            generated = epub.generateThumbBmp(coverHeight);
             coverRendered = false;
             requestUpdate();
           }
+          CoverThumbs::diagLog(std::string("HOME epub load=") + (loaded ? "1" : "0") + " built=" + (built ? "1" : "0") +
+                               " gen=" + (generated ? "1" : "0") + " " + book.path);
+        } else if (FsHelpers::hasXtcExtension(book.path)) {
+          // Handle XTC file
+          Xtc xtc(book.path, "/.crosspoint");
+          const bool loaded = xtc.load();
+          bool generated = false;
+          if (loaded) {
+            // Try to generate thumbnail image for Continue Reading card
+            if (!showingLoading) {
+              showingLoading = true;
+              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+            }
+            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+            generated = xtc.generateThumbBmp(coverHeight);
+            coverRendered = false;
+            requestUpdate();
+          }
+          CoverThumbs::diagLog(std::string("HOME xtc load=") + (loaded ? "1" : "0") +
+                               " gen=" + (generated ? "1" : "0") + " " + book.path);
         }
       }
     }
@@ -111,13 +193,24 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 void HomeActivity::onEnter() {
   Activity::onEnter();
 
-  hasOpdsServers = OPDS_STORE.hasServers();
+  // Drop entries whose files were deleted since the store was loaded, so the
+  // "+N" stack badge and stack-tile logic count only books that still exist.
+  if (RECENT_BOOKS.pruneMissing() && !RECENT_BOOKS.saveToFile()) {
+    LOG_ERR("HOME", "Failed to persist pruned recent books");
+  }
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   loadRecentBooks(metrics.homeRecentBooksCount);
 
   const auto base = static_cast<int>(recentBooks.size());
-  selectorIndex = initialMenuItem == HomeMenuItem::NONE ? 0 : base + menuItemToIndex(initialMenuItem, hasOpdsServers);
+  selectorIndex = initialMenuItem == HomeMenuItem::NONE ? 0 : base + menuItemToIndex(initialMenuItem);
+
+  // If Back was held while this activity opened (typical when a Back press in
+  // another activity navigated here), ignore its release -- otherwise it would
+  // immediately re-open the most recent book (see loop()).
+  lockNextBackRelease = mappedInput.isPressed(MappedInputManager::Button::Back);
+
+  lastIdleWhitenMs = millis();
 
   // Trigger first update
   requestUpdate();
@@ -167,43 +260,157 @@ void HomeActivity::freeCoverBuffer() {
 }
 
 void HomeActivity::loop() {
-  const int menuCount = getMenuItemCount();
+  // Anti-drift whitening: a static e-ink image slowly drifts gray over minutes
+  // even with the Sunlight Fading Fix ON (confirmed on-device by photo) -- the
+  // pigment relaxes regardless of the panel gate being powered down. A FAST
+  // redraw of identical content drives NO pixels (FAST only pushes changed
+  // ones), so the previous quiet-redraw version here did nothing for the
+  // fade. Full-drive the panel instead (HALF refresh, ~1.7s blink). Only
+  // fires after minutes of true idleness on this screen, never mid-use.
+  constexpr unsigned long kIdleWhitenIntervalMs = 3UL * 60UL * 1000UL;
+  if (millis() - lastIdleWhitenMs >= kIdleWhitenIntervalMs) {
+    lastIdleWhitenMs = millis();
+    idleWhitenPending = true;
+    requestUpdate();
+  }
 
-  buttonNavigator.onNext([this, menuCount] {
+  const int menuCount = getMenuItemCount();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+
+  // Shared by the Confirm-release path below and by the touch-tap paths further
+  // down (cover-row tap, menu-row tap): all three activate "whatever is
+  // currently selected" the same way.
+  auto activateSelection = [this] {
+    if (selectorIndex < recentBooks.size()) {
+      // The last recents tile becomes a "+N more" stack when the store holds more
+      // books than the row shows (see FouladTheme); confirming it opens the full
+      // Recent Books grid instead of silently opening one arbitrary book.
+      const int totalRecents = static_cast<int>(RECENT_BOOKS.getBooks().size());
+      const bool stackTile = selectorIndex == 3 && recentBooks.size() == 4 && totalRecents > 4;
+      if (stackTile) {
+        onRecentsOpen();
+      } else {
+        onSelectBook(recentBooks[selectorIndex].path);
+      }
+      return;
+    }
+    const int menuIndex = selectorIndex - static_cast<int>(recentBooks.size());
+    switch (indexToMenuItem(menuIndex)) {
+      case HomeMenuItem::FILE_BROWSER:
+        onFilesOpen();
+        break;
+      case HomeMenuItem::SETTINGS_MENU:
+        onSettingsOpen();
+        break;
+      case HomeMenuItem::APPS:
+        activityManager.goToApps();
+        break;
+      case HomeMenuItem::STATS:
+        onStatsOpen();
+        break;
+      default:
+        break;
+    }
+  };
+
+  buttonNavigator.onNextPress([this, menuCount] {
     selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
     requestUpdate();
   });
-
-  buttonNavigator.onPrevious([this, menuCount] {
+  buttonNavigator.onPreviousPress([this, menuCount] {
+    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
+  buttonNavigator.onNextContinuous([this, menuCount] {
+    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
+    requestUpdate();
+  });
+  buttonNavigator.onPreviousContinuous([this, menuCount] {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
     requestUpdate();
   });
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectorIndex < recentBooks.size()) {
-      onSelectBook(recentBooks[selectorIndex].path);
-    } else {
-      const int menuIndex = selectorIndex - static_cast<int>(recentBooks.size());
-      switch (indexToMenuItem(menuIndex, hasOpdsServers)) {
-        case HomeMenuItem::FILE_BROWSER:
-          onFileBrowserOpen();
-          break;
-        case HomeMenuItem::RECENTS:
-          onRecentsOpen();
-          break;
-        case HomeMenuItem::OPDS_BROWSER:
-          onOpdsBrowserOpen();
-          break;
-        case HomeMenuItem::FILE_TRANSFER:
-          onFileTransferOpen();
-          break;
-        case HomeMenuItem::SETTINGS_MENU:
-          onSettingsOpen();
-          break;
-        default:
-          break;
-      }
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, menuCount);
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, menuCount);
+    requestUpdate();
+    return;
+  }
+
+  // Back is otherwise unused on the home menu: open the most recently read
+  // book directly (recentBooks is most-recent-first and already pruned of
+  // files missing from the SD card).
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    const bool locked = lockNextBackRelease;
+    lockNextBackRelease = false;
+    if (!locked && !recentBooks.empty()) {
+      onSelectBook(recentBooks[0].path);
+      return;
     }
+  }
+
+  const int coverColumnCount = std::max(1, metrics.homeRecentBooksCount);
+  const int recentCount = std::min(static_cast<int>(recentBooks.size()), coverColumnCount);
+  const int coverColumnWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / coverColumnCount;
+  int touchedBook = -1;
+  const auto coverTouch = mappedInput.colTouch(touchedBook, metrics.contentSidePadding, coverColumnWidth, recentCount,
+                                               metrics.homeTopPadding,
+                                               metrics.homeTopPadding + metrics.homeCoverTileHeight, coverColumnWidth);
+  if (coverTouch != MappedInputManager::RowTouch::None) {
+    if (coverTouch == MappedInputManager::RowTouch::Down) {
+      if (selectorIndex != touchedBook) {
+        selectorIndex = touchedBook;
+        requestUpdate();
+      }
+    } else {
+      selectorIndex = touchedBook;
+      activateSelection();
+    }
+    return;
+  }
+
+  const int menuTop = metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
+  const int renderedMenuSelection =
+      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size();
+  const int renderedMenuCount =
+      menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
+  // Hit-test through the theme, not a fixed row grid: FouladTheme draws this
+  // as a horizontal icon bar (see FouladTheme::drawButtonMenu), and the touch
+  // grid must match whatever the active theme actually drew.
+  const Rect menuRect{0, menuTop, renderer.getScreenWidth(), renderer.getScreenHeight() - menuTop};
+  int menuButton = -1;
+  int touchX = 0;
+  int touchY = 0;
+  MappedInputManager::RowTouch menuTouch = MappedInputManager::RowTouch::None;
+  if (mappedInput.wasScreenTouchDown(touchX, touchY) &&
+      GUI.buttonMenuIndexFromPoint(renderer, menuRect, renderedMenuCount, touchX, touchY, menuButton)) {
+    menuTouch = MappedInputManager::RowTouch::Down;
+  } else if (mappedInput.wasScreenTapped(touchX, touchY) &&
+             GUI.buttonMenuIndexFromPoint(renderer, menuRect, renderedMenuCount, touchX, touchY, menuButton)) {
+    menuTouch = MappedInputManager::RowTouch::Tap;
+  }
+  if (menuTouch != MappedInputManager::RowTouch::None) {
+    const int touchedIndex =
+        metrics.homeContinueReadingInMenu ? menuButton : menuButton + static_cast<int>(recentBooks.size());
+    if (menuTouch == MappedInputManager::RowTouch::Down) {
+      if (selectorIndex != touchedIndex) {
+        selectorIndex = touchedIndex;
+        requestUpdate();
+      }
+    } else {
+      selectorIndex = touchedIndex;
+      activateSelection();
+    }
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    activateSelection();
   }
 }
 
@@ -215,8 +422,9 @@ void HomeActivity::render(RenderLock&&) {
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding},
-                 metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr);
+  // No GUI.drawHeader here: the Foulad theme draws its own status line (clock /
+  // app name / battery) inside the cover tile. Drawing the standard header too
+  // duplicated the battery indicator at the top of the screen.
 
   // Record the tile rect so storeCoverBuffer (called from the theme) knows
   // which sub-region of the framebuffer to snapshot. ~16 KB in Portrait
@@ -230,15 +438,12 @@ void HomeActivity::render(RenderLock&&) {
                           recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
-  // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
-
-  if (hasOpdsServers) {
-    menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
-    menuIcons.insert(menuIcons.begin() + 2, Library);
-  }
+  // Order: Files, Stats, Apps, Settings -- matches menuItemToIndex/indexToMenuItem.
+  // Short labels chosen to fit the bottom icon bar tiles. Recent Books has no
+  // menu entry anymore: the recents covers row (and its stacked +N tile, which
+  // opens the full grid) took over that job.
+  std::vector<const char*> menuItems = {tr(STR_FILES), tr(STR_STATS), tr(STR_CAT_APPS), tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Stats, Apps, Settings};
 
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     // Insert Continue Reading at the top if enabled in theme
@@ -256,10 +461,18 @@ void HomeActivity::render(RenderLock&&) {
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 
-  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // No button-hints bar on the home screen (matching aalu): the icon menu is
+  // self-explanatory, and dropping the bar frees the bottom strip for the menu.
 
-  renderer.displayBuffer();
+  if (idleWhitenPending) {
+    // Idle anti-fade pass: full-drive every pixel (FAST would skip unchanged
+    // ones and leave the gray drift in place) -- see loop().
+    idleWhitenPending = false;
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  } else {
+    renderer.displayBuffer(cleanInitialRefresh && !firstRenderDone ? HalDisplay::HALF_REFRESH
+                                                                   : HalDisplay::FAST_REFRESH);
+  }
 
   if (!firstRenderDone) {
     firstRenderDone = true;
@@ -272,12 +485,12 @@ void HomeActivity::render(RenderLock&&) {
 
 void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
 
-void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
-
 void HomeActivity::onRecentsOpen() { activityManager.goToRecentBooks(); }
+
+void HomeActivity::onStatsOpen() {
+  startActivityForResult(std::make_unique<StatsActivity>(renderer, mappedInput), [](const ActivityResult&) {});
+}
 
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 
-void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
-
-void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
+void HomeActivity::onFilesOpen() { activityManager.goToFileBrowser("/"); }

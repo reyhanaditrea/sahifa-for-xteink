@@ -1,7 +1,9 @@
 #pragma once
 
+#include <HalStorage.h>
 #include <expat.h>
 
+#include <array>
 #include <climits>
 #include <functional>
 #include <memory>
@@ -25,22 +27,41 @@ class ChapterHtmlSlimParser {
   std::shared_ptr<Epub> epub;
   const std::string& filepath;
   GfxRenderer& renderer;
-  std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t)> completePageFn;
+  std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)> completePageFn;
   std::function<void()> popupFn;  // Popup callback
+  bool imagePopupFired = false;   // popupFn fired for the first image probe fallback (single-shot)
   int depth = 0;
   int skipUntilDepth = INT_MAX;
   int boldUntilDepth = INT_MAX;
   int italicUntilDepth = INT_MAX;
-  int underlineUntilDepth = INT_MAX;
   // buffer for building up words from characters, will auto break if longer than this
   // leave one char at end for null pointer
   char partWordBuffer[MAX_WORD_SIZE + 1] = {};
   int partWordBufferIndex = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
+  // Ruby text state
+  bool inRuby = false;
+  int rubyStartWordIndex = -1;
+  bool collectingRubyText = false;
+  std::string rubyTextBuffer;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+  // The just-finished block's marginBottom, held back so the next block's
+  // marginTop can collapse against it (CSS sibling margin collapsing) instead
+  // of both being added in full. Reset everywhere currentPageNextY is, since
+  // a fresh vertical position (new page, new chapter) has nothing to collapse
+  // against either.
+  int16_t pendingBottomMargin = 0;
   int fontId;
+  // Laid out line-for-line with the printed Mushaf (the Quran at its Mushaf Page
+  // size). Otherwise its printed-line blocks -- those with -sahifa-page-fill or
+  // text-align-last: justify -- flow as one paragraph per ayah, with a small gap
+  // after each, and their printed page breaks don't apply.
+  bool mushafLayout;
+  static bool isMushafLayout(const GfxRenderer& renderer, int fontId);
+  // The current text block is such a flowing ayah paragraph.
+  bool ayahParagraphs = false;
   float lineCompression;
   bool extraParagraphSpacing;
   uint8_t paragraphAlignment;
@@ -60,9 +81,12 @@ class ChapterHtmlSlimParser {
     int depth = 0;
     bool hasBold = false, bold = false;
     bool hasItalic = false, italic = false;
-    bool hasUnderline = false, underline = false;
+    bool hasTextDecoration = false;
+    CssTextDecoration textDecoration = CssTextDecoration::None;
     bool hasDirection = false;
     CssTextDirection direction = CssTextDirection::Ltr;
+    bool hasTextAlign = false;
+    CssTextAlign textAlign = CssTextAlign::Left;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
   };
@@ -71,22 +95,49 @@ class ChapterHtmlSlimParser {
   CssStyle currentCssStyle;
   bool effectiveBold = false;
   bool effectiveItalic = false;
-  bool effectiveUnderline = false;
+  CssTextDecoration effectiveTextDecoration = CssTextDecoration::None;
   bool effectiveDirectionDefined = false;
   CssTextDirection effectiveDirection = CssTextDirection::Ltr;
+  bool effectiveTextAlignDefined = false;
+  CssTextAlign effectiveTextAlign = CssTextAlign::Left;
   bool effectiveSup = false;
   bool effectiveSub = false;
+  static constexpr size_t MAX_GRID_TABLE_COLUMNS = 4;
+  static constexpr size_t MAX_GRID_TABLE_CELL_WORDS = 32;
+  static constexpr size_t MAX_GRID_TABLE_CELL_BYTES = 512;
   int tableDepth = 0;
-  int tableRowIndex = 0;
-  int tableColIndex = 0;
+  bool insideTableCell = false;
+  bool tableRowStacked = false;
+  bool tableRowRtl = false;
+  uint16_t tableRowsSpannedRemaining = 0;
+  size_t tableCellTextBytes = 0;
+  std::vector<std::unique_ptr<ParsedText>> tableRowCells;
+  std::array<std::vector<std::shared_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
+  std::vector<uint32_t> tableLineVisibleOffsets;
+  bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;          // deferred until after previous text block is flushed
+  bool pendingPageBreak = false;        // page-break-before block seen; applied with the anchor
+  bool pendingPageFill = false;         // last block opened asks -sahifa-page-fill
+  bool fillCurrentPage = false;         // the page being filled began in such a block
+  bool pendingMushafLine = false;       // last block opened is a printed Mushaf line
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
+  // Canonical reading-position counter: zero-based Unicode codepoints in visible
+  // <body> text. Token offsets flow through line breaking so every completed page
+  // records the first source character it renders.
+  uint32_t visibleTextOffset = 0;
+  uint32_t partWordVisibleOffset = 0;
+  uint32_t currentPageVisibleOffset = 0;
+  bool currentPageVisibleOffsetSet = false;
+  bool insideBody = false;
+  bool htmlEnded_ = false;
+  bool syntheticCharacterData = false;
+  uint16_t nonVisibleTextDepth = 0;
 
   // Footnote link tracking
   bool insideFootnoteLink = false;
@@ -96,12 +147,48 @@ class ChapterHtmlSlimParser {
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
   int wordsExtractedInBlock = 0;
 
+  // Resumable parse state. The one-shot parseAndBuildPages() drives these
+  // internally; the incremental section builder drives them across render ticks
+  // so a large single chapter can yield between pages instead of blocking the UI
+  // until the whole thing is laid out. parseFile_ and the expat parser stay alive
+  // for the lifetime of the parse so it can be paused and resumed at buffer
+  // boundaries.
+  XML_Parser xmlParser_ = nullptr;
+  HalFile parseFile_;
+  uint32_t parseStartTime_ = 0;
+
   void updateEffectiveInlineStyle();
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPendingAnchor();
+  // Completes the current page so the next block starts a fresh one. No-op on
+  // an empty page. False only if the next page could not be allocated.
+  bool breakPage();
+  // Spreads the current page's lines evenly down the viewport, for a page a
+  // -sahifa-page-fill block is about to end with a page break.
+  void fillPage();
   void flushPartWordBuffer();
+  void fallbackTableRowToStacked();
+  void closeTableCell();
+  void finishTableRow();
+  void addTableRowSeparator();
+  void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();
+  // Row height for a specific extracted line, in pixels. Normally just the reading font's
+  // own line height (advanceY) * lineCompression, but a line containing Arabic text needs
+  // more: the Arabic font's ascender+descender runs noticeably taller than the Latin
+  // reading font's at the same nominal size, so a row pitch sized only for the Latin font
+  // clips Arabic glyph tops/tails (confirmed on a real device: default 14pt Arabic reading
+  // size clipped words, 16pt "worked" only because the larger glyphs happened to eat less
+  // into the same undersized slot -- the underlying row pitch was never Arabic-aware at
+  // any size). Same fix already applied to the chapter selector (7926f0f6) and the OPDS
+  // browser's lists, now applied to actual EPUB body pagination, which is what those
+  // settings are really for.
+  int computeLineHeight(const TextBlock& line) const;
+  static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
+  static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
+  void pushTableTextStyleEntry(const CssStyle& cssStyle);
+  void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
@@ -110,21 +197,21 @@ class ChapterHtmlSlimParser {
   static void XMLCALL endElement(void* userData, const XML_Char* name);
 
  public:
-  explicit ChapterHtmlSlimParser(std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer,
-                                 const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                 const uint16_t viewportHeight, const bool hyphenationEnabled,
-                                 const bool focusReadingEnabled,
-                                 const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t)>& completePageFn,
-                                 const bool embeddedStyle, const std::string& contentBase,
-                                 const std::string& imageBasePath, const uint8_t imageRendering = 0,
-                                 std::vector<std::string> tocAnchors = {},
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+  explicit ChapterHtmlSlimParser(
+      std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
+      const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+      const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
+      const bool focusReadingEnabled,
+      const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
+      const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
+      const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
+      const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
 
       : epub(epub),
         filepath(filepath),
         renderer(renderer),
         fontId(fontId),
+        mushafLayout(isMushafLayout(renderer, fontId)),
         lineCompression(lineCompression),
         extraParagraphSpacing(extraParagraphSpacing),
         paragraphAlignment(paragraphAlignment),
@@ -141,8 +228,28 @@ class ChapterHtmlSlimParser {
         imageBasePath(imageBasePath),
         tocAnchors(std::move(tocAnchors)) {}
 
-  ~ChapterHtmlSlimParser() = default;
+  ~ChapterHtmlSlimParser();
+
+  // One-shot parse: builds every page before returning (begin + step* + finish).
   bool parseAndBuildPages();
-  void addLineToPage(std::shared_ptr<TextBlock> line);
+
+  // Resumable parse, for the incremental section builder. Drive as:
+  //   if (!beginParse()) fail;
+  //   loop: switch (parseStep()) { More: keep going / yield; Done: finishParse(); Error: abortParse(); }
+  // Pages are emitted via completePageFn as they complete during parseStep(), so
+  // the caller can stop once enough pages are built and resume on a later tick.
+  enum class ParseStatus { More, Done, Error };
+  bool beginParse();
+  ParseStatus parseStep();
+  bool finishParse();  // flush the trailing page and tear down; returns true
+  void abortParse();   // tear down without flushing (error / abandon)
+
+  void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleOffset);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+
+  // Byte progress of the in-flight parse, used to estimate a still-building section's total page
+  // count (a giant single-spine book never fully lays out, so its real count is unknown). Valid
+  // between beginParse() and finishParse()/abortParse().
+  size_t parseBytesConsumed() { return parseFile_ ? parseFile_.position() : 0; }
+  size_t parseTotalBytes() { return parseFile_ ? parseFile_.size() : 0; }
 };

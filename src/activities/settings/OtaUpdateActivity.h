@@ -1,6 +1,7 @@
 #pragma once
 
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 #include "network/OtaUpdater.h"
 
 class OtaUpdateActivity : public Activity {
@@ -21,16 +22,39 @@ class OtaUpdateActivity : public Activity {
   State state = WIFI_SELECTION;
   unsigned int lastUpdaterPercentage = UNINITIALIZED_PERCENTAGE;
   OtaUpdater updater;
+  // Captured on failure so the on-screen message can show what went wrong
+  // (otherwise the error code is only in the USB serial log).
+  int lastErrorCode = 0;
+  uint32_t failureFreeHeap = 0;
+  uint32_t failureMaxBlock = 0;
+  // Only meaningful when the failure came from checkForUpdate() (the version-check
+  // GET), which goes through HttpDownloader -- installUpdate() uses esp_https_ota_*
+  // directly and doesn't set these. 0/0 (FailStage::NONE) otherwise.
+  uint8_t failureHttpStage = 0;
+  int failureHttpDetail = 0;
+  // Optional detail line shown under the generic "Update failed" heading.
+  // Points into the i18n string table (flash-resident, so no lifetime concern);
+  // nullptr means no extra detail.
+  const char* failedDetail = nullptr;
+  // Cancel/Update confirmation over the version info (replaces the old
+  // hand-rolled bottom tap rects).
+  OptionPopup confirmPopup;
+  // True only on the fresh boot landed on by silentRestartToOtaInstall(): the
+  // user already confirmed this update before that reboot, so WAITING_CONFIRMATION
+  // proceeds straight to install instead of waiting for another button press.
+  bool autoInstall = false;
 
   void onWifiSelectionComplete(bool success);
+  void beginInstall();
 
  public:
-  explicit OtaUpdateActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("OtaUpdate", renderer, mappedInput), updater() {}
+  explicit OtaUpdateActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoInstall = false)
+      : Activity("OtaUpdate", renderer, mappedInput), updater(), autoInstall(autoInstall) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return state == CHECKING_FOR_UPDATE || state == UPDATE_IN_PROGRESS; }
+  const char* activityDebugName() const override { return "OtaUpdateActivity"; }
   bool skipLoopDelay() override { return true; }  // Prevent power-saving mode
 };

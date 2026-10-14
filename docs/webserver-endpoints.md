@@ -1,11 +1,10 @@
 # Webserver Endpoints
 
-This document describes the HTTP, WebSocket, WebDAV, and discovery endpoints
-available while CrossPoint Reader is in File Transfer or Calibre Wireless mode.
+This document describes the HTTP, WebSocket, and WebDAV endpoints available
+while the reader is in File Transfer mode.
 
 - HTTP server: port 80
 - WebSocket upload server: port 81
-- UDP discovery listener: port 8134
 - WebDAV: port 80, handled by the same HTTP server
 
 Examples use `crosspoint.local`. If mDNS does not resolve on your network, use
@@ -211,13 +210,19 @@ Example item:
 ```json
 {
   "key": "fontSize",
-  "name": "Font Size",
+  "name": "Reader Font Size",
   "category": "Reader",
   "type": "enum",
   "value": 1,
-  "options": ["Small", "Medium", "Large"]
+  "options": ["12 pt", "14 pt", "16 pt", "18 pt"]
 }
 ```
+
+`value` is always an index into `options`, never the option's text. `fontSize`
+is one of the settings whose `options` are built at request time — they are the
+point sizes the selected font family actually ships, so a family installed at
+10/12/14 offers three options. (`fontFamily` and `dictionaryName` vary the same
+way, from the SD card contents.)
 
 Types:
 
@@ -311,53 +316,6 @@ Successful response:
 {"ok":true}
 ```
 
-## OPDS Server API
-
-### `GET /api/opds`
-
-Lists saved OPDS servers. Passwords are never returned.
-
-```bash
-curl http://crosspoint.local/api/opds
-```
-
-Response:
-
-```json
-[
-  {
-    "index": 0,
-    "name": "My Catalog",
-    "url": "http://calibre.local:8080/opds",
-    "username": "reader",
-    "hasPassword": true
-  }
-]
-```
-
-### `POST /api/opds`
-
-Adds or updates an OPDS server. Include `index` to update an existing entry.
-If `password` is omitted during an update, the existing password is preserved.
-
-```bash
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"name":"My Catalog","url":"http://calibre.local:8080/opds","username":"reader","password":"secret"}' \
-  http://crosspoint.local/api/opds
-```
-
-### `POST /api/opds/delete`
-
-Deletes an OPDS server by index.
-
-```bash
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"index":0}' \
-  http://crosspoint.local/api/opds/delete
-```
-
 ## Wi-Fi Credential API
 
 ### `GET /api/wifi`
@@ -409,8 +367,7 @@ curl -X POST \
 
 ### Port 81
 
-The WebSocket path is used for fast binary uploads from the file manager and
-Calibre plugin workflows.
+The WebSocket path is used for fast binary uploads from the file manager.
 
 Connection:
 
@@ -468,17 +425,6 @@ Notes:
   does not implement full WebDAV Class 2 locking semantics such as persistent
   locks or lock discovery.
 
-## UDP Discovery
-
-The server listens on UDP port `8134`. When it receives the text payload
-`hello`, it replies to the sender with:
-
-```text
-crosspoint (on <hostname>);81
-```
-
-The final field is the WebSocket upload port.
-
 ## Network Modes
 
 ### Station Mode (STA)
@@ -493,8 +439,3 @@ The final field is the WebSocket upload port.
 - The device shows a Wi-Fi QR code and URL QR code.
 - The fallback IP is typically `192.168.4.1`.
 - `/api/status` returns `"mode": "AP"` and `"rssi": 0`.
-
-### Calibre Wireless
-
-Calibre Wireless starts the same web server in STA mode and displays setup
-instructions plus WebSocket upload progress on the device screen.

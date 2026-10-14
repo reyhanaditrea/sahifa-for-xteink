@@ -1,0 +1,2 @@
+# Applied with git apply against LF sources: never convert line endings.
+*.patch -text

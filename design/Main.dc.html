@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #ffffff; color: #000000; }
+    a { color: #000000; } a:hover { color: #000000; }
+  </style>
+</helmet>
+
+<div style="width: 528px; height: 792px; background: #ffffff; position: relative; overflow: hidden;">
+
+  <!-- Header band: 5px topPadding + 45px headerHeight (ThemeMetrics) -->
+  <div style="position: absolute; top: 5px; left: 0; width: 528px; height: 45px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.02em;">09:41</div>
+    <div style="font-size: 16px; font-weight: 700;">Apps</div>
+    <div style="display: flex; align-items: center; gap: 3px;">
+      <div style="width: 15px; height: 12px; border: 1.5px solid #000; box-sizing: border-box; padding: 1.5px;">
+        <div style="width: 70%; height: 100%; background: #000;"></div>
+      </div>
+      <div style="width: 2px; height: 5px; background: #000;"></div>
+    </div>
+  </div>
+  <div style="position: absolute; top: 50px; left: 0; width: 528px; height: 2px; background: #000;"></div>
+
+  <!-- Grid: contentTop 60. 3 columns at MIN_CELL_WIDTH 160 -> tile 160x160, GUTTER 12 -->
+  <div style="position: absolute; top: 60px; left: 12px; width: 504px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;">
+
+    <!-- Files -->
+    <div style="height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #ffffff;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5h7A1.5 1.5 0 0 1 19 9v8.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17.5z"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700;">Files</div>
+    </div>
+
+    <!-- Quran -->
+    <div style="height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #ffffff;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 6.5C10.5 5.2 8.6 4.6 6 4.6c-.9 0-1.6.1-2 .2v13c.4-.1 1.1-.2 2-.2 2.6 0 4.5.6 6 1.9"/>
+        <path d="M12 6.5c1.5-1.3 3.4-1.9 6-1.9.9 0 1.6.1 2 .2v13c-.4-.1-1.1-.2-2-.2-2.6 0-4.5.6-6 1.9"/>
+        <path d="M12 6.5v13"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700;">Quran</div>
+    </div>
+
+    <!-- Games -->
+    <div style="height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #ffffff;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.75 3.75 H8.54 A2.31 2.31 0 0 0 13.16 3.75 H17.95 V8.54 A2.31 2.31 0 0 1 17.95 13.16 V17.95 H13.16 A2.31 2.31 0 0 1 8.54 17.95 H3.75 V13.16 A2.31 2.31 0 0 0 3.75 8.54 Z"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700;">Games</div>
+    </div>
+
+    <!-- Tasbih -->
+    <div style="height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #ffffff;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="4.6" r="1.9"/>
+        <circle cx="17.2" cy="6.8" r="1.9"/>
+        <circle cx="19.4" cy="12" r="1.9"/>
+        <circle cx="17.2" cy="17.2" r="1.9"/>
+        <circle cx="12" cy="19.4" r="1.9"/>
+        <circle cx="6.8" cy="17.2" r="1.9"/>
+        <circle cx="4.6" cy="12" r="1.9"/>
+        <circle cx="6.8" cy="6.8" r="1.9"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700;">Tasbih</div>
+    </div>
+
+    <!-- Stop Watch -- SELECTED: inverted, plus the 4px outer frame AppsActivity draws -->
+    <div style="height: 160px; background: #000000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; outline: 4px solid #000; outline-offset: 4px;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="13.5" r="7.5"/>
+        <path d="M12 9.5v4l2.5 1.8"/>
+        <path d="M9.5 2.6h5"/>
+        <path d="M12 2.6V6"/>
+        <path d="M18.6 7.4 20 6"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700; color: #ffffff;">Stop Watch</div>
+    </div>
+
+    <!-- Pomodoro -->
+    <div style="height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #ffffff;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="13.5" r="7.5"/>
+        <path d="M12 13.5V9"/>
+        <path d="M8.4 5.4 12 6l3.6-.6"/>
+        <path d="M12 6V3.4"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700;">Pomodoro</div>
+    </div>
+
+    <!-- Gym -->
+    <div style="height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #ffffff;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9.5v5M6 7.5v9M18 7.5v9M21 9.5v5"/>
+        <path d="M6 12h12"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700;">Gym</div>
+    </div>
+
+    <!-- Midad BLE -->
+    <div style="height: 160px; border: 2px solid #000; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #ffffff;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 7.5 16 16.5 12 20V4l4 3.5L8 16.5"/>
+      </svg>
+      <div style="font-size: 16px; font-weight: 700;">Midad BLE</div>
+    </div>
+
+    <!-- Empty slot: grid stays on a 3-up rhythm as apps are hidden -->
+    <div style="height: 160px;"></div>
+
+  </div>
+
+  <!-- Button hints: 40px BOTTOM_MARGIN -->
+  <div style="position: absolute; bottom: 0; left: 0; width: 528px; height: 40px; border-top: 2px solid #000; display: flex; align-items: center; justify-content: space-around; padding: 0 20px; box-sizing: border-box;">
+    <div style="font-size: 11px; font-weight: 500;">Back</div>
+    <div style="font-size: 11px; font-weight: 500;">Open</div>
+    <div style="font-size: 11px; font-weight: 500;">&#8592;</div>
+    <div style="font-size: 11px; font-weight: 500;">&#8594;</div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

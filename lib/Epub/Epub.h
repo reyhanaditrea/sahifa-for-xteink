@@ -57,9 +57,17 @@ class Epub {
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   bool generateThumbBmp(int height) const;
+  // Path where an externally-supplied cover (e.g. the Foulad eBooks catalog cover,
+  // saved at download time) can be dropped so books with no embedded cover art still
+  // get a thumbnail. generateThumbBmp() falls back to this image (tried at both
+  // extensions) when the EPUB itself has no usable cover image.
+  std::string getExternalCoverPath(bool png) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
-  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;
+  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize,
+                                bool allowEarlyStop = false) const;
+  // Extract an item to a file on SD. On failure the partial file is removed.
+  bool extractItemToFile(const std::string& itemHref, const std::string& destPath) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;

@@ -1,4 +1,7 @@
 #pragma once
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
 #include <string>
 #include <vector>
 
@@ -11,31 +14,49 @@ struct RecentBook {
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };
 
-class RecentBooksStore;
-namespace JsonSettingsIO {
-bool loadRecentBooks(RecentBooksStore& store, const char* json);
-}  // namespace JsonSettingsIO
-
-class RecentBooksStore {
-  // Static instance
-  static RecentBooksStore instance;
-
+class RecentBooksStore : public PersistableStore<RecentBooksStore> {
+ private:
   std::vector<RecentBook> recentBooks;
 
-  friend bool JsonSettingsIO::loadRecentBooks(RecentBooksStore&, const char*);
+  // Books the user hid from My Books (reader menu -> Hide from Recents). Paths
+  // only, and a separate list rather than a flag on RecentBook: a hidden book
+  // has to outlive the MAX_RECENT_BOOKS trim below, or hiding it and then
+  // opening ten other books would evict the record and the card scan would put
+  // it straight back on the screen.
+  std::vector<std::string> hiddenPaths;
 
- public:
+  static constexpr int MAX_RECENT_BOOKS = 10;
+  // Bounds the file. Can't realistically be reached: the My Books scan itself
+  // stops at MAX_LIBRARY_BOOKS (200), so there are never more than that many
+  // books on screen to hide in the first place.
+  static constexpr size_t MAX_HIDDEN_BOOKS = 200;
+
+  RecentBooksStore() = default;
   ~RecentBooksStore() = default;
 
-  // Get singleton instance
-  static RecentBooksStore& getInstance() { return instance; }
+  friend class PersistableStore<RecentBooksStore>;
 
-  // Add a book to the recent list (moves to front if already exists)
+ public:
+  static const char* getFilePath() { return "/.crosspoint/recent.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
+
+  // Add a book to the recent list (moves to front if already exists).
   void addBook(const std::string& path, const std::string& title, const std::string& author,
                const std::string& coverBmpPath);
 
   void updateBook(const std::string& path, const std::string& title, const std::string& author,
                   const std::string& coverBmpPath);
+
+  // Hide a book from My Books, or put it back. Hiding drops the recents entry
+  // (same as removeByPath -- the stored title/author/progress metadata goes with
+  // it) and remembers the path so the card scan doesn't rediscover the file and
+  // list it again as a never-opened book, which is what made the plain removal
+  // look like it had done nothing. Opening the book again clears it: addBook()
+  // unhides, so the file browser is always a way back and the action never needs
+  // a confirmation prompt. Persists.
+  void setHiddenFromRecents(const std::string& path, bool hidden);
+  bool isHiddenFromRecents(const std::string& path) const;
 
   // Remove the entry whose path matches (used when a book is removed from recents or finished/read).
   // Returns true if an entry was found and removed (no-op + false otherwise).
@@ -61,13 +82,7 @@ class RecentBooksStore {
   // Get the count of recent books
   int getCount() const { return static_cast<int>(recentBooks.size()); }
 
-  bool saveToFile() const;
-
-  bool loadFromFile();
   RecentBook getDataFromBook(std::string path) const;
-
- private:
-  bool loadFromBinaryFile();
 };
 
 // Helper macro to access recent books store

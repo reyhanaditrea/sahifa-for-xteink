@@ -1,0 +1,31 @@
+From c38f9bf8e64bff2dcd4dffc83d1f80cb5d1a150d Mon Sep 17 00:00:00 2001
+From: patch <patch@local>
+Date: Sat, 19 Sep 2026 20:54:59 +0700
+Subject: [PATCH] Leave the stand-in web server out of the build
+
+Midad compiles its own src/network/CrossPointWebServer.cpp against the
+WebServer and WebSockets shims, so the pages and handlers under test are the
+firmware's. The stand-in copy here would clash with it at link time.
+---
+ library.json | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/library.json b/library.json
+index 9c61c79..e06a757 100644
+--- a/library.json
++++ b/library.json
+@@ -3,6 +3,10 @@
+   "version": "1.0.0",
+   "license": "MIT",
+   "build": {
+-    "extraScript": "run_simulator.py"
++    "extraScript": "run_simulator.py",
++    "srcFilter": [
++      "+<*>",
++      "-<CrossPointWebServer.cpp>"
++    ]
+   }
+ }
+-- 
+2.43.0
+

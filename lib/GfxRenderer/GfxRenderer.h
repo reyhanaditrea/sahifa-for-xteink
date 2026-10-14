@@ -11,11 +11,26 @@ namespace BidiUtils {
 enum class BidiBaseDir : signed char { AUTO = -1, LTR = 0, RTL = 1 };
 }  // namespace BidiUtils
 
+namespace ArabicTextMarkers {
+// True if `text` is exactly the Bismillah marker sequence drawn by
+// GfxRenderer::drawArabicText's dedicated Bismillah branch. Exposed so
+// ParsedText::extractLine can force center alignment on the Bismillah's own
+// paragraph regardless of the reader's paragraph-alignment setting -- every
+// printed Mushaf centers it, and CSS text-align alone can't win that fight
+// since BlockStyle::fromCssStyle lets the user's setting override the book's
+// CSS unless "Book's Style" is explicitly selected (see its comment).
+bool isBismillah(const char* text);
+// True if `text` is exactly an ayah-end marker (see parseAyahMarker).
+bool isAyahMarker(const char* text);
+}  // namespace ArabicTextMarkers
+
 class FontCacheManager;
 class SdCardFont;
 
 #include <cstring>
+#include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -44,6 +59,7 @@ class GfxRenderer {
   RenderMode renderMode;
   Orientation orientation;
   bool fadingFix;
+  bool darkMode_ = false;
   uint8_t* frameBuffer = nullptr;
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
@@ -51,11 +67,75 @@ class GfxRenderer {
   uint32_t frameBufferSize = HalDisplay::BUFFER_SIZE;
   std::vector<uint8_t*> bwBufferChunks;
   std::map<int, EpdFontFamily> fontMap;
+  int arabicFontId_ = 0;  // 0 = no Arabic font loaded; see setArabicFontId()
+  // Per-caller-fontId Arabic font overrides (e.g. SMALL_FONT_ID -> the 8pt Arabic
+  // font), so Arabic text renders at the same size/baseline as whatever Latin font
+  // the caller requested instead of always falling back to arabicFontId_'s single
+  // fixed size. See setArabicFontIdForFontId()/resolveArabicFontId().
+  std::map<int, int> arabicFontIdByFontId_;
+  // Font to source Arabic-Indic digit glyphs (U+0660-0669) from for the code-drawn
+  // ayah-end marker in drawArabicText/getArabicTextWidth, INSTEAD of whatever the
+  // active reading font is. 0 = none set (falls back to the active font). See
+  // setArabicDigitFallbackFontId() for why this needs to be independent of
+  // arabicFontId_.
+  int arabicDigitFallbackFontId_ = 0;
+  int mushafLayoutFontId_ = 0;
+  // Fonts for the digits inside the ayah rosette, largest first -- see ayahRosette().
+  std::vector<int> ayahDigitFontIds_;
+  // How an ayah rosette (U+06DD) is drawn: its scale, and the font its digits come
+  // from at full size. Shared by layout, prewarm and render so the three agree.
+  struct AyahRosette {
+    int scaleNum = 1;
+    int scaleDen = 1;
+    int digitFontId = 0;
+  };
+  AyahRosette ayahRosette(const EpdGlyph& rosette, EpdFontFamily::Style style, const uint32_t* digits,
+                          int digitCount) const;
+  // Font to source the real Bismillah ligature glyph (U+FDFD) from, for the
+  // Bismillah marker in drawArabicText/getArabicTextWidth -- UthmanicHafs itself
+  // lacks this glyph (see QuranCommon's font-registration comment in main.cpp).
+  // 0 = none set (marker falls through to the plain-text path, which has no
+  // glyph for U+FDFD and silently renders nothing -- matches the "missing glyph"
+  // behavior used everywhere else in this file rather than special-casing it).
+  int bismillahFontId_ = 0;
+  // Font to source the calligraphic surah-name glyphs from, for the surah-banner
+  // marker in drawArabicText/getArabicTextWidth -- surah-name-v4.ttf has no cmap
+  // entries at all (see SurahNameV4's NOTICE.md), so no reading font could ever
+  // supply these regardless of which one is active. 0 = none set (marker falls
+  // through to the plain-text path, same missing-glyph behavior as bismillahFontId_).
+  int surahBannerFontId_ = 0;
+  // Font to source the surah banner's two small caption labels (ayah count,
+  // revelation order) from, deliberately smaller/independent of both the
+  // active reading font and surahBannerFontId_ -- a genuinely small font
+  // rasterized at its own size, not the reading font runtime-scaled down (that
+  // was tried first: renderCharScaled's half-scale rounding accumulates enough
+  // error across a whole shaped, letter-joining word to visibly overlap
+  // strokes -- fine for the isolated 1-3 digit runs it was designed for
+  // elsewhere in this file, not for a multi-letter word). 0 = none set (falls
+  // back to the resolved reading font, same as before this existed).
+  int surahBannerLabelFontId_ = 0;
+  // fontIds (keys of arabicFontIdByFontId_) whose Arabic text should sit on the
+  // REQUESTED Latin font's baseline (baseline = y + Latin ascender) instead of the
+  // Arabic font's own, much taller, nominal ascender. The Noto Arabic fonts reserve
+  // enormous headroom above baseline for stacked diacritics (10pt: ascender 29px vs
+  // the UI font's 21px at 10pt -- Inter; was Ubuntu's 20px), so anchoring by the
+  // Arabic ascender pushes every Arabic string ~8px lower than the Latin text the
+  // fixed UI geometry (30px list rows, 40px button hints, 45px header) was sized
+  // for -- clipping the bottom of the glyphs. Plain, undiacritized UI labels never
+  // use that headroom (measured worst-case ink above baseline across all shaped
+  // presentation forms at 10pt: 21px, exactly at Inter's own 21px ascender; was
+  // barely above Ubuntu's 20px), so sharing the Latin baseline both fits the
+  // existing geometry and vertically aligns mixed Arabic/Latin strings.
+  // Reading-text mappings deliberately stay unmatched: EPUB body rows are already
+  // sized for the full Arabic line height and real book text does carry
+  // diacritics that need the taller headroom.
+  std::set<int> arabicBaselineMatchFontIds_;
   // Mutable because ensureSdCardFontReady() is const (called from layout code
   // that holds a const GfxRenderer&) but triggers SD card reads and heap
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
 
   // Mutable because drawText() is const but needs to delegate scan-mode
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
@@ -74,8 +154,46 @@ class GfxRenderer {
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
 
+  // Shared implementation of drawCenteredTextWrapped() and measureWrappedTextHeight():
+  // one greedy word-wrap loop, with drawing switched off for the measuring caller, so the
+  // measured height and the drawn height cannot drift apart.
+  int layoutCenteredTextWrapped(int fontId, int y, int maxWidth, const char* text, int maxLines, bool black,
+                                EpdFontFamily::Style style, bool draw) const;
+
+  // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
+  // size-matched SD-card font id that carries CJK glyphs. When a string drawn
+  // or measured with a mapped primary font contains a CJK codepoint the primary
+  // cannot render, the whole string is routed to the mapped fallback so it
+  // appears at the same point size as the surrounding UI text. Populated by the
+  // app-level SD font setup when an SD family is loaded. See resolveTextFontId().
+  std::map<int, int> fallbackFontMap_;
+
+  // If `text` contains a CJK codepoint that `fontId` cannot render and `fontId`
+  // has a registered fallback, returns the fallback id; otherwise returns
+  // fontId unchanged. The whole string is routed as a unit so each draw/measure
+  // call stays single-font (consistent bit depth, metrics, wrapping).
+  int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+
+  // Batch-load `text`'s glyphs into an SD-card font's resident mini tables
+  // before a per-glyph measure/draw loop runs. Called when resolveTextFontId
+  // redirected a string to the SD fallback: UI screens (file browser, home)
+  // draw those strings without the reader's PrewarmScope, and every glyph
+  // would otherwise fault through SdCardFont::onGlyphMiss — one .cpfont file
+  // open + seek + read per glyph, per redraw, through an 8-slot overflow ring
+  // (#2725). One prewarm per string costs a single file open; re-measuring or
+  // re-drawing resident glyphs is a RAM-only subset check. No-op for built-in
+  // fonts.
+  void ensureSdGlyphsResident(int fontId, const char* text, EpdFontFamily::Style style, bool metadataOnly) const;
+
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
+  // Arabic font to actually use for a caller-requested fontId: the specific
+  // per-fontId override if one was registered via setArabicFontIdForFontId(),
+  // otherwise the single default arabicFontId_.
+  int resolveArabicFontId(int fontId) const {
+    const auto it = arabicFontIdByFontId_.find(fontId);
+    return it != arabicFontIdByFontId_.end() ? it->second : arabicFontId_;
+  }
   void freeBwBufferChunks();
   template <Color color>
   void drawPixelDither(int x, int y) const;
@@ -93,6 +211,12 @@ class GfxRenderer {
       : display(halDisplay), renderMode(BW), orientation(Portrait), fadingFix(false) {}
   ~GfxRenderer() { freeBwBufferChunks(); }
 
+  // Public view of resolveArabicFontId() for cache-key purposes: the Arabic
+  // font that Arabic text drawn with this fontId actually renders in. Section
+  // layout caches must include it -- changing the Arabic reading font/size
+  // otherwise leaves the Latin fontId untouched and stale layouts keep loading.
+  int getArabicFontIdFor(const int fontId) const { return resolveArabicFontId(fontId); }
+
   static constexpr int VIEWABLE_MARGIN_TOP = 9;
   static constexpr int VIEWABLE_MARGIN_RIGHT = 3;
   static constexpr int VIEWABLE_MARGIN_BOTTOM = 3;
@@ -107,21 +231,113 @@ class GfxRenderer {
   void removeFont(int fontId) {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
+    sdCardFontScales_.erase(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
+  // Batch-prewarm CJK fallback glyphs for a screenful of static strings in ONE
+  // SD pass. List screens redraw every visible row on each repaint; without an
+  // up-front batch each row's draw prewarms per-string, and under heap
+  // pressure (union merge disabled) each string evicts the previous one — SD
+  // reads on every repaint forever. Call once when the screen's strings are
+  // known (data load); later measures/draws become RAM-only subset hits.
+  // No-op when nothing routes to an SD fallback.
+  // The getter form fetches strings one at a time (allocation-free — callers
+  // must NOT build a concatenated std::string: its bare-new growth aborts on
+  // the heap-tight screens this exists for). A null getter result skips that
+  // index.
+  using TextGetter = const char* (*)(const void* ctx, uint32_t index);
+  void prewarmFallbackText(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                           EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  void prewarmFallbackText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
+  // Default Arabic font (0 = none loaded), used for any fontId with no specific
+  // override registered via setArabicFontIdForFontId() below. Set by ArabicFontSystem
+  // once an Arabic font is loaded via insertFont(); drawArabicText/getArabicTextWidth
+  // render from this font for callers with no per-fontId mapping, since none of the
+  // built-in Latin fonts carry Arabic glyphs.
+  void setArabicFontId(int fontId) { arabicFontId_ = fontId; }
+  // Font to source Arabic-Indic digit glyphs from for the ayah-end marker, always,
+  // regardless of which font is active for reading. Reading fonts are free to omit
+  // decorative/rare glyphs -- a previous built-in reading face lacked Arabic-Indic
+  // digits entirely (real-device evidence: the marker rendered as an empty numberless
+  // circle) -- but the marker must look the same on every single page no matter which
+  // reading font a book requests, so its digits deliberately don't come from
+  // arabicFontId_/resolveArabicFontId() at all. Callers should pass a font guaranteed
+  // to always be registered (e.g. a built-in UI-tier Arabic font set once at boot),
+  // not something that depends on user configuration.
+  void setArabicDigitFallbackFontId(int fontId) { arabicDigitFallbackFontId_ = fontId; }
+  // The Arabic reading font the Quran is laid out line-for-line with its printed
+  // Mushaf in (the Mushaf Page size); at any other font its printed lines flow
+  // as one paragraph per ayah. 0 = never. See ChapterHtmlSlimParser::mushafLayout.
+  void setMushafLayoutFontId(int fontId) { mushafLayoutFontId_ = fontId; }
+  int getMushafLayoutFontId() const { return mushafLayoutFontId_; }
+  // Candidate fonts for the ayah rosette's digits, largest first; the largest whose
+  // three-digit number fits inside the rosette is used. Same always-registered
+  // requirement as setArabicDigitFallbackFontId.
+  void setAyahDigitFontIds(std::vector<int> fontIds) { ayahDigitFontIds_ = std::move(fontIds); }
+  // Font to source the Bismillah ligature glyph (U+FDFD) from. Same "independent of
+  // arabicFontId_/whatever reading font is active" reasoning as
+  // setArabicDigitFallbackFontId() above -- the Bismillah must render as the real
+  // ligature glyph regardless of which font the current book/Quran is using to read.
+  void setBismillahFontId(int fontId) { bismillahFontId_ = fontId; }
+  // Font to source the calligraphic surah-name glyphs from. Same "independent of
+  // arabicFontId_" reasoning as setBismillahFontId() above.
+  void setSurahBannerFontId(int fontId) { surahBannerFontId_ = fontId; }
+  // Font to source the surah banner's small caption labels from. Same
+  // "independent of arabicFontId_" reasoning as setBismillahFontId() above.
+  void setSurahBannerLabelFontId(int fontId) { surahBannerLabelFontId_ = fontId; }
+  // Registers an Arabic font to use specifically when the caller requests `fontId`
+  // (e.g. SMALL_FONT_ID -> the 8pt Arabic font), so Arabic text matches the size and
+  // baseline of whatever Latin font the caller asked for instead of always rendering
+  // at arabicFontId_'s single fixed size. ArabicFontSystem registers these for the
+  // built-in default; cleared when an SD-card Arabic font override is active so that
+  // override applies uniformly via arabicFontId_ instead.
+  // matchLatinBaseline=true additionally anchors the Arabic text on the requested
+  // Latin font's baseline so it fits fixed Latin-sized UI geometry -- see
+  // arabicBaselineMatchFontIds_ above. Use for UI-font mappings only, never for
+  // reading-text mappings.
+  void setArabicFontIdForFontId(int fontId, int arabicFontId, bool matchLatinBaseline = false) {
+    arabicFontIdByFontId_[fontId] = arabicFontId;
+    if (matchLatinBaseline) {
+      arabicBaselineMatchFontIds_.insert(fontId);
+    } else {
+      arabicBaselineMatchFontIds_.erase(fontId);
+    }
+  }
+  void clearArabicFontIdMappings() {
+    arabicFontIdByFontId_.clear();
+    arabicBaselineMatchFontIds_.clear();
+  }
+  // Public wrapper so callers (e.g. a Settings preview pane) can see which Arabic
+  // font a given caller fontId currently resolves to, without duplicating the
+  // per-fontId-override-vs-catch-all lookup logic.
+  int getResolvedArabicFontId(int fontId) const { return resolveArabicFontId(fontId); }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
-  void clearSdCardFonts() { sdCardFonts_.clear(); }
+  void clearSdCardFonts() {
+    sdCardFonts_.clear();
+    sdCardFontScales_.clear();
+  }
+  void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
+  void clearSdCardFontScales() { sdCardFontScales_.clear(); }
+  uint16_t getSdCardFontScale(int fontId) const {
+    auto it = sdCardFontScales_.find(fontId);
+    return (it != sdCardFontScales_.end()) ? it->second : 256;
+  }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
+  // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
+  // setFallbackFont maps a primary UI font id to an SD font id of the same size.
+  void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
+  void clearFallbackFonts() { fallbackFontMap_.clear(); }
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).
   void ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F) const;
-  void ensureSdCardFontReady(int fontId, const std::vector<std::string>& words, bool includeHyphen,
+  // words: deque, not vector -- matches ParsedText::words (see its declaration for why).
+  void ensureSdCardFontReady(int fontId, const std::deque<std::string>& words, bool includeHyphen,
                              uint8_t styleMask = 0x0F) const;
 
   // Orientation control (affects logical width/height and coordinate transforms)
@@ -130,11 +346,44 @@ class GfxRenderer {
 
   // Fading fix control
   void setFadingFix(const bool enabled) { fadingFix = enabled; }
+  // Global dark mode: the framebuffer (and grayscale planes) are inverted at
+  // the moment pixels are pushed to the panel, then restored -- so EVERY
+  // consumer (reader incl. Arabic shaping/markers, games, home theme, status
+  // bar) flips with zero per-activity code, and anything that reads the
+  // framebuffer (screenshots, sleep-frame save, region cache, grayscale
+  // re-sync) still sees normal polarity. Grays invert symmetrically (2-bit
+  // planes are bitwise-NOTed, so AA edges stay correct around white-on-black
+  // text); photos render as negatives -- accepted v1 tradeoff.
+  void setDarkMode(const bool enabled) { darkMode_ = enabled; }
+  bool isDarkMode() const { return darkMode_; }
 
   // Screen ops
   int getScreenWidth() const;
   int getScreenHeight() const;
-  void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
+  void tapToLogical(float nx, float ny, int& outX, int& outY) const;
+  // forceCleanBaseOnHalf: see HalDisplay::displayBuffer's own comment. Defaults
+  // to true (existing behavior); the reader's periodic ghost-cleanup refresh
+  // is the one caller that passes false.
+  void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH,
+                     bool forceCleanBaseOnHalf = true) const;
+  // Non-blocking form: starts the panel waveform and returns so CPU work (the
+  // grayscale plane render) can overlap the panel's refresh time. The
+  // framebuffer must stay untouched until waitRefreshComplete() -- safe to
+  // read/invert again once this call itself returns (the SDK's "push" step is
+  // synchronous; the panel refreshes afterward from its own RAM copy, not by
+  // re-reading ours). Falls back to the blocking displayBuffer() when fading
+  // fix is active: the async SDK primitive has no turnOffScreen hook, which
+  // the fix relies on.
+  void displayBufferAsync(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH,
+                          bool forceCleanBaseOnHalf = true) const;
+  // Block until a pending async refresh completes (no-op when none is).
+  void waitRefreshComplete() const;
+  // True when displayBufferAsync() genuinely overlaps (panel driver defers
+  // the wait); false where it silently falls back to blocking. Callers can
+  // skip overlap scaffolding (e.g. whole-plane grayscale buffers) when there
+  // is nothing to overlap. Also false whenever fading fix is active, since
+  // displayBufferAsync() always takes the blocking fallback in that case.
+  bool supportsAsyncRefresh() const;
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   // void displayWindow(int x, int y, int width, int height) const;
   void invertScreen() const;
@@ -183,11 +432,25 @@ class GfxRenderer {
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
-  void drawIcon(const uint8_t bitmap[], int x, int y, int width, int height) const;
+  // black=false plots the icon's ink in white, for an icon sitting on a filled black
+  // field -- the Apps screen's selected tile. Same convention as drawText's flag.
+  void drawIcon(const uint8_t bitmap[], int x, int y, int size, bool black = true) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;
+  // Counter-invert content images in the logical framebuffer so output-level
+  // dark mode leaves their original polarity unchanged.
+  void preserveImagePolarity(int x, int y, int width, int height) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
+
+  // Snapshot / restore a screen-coordinate framebuffer region (byte-aligned in
+  // panel memory). readFramebufferRegion returns the bytes written to dst, or
+  // 0 when the region is empty, offscreen, or exceeds dstCapacity. Pass the
+  // same rectangle to writeFramebufferRegion to restore the saved pixels.
+  // Enables partial-repaint patterns (e.g. moving a selection highlight)
+  // without re-rendering the whole page.
+  size_t readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const;
+  void writeFramebufferRegion(int x, int y, int w, int h, const uint8_t* src);
 
   // Text
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
@@ -195,10 +458,61 @@ class GfxRenderer {
   void drawCenteredText(int fontId, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                         BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
+  /// Greedy word-wrap of `text` to `maxWidth`, drawn centered, one line per row from `y`
+  /// down. Returns the total height consumed, so a caller can lay out whatever follows
+  /// without assuming a line count.
+  ///
+  /// The wrapping counterpart to truncatedText(): use that when a label must stay on one
+  /// row (list rows, grid captions), this when losing the tail would lose meaning -- a
+  /// sentence telling the user what went wrong and what to do about it. drawCenteredText()
+  /// alone does neither and simply overruns the panel, which clips the text at *both*
+  /// edges once it is wider than the screen, since the draw is centered.
+  ///
+  /// Breaks on ASCII spaces only, so it can never split a UTF-8 sequence. A single word
+  /// too wide to fit is ellipsized via truncatedText() rather than dropped. On reaching
+  /// `maxLines` the remaining text is ellipsized into the final line, so overflow is
+  /// always visible as "..." instead of silently vanishing.
+  int drawCenteredTextWrapped(int fontId, int y, int maxWidth, const char* text, int maxLines, bool black = true,
+                              EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  /// The height drawCenteredTextWrapped() would consume, without drawing anything. For
+  /// callers that must vertically center a wrapped block: the block's height is not known
+  /// until the wrap is computed, so the alternative is drawing it twice.
+  ///
+  /// Shares the wrap loop with the draw path, so the two can never disagree about where
+  /// the line breaks fall.
+  int measureWrappedTextHeight(int fontId, int maxWidth, const char* text, int maxLines,
+                               EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  /// kashidaExtraPx: extra width (already floored to a whole tatweel-glyph multiple by
+  /// the caller) to insert via kashida when this call ends up on the Arabic path --
+  /// see ParsedText::computeJustifyPlan. Ignored on the non-Arabic path; Latin
+  /// justification keeps using inter-word gap stretching exclusively.
   void drawText(int fontId, int x, int y, const char* text, bool black = true,
                 EpdFontFamily::Style style = EpdFontFamily::REGULAR,
-                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
+                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int kashidaExtraPx = 0) const;
+  /// Draws a single line within the box [x, x+width): left-aligned as normal, but
+  /// right-aligned when the text is Arabic (ScriptDetector::containsArabic), matching
+  /// the natural reading direction instead of always anchoring at the box's left edge.
+  /// For titles/labels drawn into a fixed-width row or grid cell (list rows, cover grid
+  /// captions) where the caller doesn't otherwise track alignment itself.
+  void drawTextInWidth(int fontId, int x, int y, int width, const char* text, bool black = true,
+                       EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  /// Arabic-script text path: contextual shaping (isolated/initial/medial/final forms) +
+  /// Lam-Alef ligatures via ArabicShaper, then rendered in the already-visual-order the
+  /// shaper returns (bypasses MiniBidi entirely -- shaping already reorders). Glyphs come
+  /// from a dedicated Arabic font (ArabicFontSystem), not the fontId passed in, since none
+  /// of the built-in fonts carry Arabic glyphs. drawText/getTextWidth dispatch here
+  /// automatically via ScriptDetector::containsArabic() -- not normally called directly.
+  int getArabicTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                         int kashidaExtraPx = 0) const;
+  void drawArabicText(int fontId, int x, int y, const char* text, bool black = true,
+                      EpdFontFamily::Style style = EpdFontFamily::REGULAR, int kashidaExtraPx = 0) const;
   int getSpaceWidth(int fontId, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  /// The active Arabic font's own U+0640 TATWEEL glyph width in pixels, or 0 if it has
+  /// none. Layout-time query for kashida justification (ParsedText::computeJustifyPlan).
+  int getKashidaGlyphWidth(int fontId, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  /// Does this single word contain a legal kashida (tatweel) insertion point in the
+  /// active Arabic font? See ArabicShaper::hasKashidaPoint.
+  bool wordHasKashidaPoint(int fontId, const char* word, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   /// Returns the total inter-word advance: fp4::toPixel(spaceAdvance + kern(leftCp,' ') + kern(' ',rightCp)).
   /// Using a single snap avoids the +/-1 px rounding error that arises when space advance and kern are
   /// snapped separately and then added as integers.
@@ -207,7 +521,13 @@ class GfxRenderer {
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
+  /// How far a glyph may reach BELOW the baseline, as a positive depth.
+  /// Needed together with the ascender to size a box around display text: the
+  /// line height is not the ink (advanceY is a uint8_t, so a large face can
+  /// report a line box shorter than the glyphs it actually draws).
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
+  int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   /// Word-wrap \p text into at most \p maxLines lines, each no wider than
@@ -243,12 +563,45 @@ class GfxRenderer {
   // numRows)), bypassing the framebuffer. supportsStripGrayscale() gates use.
   void writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const;
   bool supportsStripGrayscale() const;
+  // Paper Mono: the base activation is deferred so base + gray planes go out
+  // as one waveform. Route the base through displayGrayscaleBase() when true.
+  bool combinesGrayscaleBase() const;
   bool storeBwBuffer();    // Returns true if buffer was stored successfully
   void restoreBwBuffer();  // Restore and free the stored buffer
   void cleanupGrayscaleWithFrameBuffer() const;
 
   // Font helpers
   const uint8_t* getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const;
+
+  // Lend the framebuffer's bytes IN PLACE to a blocking build phase (chapter
+  // layout): the allocation is never freed, so it cannot move and repeated
+  // loans cannot fragment the heap the way a free+realloc cycle measurably
+  // did. Rendering is unavailable (getFrameBuffer() is null, hasFrameBuffer()
+  // false) until restoreFrameBufferAfterBuild(). The bytes are deposited in
+  // buildscratch so a memory-hungry build consumer (e.g. InflateReader's 32KB
+  // ring) can claim them instead of allocating from the heap.
+  void releaseFrameBufferForBuild();
+  // Reclaim the framebuffer: cannot fail (the allocation was never freed).
+  // Returns false only if the framebuffer never existed to begin with.
+  bool restoreFrameBufferAfterBuild();
+  bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+
+  // RAII form of the loan above, for blocking build regions with early-return
+  // error paths: restores on scope exit (or explicitly via end()). Display the
+  // popup/screen the panel should hold BEFORE constructing one. Constructing
+  // while the framebuffer is already lent yields an inert loan (nesting-safe).
+  class FrameBufferLoan {
+   public:
+    explicit FrameBufferLoan(GfxRenderer& renderer);
+    ~FrameBufferLoan() { end(); }
+    void end();
+    FrameBufferLoan(const FrameBufferLoan&) = delete;
+    FrameBufferLoan& operator=(const FrameBufferLoan&) = delete;
+
+   private:
+    GfxRenderer& renderer_;
+    bool active_ = false;
+  };
 
   // Low level functions
   uint8_t* getFrameBuffer() const;

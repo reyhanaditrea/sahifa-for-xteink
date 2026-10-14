@@ -12,7 +12,9 @@
 #include <cstring>
 #include <memory>
 
+#include "FirmwareBoardTag.h"
 #include "OtaBootSwitch.h"
+#include "util/FirmwareDiagLog.h"
 
 namespace firmware_flash {
 
@@ -46,6 +48,10 @@ const char* resultName(Result r) {
       return "BAD_CHECKSUM";
     case Result::BAD_SHA:
       return "BAD_SHA";
+    case Result::BAD_CHIP:
+      return "BAD_CHIP";
+    case Result::WRONG_BOARD:
+      return "WRONG_BOARD";
     case Result::BAD_SIZE:
       return "BAD_SIZE";
     case Result::NO_PARTITION:
@@ -64,17 +70,35 @@ const char* resultName(Result r) {
   return "?";
 }
 
+uint16_t runningPartitionChipId() {
+  // esp_partition_read hits SPI flash; cache the running slot's chip_id so we
+  // only pay that cost once per boot. The running image is immutable at
+  // runtime, so a function-local static is safe here.
+  static uint16_t cached = [] {
+    const esp_partition_t* run = esp_ota_get_running_partition();
+    if (!run) return static_cast<uint16_t>(0xFFFF);
+    uint16_t id = 0xFFFF;
+    // chip_id sits at offset 12 of esp_image_header_t. memcpy target is a
+    // uint16_t local, so RISC-V alignment is guaranteed.
+    if (esp_partition_read(run, 12, &id, sizeof(id)) != ESP_OK) return static_cast<uint16_t>(0xFFFF);
+    return id;
+  }();
+  return cached;
+}
+
 namespace {
 // Stream `length` bytes from `file` starting at the current read offset, feeding them through
 // both the XOR-checksum and SHA256 accumulators. Used by validateImageFile so the whole image
 // is verified end-to-end without holding it in RAM (ESP32-C3 only has ~380 KB).
-Result feedHashAndChecksum(HalFile& file, size_t length, uint8_t* xorAccum, mbedtls_sha256_context* sha, uint8_t* buf) {
+Result feedHashAndChecksum(HalFile& file, size_t length, uint8_t* xorAccum, mbedtls_sha256_context* sha, uint8_t* buf,
+                           board_tag::Scanner* tagScanner) {
   size_t remaining = length;
   while (remaining > 0) {
     const size_t want = std::min<size_t>(CHUNK, remaining);
     const int got = file.read(buf, want);
     if (got <= 0 || static_cast<size_t>(got) != want) return Result::READ_FAIL;
     if (sha) mbedtls_sha256_update(sha, buf, want);
+    if (tagScanner) tagScanner->feed(buf, want);
     if (xorAccum) {
       uint8_t acc = *xorAccum;
       for (size_t i = 0; i < want; i++) acc ^= buf[i];
@@ -117,6 +141,17 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
     file.close();
     return Result::BAD_MAGIC;
   }
+  // Reject an image built for a different MCU family before it can brick the
+  // device. chip_id lives at esp_image_header_t offset 12; compare it against
+  // the running slot's own chip_id (self-describing, no chip enumeration).
+  uint16_t imageChip;
+  std::memcpy(&imageChip, header + 12, sizeof(imageChip));
+  const uint16_t deviceChip = runningPartitionChipId();
+  if (deviceChip != 0xFFFF && imageChip != deviceChip) {
+    LOG_ERR("FLASH", "validate: wrong chip: image=0x%04X device=0x%04X", imageChip, deviceChip);
+    file.close();
+    return Result::BAD_CHIP;
+  }
   const uint8_t segCount = header[1];
   const bool hashAppended = header[23] != 0;
 
@@ -133,6 +168,10 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
 
   uint8_t xorAccum = CHECKSUM_SEED;
   size_t pos = HEADER_SIZE;
+  // Board tag: scanned from the same segment stream the hash pass already
+  // reads, so the check is free of extra I/O. Only a present-and-mismatched
+  // tag rejects; untagged images (forks, other projects) pass.
+  board_tag::Scanner tagScanner;
 
   for (uint8_t i = 0; i < segCount; i++) {
     if (pos + SEG_HEADER_SIZE > fileSize) {
@@ -160,13 +199,21 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
       return Result::BAD_SEGMENTS;
     }
 
-    const Result feedRes = feedHashAndChecksum(file, dataLen, &xorAccum, &shaCtx, buf.get());
+    const Result feedRes = feedHashAndChecksum(file, dataLen, &xorAccum, &shaCtx, buf.get(), &tagScanner);
     if (feedRes != Result::OK) {
       mbedtls_sha256_free(&shaCtx);
       file.close();
       return feedRes;
     }
     pos += dataLen;
+  }
+
+  if (tagScanner.mismatch()) {
+    LOG_ERR("FLASH", "validate: wrong board: image=%s device=%.*s", tagScanner.foundName(),
+            static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
+    mbedtls_sha256_free(&shaCtx);
+    file.close();
+    return Result::WRONG_BOARD;
   }
 
   // pad_end is the 16-byte aligned offset at which the checksum byte sits at pad_end - 1.
@@ -233,6 +280,7 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
   const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
   if (!dest) {
     LOG_ERR("FLASH", "no next-update partition");
+    FirmwareDiagLog::append("FLASH", "no next-update partition, src=" + std::string(sdPath));
     return Result::NO_PARTITION;
   }
 
@@ -244,6 +292,8 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
     const Result validateRes = validateImageFile(sdPath, dest->size);
     if (validateRes != Result::OK) {
       LOG_ERR("FLASH", "image validation failed: %s", resultName(validateRes));
+      FirmwareDiagLog::append(
+          "FLASH", "validation failed: " + std::string(resultName(validateRes)) + " src=" + std::string(sdPath));
       return validateRes;
     }
   }
@@ -251,6 +301,7 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
   HalFile file;
   if (!Storage.openFileForRead("FLASH", sdPath, file) || !file) {
     LOG_ERR("FLASH", "open failed: %s", sdPath);
+    FirmwareDiagLog::append("FLASH", "open failed: src=" + std::string(sdPath));
     return Result::OPEN_FAIL;
   }
 
@@ -261,6 +312,8 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
   auto buffer = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[CHUNK]);
   if (!buffer) {
     LOG_ERR("FLASH", "OOM");
+    FirmwareDiagLog::append("FLASH", "OOM allocating chunk buffer: free=" + std::to_string(ESP.getFreeHeap()) +
+                                         " largest=" + std::to_string(ESP.getMaxAllocHeap()));
     file.close();
     return Result::OOM;
   }
@@ -277,6 +330,8 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
       if (esp_partition_erase_range(dest, streamPos, eraseLen) != ESP_OK) {
         LOG_ERR("FLASH", "erase @%u (len=%u) failed", static_cast<unsigned>(streamPos),
                 static_cast<unsigned>(eraseLen));
+        FirmwareDiagLog::append("FLASH", "erase failed @" + std::to_string(streamPos) + " len=" +
+                                             std::to_string(eraseLen) + " of " + std::to_string(firmwareSize));
         file.close();
         return Result::ERASE_FAIL;
       }
@@ -287,11 +342,15 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
     const int read = file.read(buffer.get(), want);
     if (read <= 0 || static_cast<size_t>(read) != want) {
       LOG_ERR("FLASH", "read @%u: got=%d want=%u", static_cast<unsigned>(streamPos), read, static_cast<unsigned>(want));
+      FirmwareDiagLog::append("FLASH", "read failed @" + std::to_string(streamPos) + " got=" + std::to_string(read) +
+                                           " want=" + std::to_string(want) + " of " + std::to_string(firmwareSize));
       file.close();
       return Result::READ_FAIL;
     }
     if (esp_partition_write(dest, streamPos, buffer.get(), want) != ESP_OK) {
       LOG_ERR("FLASH", "write @%u failed", static_cast<unsigned>(streamPos));
+      FirmwareDiagLog::append("FLASH",
+                              "write failed @" + std::to_string(streamPos) + " of " + std::to_string(firmwareSize));
       file.close();
       return Result::WRITE_FAIL;
     }
@@ -303,8 +362,12 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
 
   if (!ota_boot::switchTo(dest)) {
     LOG_ERR("FLASH", "otadata switch failed");
+    FirmwareDiagLog::append("FLASH", "otadata switch failed, dest=" + std::string(dest->label) +
+                                         " -- new image flashed but NOT selected to boot");
     return Result::OTADATA_FAIL;
   }
+  FirmwareDiagLog::append(
+      "FLASH", "flashed and switched: dest=" + std::string(dest->label) + " size=" + std::to_string(firmwareSize));
   return Result::OK;
 }
 

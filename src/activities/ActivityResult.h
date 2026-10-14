@@ -21,6 +21,14 @@ struct MenuResult {
   int action = -1;
   uint8_t orientation = 0;
   uint8_t pageTurnOption = 0;
+  // Per-book reading overrides (SETTINGS.book*) were edited inside the menu;
+  // the reader persists the sidecar and re-lays-out. Applies even on cancel
+  // (Back just closes the drawer -- the edits still count).
+  bool bookSettingsChanged = false;
+  // Set when action == SELECT_CHAPTER: the chapter picked from the in-drawer
+  // TOC list (the drawer owns the chapter list; no separate activity).
+  int chapterSpineIndex = -1;
+  std::string chapterAnchor;
 };
 
 struct ChapterResult {
@@ -43,6 +51,14 @@ struct PageResult {
 struct ProgressChangeResult {
   int spineIndex = 0;
   int page = 0;
+  int totalPages = 0;
+  std::string xpath;
+  float percentage = 0.0f;
+  bool hasSavedProgress = false;
+  // Exact visible-codepoint offset within spineIndex, when the source (a bookmark) has one.
+  // Preferred over xpath/percentage on resolution: it is immune to re-pagination.
+  bool hasVisibleTextOffset = false;
+  uint32_t visibleTextOffset = 0;
 };
 
 enum class NetworkMode;
@@ -59,9 +75,15 @@ struct FilePathResult {
   std::string path;
 };
 
+// Opponent and side chosen on the chess "New Game" screen.
+struct ChessSetupResult {
+  int level = 2;
+  bool playerIsWhite = true;
+};
+
 using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
-                 PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult>;
+                 PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult, ChessSetupResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

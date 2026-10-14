@@ -18,6 +18,14 @@ HalStorage::HalStorage() {
   // HalFile::Impl::~Impl below). Priority inheritance still applies to
   // recursive mutexes.
   storageMutex = xSemaphoreCreateRecursiveMutex();
+  if (storageMutex == nullptr) {
+    // Returns null on allocation failure, and an unchecked null handle reaching
+    // xSemaphoreTake() aborts inside FreeRTOS with "assert failed:
+    // xQueueSemaphoreTake queue.c:1709 (pxQueue)" -- a panic that names the take,
+    // never the creation that actually failed. Created at boot where heap is
+    // plentiful, so this is hygiene rather than a fix for any observed crash.
+    LOG_ERR("STORAGE", "OOM: could not create storage mutex");
+  }
   assert(storageMutex != nullptr);
 }
 
@@ -157,6 +165,7 @@ int HalFile::available() const { HAL_FILE_WRAPPED_CALL(available, ); }
 size_t HalFile::position() const { HAL_FILE_WRAPPED_CALL(position, ); }
 int HalFile::read(void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(read, buf, count); }
 int HalFile::read() { HAL_FILE_WRAPPED_CALL(read, ); }
+size_t HalFile::write(const uint8_t* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
 size_t HalFile::write(const void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
 size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
 bool HalFile::rename(const char* newPath) { HAL_FILE_WRAPPED_CALL(rename, newPath); }

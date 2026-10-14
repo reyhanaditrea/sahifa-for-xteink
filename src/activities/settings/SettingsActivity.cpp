@@ -2,11 +2,14 @@
 
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <WiFi.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
+#include "ArabicFontSelectionActivity.h"
+#include "ArabicFontSystem.h"
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
@@ -15,24 +18,29 @@
 #include "KOReaderSettingsActivity.h"
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
-#include "OpdsServerListActivity.h"
-#include "OtaUpdateActivity.h"
+#include "MidadSettingsList.h"
+#include "QuranBook.h"
 #include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
+#include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
+#include "activities/apps/DictionaryActivity.h"
+#include "activities/home/FileBrowserActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
-                                                              StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
+const StrId SettingsActivity::categoryNames[categoryCount] = {
+    StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER, StrId::STR_CAT_CONTROLS, StrId::STR_CAT_APPS, StrId::STR_CAT_SYSTEM};
 
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
+  appsSettings.clear();
   systemSettings.clear();
 
   // Pick up any fonts uploaded/deleted over the web server since the last
@@ -41,16 +49,20 @@ void SettingsActivity::rebuildSettingsLists() {
 
   for (auto& setting : getSettingsList(&sdFontSystem.registry())) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
+    // Drop a row whose parent setting makes it meaningless, rather than showing it
+    // inert -- see SettingInfo::shownWhen. Declared beside each setting now instead
+    // of tested here, which is where the one pre-existing case of this lived
+    // (pwrBtnFootnoteBack against shortPwrBtn). This function runs after every
+    // change, so flipping a parent updates the list on the next repaint.
+    if (setting.visibleWhen && !setting.visibleWhen()) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
       readerSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
-      if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
-          SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
-        continue;
-      }
       controlsSettings.push_back(setting);
+    } else if (setting.category == StrId::STR_CAT_APPS) {
+      appsSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
       systemSettings.push_back(setting);
     }
@@ -59,15 +71,50 @@ void SettingsActivity::rebuildSettingsLists() {
   // Append device-only ACTION items
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
+  appsSettings.push_back(SettingInfo::Action(StrId::STR_DICTIONARY, SettingAction::Dictionary));
+  appsSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+  // Midad-owned Apps rows (Quran/Games/Tasbih/Stop Watch/Pomodoro/Debug
+  // Logging) -- see src/MidadSettingsList.h. Appended here, after KOReader
+  // Sync, so Debug Logging (the last row that function adds) keeps landing
+  // right after KOReader Sync, matching prior behavior.
+  // Filtered the same way as the loop above, which it deliberately runs after:
+  // appending straight into appsSettings let every Midad row bypass visibleWhen,
+  // so the Pomodoro durations stayed on screen with their
+  // app switched off (reported). Build them in a scratch list and copy across only
+  // what should show. The upstream rows keep their filter in the loop; this is the
+  // one other place rows enter a category vector carrying a predicate.
+  std::vector<SettingInfo> midadAppRows;
+  appendMidadAppSettings(midadAppRows);
+  for (auto& setting : midadAppRows) {
+    if (setting.visibleWhen && !setting.visibleWhen()) continue;
+    appsSettings.push_back(std::move(setting));
+  }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
+  // OTA fetches this board's own release asset (see OtaUpdater); boards whose
+  // asset isn't published yet just report no update available.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  // Insert "Manage Fonts" right after the font family setting so users discover it naturally
-  readerSettings.insert(readerSettings.begin() + 1,
+  // User request: Browse Files / File Transfer are the two most-used System
+  // entries, so pin them to the very top regardless of everything else
+  // appended above -- inserted last (not where they'd naturally fall in the
+  // push_back order) so this stays correct even if more entries are added
+  // before this point later.
+  systemSettings.insert(systemSettings.begin(),
+                        {SettingInfo::Action(StrId::STR_BROWSE_FILES, SettingAction::BrowseFiles),
+                         SettingInfo::Action(StrId::STR_FILE_TRANSFER, SettingAction::FileTransfer)});
+  // Reader list order (user-specified): Manage Fonts first (the most-used
+  // entry -- downloading/removing fonts from the Foulad eBooks store), then
+  // English Font, English Font Size, Arabic Font, Arabic Font Size, then the
+  // rest. The base table supplies [English Font, English Font Size, Arabic
+  // Font Size, ...]; insert "Arabic Font" at index 2 so the two Arabic
+  // settings pair up in the same family-then-size order as the English pair.
+  // Built via buildArabicFontFamilySetting() (an ENUM, not a plain Action) so
+  // the current font's name shows inline in the list -- see that function's
+  // comment for why.
+  readerSettings.insert(readerSettings.begin() + 2, buildArabicFontFamilySetting(&arabicFontSystem.registry()));
+  readerSettings.insert(readerSettings.begin(),
                         SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
 
@@ -83,6 +130,9 @@ void SettingsActivity::rebuildSettingsLists() {
       currentSettings = &controlsSettings;
       break;
     case 3:
+      currentSettings = &appsSettings;
+      break;
+    case 4:
       currentSettings = &systemSettings;
       break;
   }
@@ -113,6 +163,8 @@ void SettingsActivity::onExit() {
 }
 
 void SettingsActivity::loop() {
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+
   bool hasChangedCategory = false;
 
   // Handle actions with early return
@@ -140,23 +192,23 @@ void SettingsActivity::loop() {
   }
 
   // Handle navigation
-  buttonNavigator.onNextRelease([this] {
+  buttonNavigator.onScrollNextRelease([this] {
     selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousRelease([this] {
+  buttonNavigator.onScrollPreviousRelease([this] {
     selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this, &hasChangedCategory] {
+  buttonNavigator.onScrollNextContinuous([this, &hasChangedCategory] {
     hasChangedCategory = true;
     selectedCategoryIndex = ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, &hasChangedCategory] {
+  buttonNavigator.onScrollPreviousContinuous([this, &hasChangedCategory] {
     hasChangedCategory = true;
     selectedCategoryIndex = ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
     requestUpdate();
@@ -175,6 +227,9 @@ void SettingsActivity::loop() {
         currentSettings = &controlsSettings;
         break;
       case 3:
+        currentSettings = &appsSettings;
+        break;
+      case 4:
         currentSettings = &systemSettings;
         break;
     }
@@ -191,6 +246,7 @@ void SettingsActivity::toggleCurrentSetting() {
   const auto& setting = (*currentSettings)[selectedSetting];
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
+  const bool arabicFontSizeChanged = setting.valuePtr == &CrossPointSettings::arabicFontSize;
 
   if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
     openSleepTimeoutPicker();
@@ -201,8 +257,41 @@ void SettingsActivity::toggleCurrentSetting() {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
+  } else if (setting.type == SettingType::TOGGLE && setting.valueGetter && setting.valueSetter) {
+    // Same as the valuePtr branch above, for a field stored outside
+    // CrossPointSettings (e.g. MidadAppSettings) -- see SettingInfo::DynamicToggle.
+    const uint8_t currentValue = setting.valueGetter();
+    setting.valueSetter(currentValue ? 0 : 1);
+    if (setting.nameId == StrId::STR_QURAN && !currentValue) {
+      // Enabling the Quran extracts the firmware-embedded EPUB to the SD card
+      // (a few seconds on first enable; instant when already extracted).
+      GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+      if (!QuranBook::ensureExtracted()) {
+        setting.valueSetter(0);  // no SD / write failure: stay honest, keep it off
+      }
+      requestUpdate();
+    }
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
+    if (setting.enumValues.size() > 2) {
+      const auto valuePtr = setting.valuePtr;
+      optionPopup.show(setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()),
+                       currentValue,
+                       [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, arabicFontSizeChanged](int idx) {
+                         SETTINGS.*valuePtr = idx;
+                         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
+                         if (arabicFontSizeChanged) {
+                           // Re-resolve the built-in Arabic reading font at the new size (only
+                           // takes effect when no SD Arabic font override is active -- see
+                           // ArabicFontSystem::ensureLoaded).
+                           arabicFontSystem.ensureLoaded(renderer);
+                         }
+                         SETTINGS.saveToFile();
+                         rebuildSettingsLists();
+                       });
+      requestUpdate();
+      return;
+    }
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
     if (setting.nameId == StrId::STR_FONT_FAMILY) {
@@ -214,10 +303,39 @@ void SettingsActivity::toggleCurrentSetting() {
                              });
       return;
     }
+    if (setting.nameId == StrId::STR_ARABIC_FONT) {
+      // Launch the Arabic font picker instead of cycling, same reasoning as Font Family
+      // above -- it also has a live glyph preview pane, which matters more here since the
+      // built-in Arabic styles look meaningfully different from each other.
+      startActivityForResult(
+          std::make_unique<ArabicFontSelectionActivity>(renderer, mappedInput, &arabicFontSystem.registry()),
+          [this](const ActivityResult&) {
+            SETTINGS.saveToFile();
+            rebuildSettingsLists();
+          });
+      return;
+    }
     const uint8_t totalValues = setting.enumStringValues.empty()
                                     ? static_cast<uint8_t>(setting.enumValues.size())
                                     : static_cast<uint8_t>(setting.enumStringValues.size());
     const uint8_t cur = setting.valueGetter();
+    if (totalValues > 2) {
+      const auto valueSetter = setting.valueSetter;
+      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
+        valueSetter(idx);
+        syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
+        SETTINGS.saveToFile();
+        rebuildSettingsLists();
+      };
+      if (!setting.enumStringValues.empty()) {
+        optionPopup.show(setting.nameId, setting.enumStringValues, cur, std::move(onSelect));
+      } else {
+        optionPopup.show(setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()), cur,
+                         std::move(onSelect));
+      }
+      requestUpdate();
+      return;
+    }
     setting.valueSetter((cur + 1) % totalValues);
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
@@ -225,6 +343,15 @@ void SettingsActivity::toggleCurrentSetting() {
       SETTINGS.*(setting.valuePtr) = setting.valueRange.min;
     } else {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
+    }
+  } else if (setting.type == SettingType::VALUE && setting.valueGetter && setting.valueSetter) {
+    // Same as the valuePtr branch above, for a field stored outside
+    // CrossPointSettings -- see SettingInfo::DynamicValue.
+    const int currentValue = setting.valueGetter();
+    if (currentValue + setting.valueRange.step > setting.valueRange.max) {
+      setting.valueSetter(setting.valueRange.min);
+    } else {
+      setting.valueSetter(static_cast<uint8_t>(currentValue + setting.valueRange.step));
     }
   } else if (setting.type == SettingType::ACTION) {
     auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
@@ -236,20 +363,40 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::CustomiseStatusBar:
         startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
+      case SettingAction::Dictionary:
+        startActivityForResult(std::make_unique<DictionaryActivity>(renderer, mappedInput), resultHandler);
+        break;
       case SettingAction::KOReaderSync:
         startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
-      case SettingAction::OPDSBrowser:
-        startActivityForResult(std::make_unique<OpdsServerListActivity>(renderer, mappedInput), resultHandler);
-        break;
       case SettingAction::Network:
-        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false), resultHandler);
+        // Settings -> Wi-Fi Networks is the ONE WiFi surface with no parent
+        // flow and no exit reboot: WifiSelectionActivity deliberately leaves
+        // the connection to its caller, and every other caller reboots (which
+        // powers the modem off). Coming back here, fully power the radio down
+        // or it idles in STA mode (~20-30 mA) until the next deep sleep --
+        // confirmed as the fast-battery-drain path (user report). Saved
+        // credentials auto-reconnect the next time a flow needs WiFi.
+        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false),
+                               [this](const ActivityResult& result) {
+                                 if (WiFi.getMode() != WIFI_MODE_NULL) {
+                                   WiFi.disconnect(true);
+                                   WiFi.mode(WIFI_OFF);
+                                   LOG_INF("SETTINGS", "WiFi radio powered off after network screen");
+                                 }
+                                 SETTINGS.saveToFile();
+                                 rebuildSettingsLists();
+                                 requestUpdate();
+                               });
         break;
       case SettingAction::ClearCache:
         startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::CheckForUpdates:
-        startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
+        // Reboot into the OTA flow instead of opening it in this session: after
+        // Home/library browsing the heap is fragmented below what the GitHub TLS
+        // handshakes need (see silentRestartToOtaCheck). Does not return.
+        silentRestartToOtaCheck();
         break;
       case SettingAction::SdFirmwareUpdate:
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
@@ -263,6 +410,16 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::Language:
         startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::BrowseFiles:
+        startActivityForResult(std::make_unique<FileBrowserActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::FileTransfer:
+        // Reboot into the web server on a fresh heap (see SilentRestart.h):
+        // starting it from a long-running session leaves the WiFi driver and
+        // TCP buffers fighting a fragmented heap and page loads crawl. The
+        // activity's own exit path already silentRestart()s back to Home.
+        silentRestartToFileTransfer();
         break;
       case SettingAction::None:
         // Do nothing
@@ -305,10 +462,9 @@ void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChan
 void SettingsActivity::openSleepTimeoutPicker() {
   startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(
-          renderer, mappedInput, "SleepTimeoutInterval", StrId::STR_TIME_TO_SLEEP, StrId::STR_SLEEP_TIMER_STEP_HINT,
-          SETTINGS.sleepTimeoutMinutes, CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES,
-          CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5, StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true,
-          StrId::STR_SLEEP_NEVER),
+          renderer, mappedInput, "SleepTimeoutInterval", StrId::STR_TIME_TO_SLEEP, SETTINGS.sleepTimeoutMinutes,
+          CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5,
+          StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, StrId::STR_SLEEP_NEVER),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
@@ -319,6 +475,8 @@ void SettingsActivity::openSleepTimeoutPicker() {
 }
 
 void SettingsActivity::render(RenderLock&&) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
@@ -351,6 +509,9 @@ void SettingsActivity::render(RenderLock&&) {
         if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
           const bool value = SETTINGS.*(setting.valuePtr);
           valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+        } else if (setting.type == SettingType::TOGGLE && setting.valueGetter) {
+          const uint8_t value = setting.valueGetter();
+          valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
           const uint8_t value = SETTINGS.*(setting.valuePtr);
           valueText = I18N.get(setting.enumValues[value]);
@@ -374,6 +535,8 @@ void SettingsActivity::render(RenderLock&&) {
           } else {
             valueText = std::to_string(SETTINGS.*(setting.valuePtr));
           }
+        } else if (setting.type == SettingType::VALUE && setting.valueGetter) {
+          valueText = std::to_string(setting.valueGetter());
         }
         return valueText;
       },
@@ -386,7 +549,9 @@ void SettingsActivity::render(RenderLock&&) {
           : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
                  ? tr(STR_SELECT)
                  : tr(STR_TOGGLE));
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN), /*rtlSwap=*/false);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Always use standard refresh for settings screen

@@ -1,10 +1,14 @@
 #include <Arduino.h>
+#ifndef SIMULATOR
+#include <BoardConfig.h>
+#endif
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalDisplay.h>
+#include <HalFrontlight.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -14,98 +18,214 @@
 #include <Logging.h>
 #include <SPI.h>
 #include <WiFi.h>
+#include <XteinkDetect.h>
 #include <builtinFonts/all.h>
 
 #include <cstring>
 
+#include "ArabicFontSystem.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "GameHighScoresStore.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
-#include "OpdsServerStore.h"
+#include "MidadAppSettings.h"
+#include "NewsFeedStore.h"
+#include "OtaRollbackDetection.h"
+#include "OtaRollbackRecoveryPlan.h"
+#include "QuranBook.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "TasbihStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/boot_sleep/BootActivity.h"
+#include "activities/settings/OtaRollbackRecoveryActivity.h"
+#include "activities/settings/OtaUpdateActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
+#ifdef TLS_HEAP_MEASURE_HARNESS
+#include "debug/TlsHeapMeasureActivity.h"
+#endif
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
+#include "util/BatteryDiagLog.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SleepDiagLog.h"
+#include "util/StackDiagLog.h"
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
 ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
 SdCardFontSystem sdFontSystem;
+ArabicFontSystem arabicFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 static unsigned long allowSleepAt = 0;
 
-// Fonts
-EpdFont notoserif14RegularFont(&notoserif_14_regular);
-EpdFont notoserif14BoldFont(&notoserif_14_bold);
-EpdFont notoserif14ItalicFont(&notoserif_14_italic);
-EpdFont notoserif14BoldItalicFont(&notoserif_14_bolditalic);
-EpdFontFamily notoserif14FontFamily(&notoserif14RegularFont, &notoserif14BoldFont, &notoserif14ItalicFont,
-                                    &notoserif14BoldItalicFont);
-#ifndef OMIT_FONTS
-EpdFont notoserif12RegularFont(&notoserif_12_regular);
-EpdFont notoserif12BoldFont(&notoserif_12_bold);
-EpdFont notoserif12ItalicFont(&notoserif_12_italic);
-EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
-EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
-                                    &notoserif12BoldItalicFont);
-EpdFont notoserif16RegularFont(&notoserif_16_regular);
-EpdFont notoserif16BoldFont(&notoserif_16_bold);
-EpdFont notoserif16ItalicFont(&notoserif_16_italic);
-EpdFont notoserif16BoldItalicFont(&notoserif_16_bolditalic);
-EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont,
-                                    &notoserif16BoldItalicFont);
-EpdFont notoserif18RegularFont(&notoserif_18_regular);
-EpdFont notoserif18BoldFont(&notoserif_18_bold);
-EpdFont notoserif18ItalicFont(&notoserif_18_italic);
-EpdFont notoserif18BoldItalicFont(&notoserif_18_bolditalic);
-EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont,
-                                    &notoserif18BoldItalicFont);
+namespace {
+constexpr unsigned long X4PRO_RECOVERY_SETTLE_MS = 20;
+constexpr unsigned long DEFAULT_RECOVERY_SETTLE_MS = 500;
+}  // namespace
 
-EpdFont notosans12RegularFont(&notosans_12_regular);
-EpdFont notosans12BoldFont(&notosans_12_bold);
-EpdFont notosans12ItalicFont(&notosans_12_italic);
-EpdFont notosans12BoldItalicFont(&notosans_12_bolditalic);
-EpdFontFamily notosans12FontFamily(&notosans12RegularFont, &notosans12BoldFont, &notosans12ItalicFont,
-                                   &notosans12BoldItalicFont);
-EpdFont notosans14RegularFont(&notosans_14_regular);
-EpdFont notosans14BoldFont(&notosans_14_bold);
-EpdFont notosans14ItalicFont(&notosans_14_italic);
-EpdFont notosans14BoldItalicFont(&notosans_14_bolditalic);
-EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, &notosans14ItalicFont,
-                                   &notosans14BoldItalicFont);
-EpdFont notosans16RegularFont(&notosans_16_regular);
-EpdFont notosans16BoldFont(&notosans_16_bold);
-EpdFont notosans16ItalicFont(&notosans_16_italic);
-EpdFont notosans16BoldItalicFont(&notosans_16_bolditalic);
-EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont,
-                                   &notosans16BoldItalicFont);
-EpdFont notosans18RegularFont(&notosans_18_regular);
-EpdFont notosans18BoldFont(&notosans_18_bold);
-EpdFont notosans18ItalicFont(&notosans_18_italic);
-EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
-                                   &notosans18BoldItalicFont);
+// A wake hold must never become an in-app power-button action.  Boot may continue
+// while the button is held; swallow the one release that ends that wake gesture.
+static bool wakePowerReleasePending = false;
+
+// Fonts
+EpdFont lexenddeca14RegularFont(&lexenddeca_14_regular);
+EpdFont lexenddeca14BoldFont(&lexenddeca_14_bold);
+EpdFontFamily lexenddeca14FontFamily(&lexenddeca14RegularFont, &lexenddeca14BoldFont);
+#ifndef OMIT_FONTS
+
+// Digit-only 32pt font for the Tasbih app's counter -- none of the reader
+// sizes above go this large. Registered as a single "regular" style; the
+// font file itself is bold weight (see convert-builtin-fonts.sh).
+EpdFont tasbih32BoldFont(&tasbih_32_bold);
+EpdFontFamily tasbih32FontFamily(&tasbih32BoldFont);
+
+// Digit+colon-only 32pt font for the Stop Watch app's MM:SS display.
+EpdFont stopwatch32BoldFont(&stopwatch_32_bold);
+EpdFontFamily stopwatch32FontFamily(&stopwatch32BoldFont);
+
+// Belajar Baca display faces: one huge glyph per card for a 3-4 year old. Both are
+// letters-only cuts (see convert-builtin-fonts.sh) -- Andika 96pt for Latin, because
+// it is drawn for early literacy (single-storey 'a'/'g'), and Noto Naskh 80pt for
+// Arabic, mark-repositioned so harakat sit correctly. Arabic is the smaller point
+// size because its marks need vertical headroom the Latin cut doesn't.
+EpdFont kidsLatin96Font(&kidslatin_96_regular);
+EpdFontFamily kidsLatin96FontFamily(&kidsLatin96Font);
+// Picture-card cut, Latin only (see convert-builtin-fonts.sh).
+EpdFont kidsLatin72Font(&kidslatin_72_regular);
+EpdFontFamily kidsLatin72FontFamily(&kidsLatin72Font);
+EpdFont kidsArabic88Font(&kidsarabic_88_regular);
+EpdFontFamily kidsArabic88FontFamily(&kidsArabic88Font);
+// Word-size cuts of the same two faces: a card falls back to these when the big
+// glyph would not fit the panel (see KidsReadActivity::drawBigGlyph).
+EpdFont kidsLatin48Font(&kidslatin_48_regular);
+EpdFontFamily kidsLatin48FontFamily(&kidsLatin48Font);
+EpdFont kidsArabic48Font(&kidsarabic_48_regular);
+EpdFontFamily kidsArabic48FontFamily(&kidsArabic48Font);
+// Grid cut: the introduce-the-letters screen shows a whole set at once, and a
+// Latin cell carries both cases ("Aa"), which needs a smaller size to fit more
+// than two to a row.
+EpdFont kidsLatin32Font(&kidslatin_32_regular);
+EpdFontFamily kidsLatin32FontFamily(&kidsLatin32Font);
+EpdFont kidsArabic32Font(&kidsarabic_32_regular);
+EpdFontFamily kidsArabic32FontFamily(&kidsArabic32Font);
+
+EpdFont lexenddeca12RegularFont(&lexenddeca_12_regular);
+EpdFont lexenddeca12BoldFont(&lexenddeca_12_bold);
+EpdFontFamily lexenddeca12FontFamily(&lexenddeca12RegularFont, &lexenddeca12BoldFont);
+EpdFont lexenddeca16RegularFont(&lexenddeca_16_regular);
+EpdFont lexenddeca16BoldFont(&lexenddeca_16_bold);
+EpdFontFamily lexenddeca16FontFamily(&lexenddeca16RegularFont, &lexenddeca16BoldFont);
+EpdFont lexenddeca18RegularFont(&lexenddeca_18_regular);
+EpdFont lexenddeca18BoldFont(&lexenddeca_18_bold);
+EpdFontFamily lexenddeca18FontFamily(&lexenddeca18RegularFont, &lexenddeca18BoldFont);
 
 #endif  // OMIT_FONTS
 
 EpdFont smallFont(&notosans_8_regular);
 EpdFontFamily smallFontFamily(&smallFont);
 
-EpdFont ui10RegularFont(&ubuntu_10_regular);
-EpdFont ui10BoldFont(&ubuntu_10_bold);
+// UI_10_FONT_ID/UI_12_FONT_ID are backed by Inter (was Ubuntu) -- see
+// lib/EpdFont/scripts/convert-builtin-fonts.sh for the swap rationale. Macro
+// names kept unchanged so no other call site needs touching.
+EpdFont ui10RegularFont(&inter_10_regular);
+EpdFont ui10BoldFont(&inter_10_bold);
 EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
 
-EpdFont ui12RegularFont(&ubuntu_12_regular);
-EpdFont ui12BoldFont(&ubuntu_12_bold);
+EpdFont ui12RegularFont(&inter_12_regular);
+EpdFont ui12BoldFont(&inter_12_bold);
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
+
+// Built-in default for ArabicFontSystem -- always present in flash so Arabic titles
+// render out of the box with no SD card setup. Bundled at the three sizes actually
+// used for Arabic-eligible UI text (SMALL_FONT_ID=8pt, UI_10_FONT_ID=10pt,
+// UI_12_FONT_ID=12pt) so Arabic renders at the same size/baseline as the Latin text
+// around it instead of one fixed size that overflows small rows/grid cells. Users can
+// still override with a custom SD font family via Settings -> Reader -> Arabic Font.
+EpdFont notonaskharabic12RegularFont(&notonaskharabic_12_regular);
+EpdFontFamily notonaskharabic12FontFamily(&notonaskharabic12RegularFont);
+EpdFont notonaskharabic14RegularFont(&notonaskharabic_14_regular);
+EpdFontFamily notonaskharabic14FontFamily(&notonaskharabic14RegularFont);
+EpdFont notonaskharabic16RegularFont(&notonaskharabic_16_regular);
+EpdFontFamily notonaskharabic16FontFamily(&notonaskharabic16RegularFont);
+EpdFont notonaskharabic18RegularFont(&notonaskharabic_18_regular);
+EpdFontFamily notonaskharabic18FontFamily(&notonaskharabic18RegularFont);
+EpdFont notosansarabic8RegularFont(&notosansarabic_8_regular);
+EpdFontFamily notosansarabic8FontFamily(&notosansarabic8RegularFont);
+EpdFont notosansarabic10RegularFont(&notosansarabic_10_regular);
+EpdFontFamily notosansarabic10FontFamily(&notosansarabic10RegularFont);
+EpdFont notosansarabic12RegularFont(&notosansarabic_12_regular);
+EpdFontFamily notosansarabic12FontFamily(&notosansarabic12RegularFont);
+
+// Arabic reading-text font family (Noto Naskh Arabic, OFL-licensed), bundled at the
+// same four reading sizes as the Latin fonts above (12/14/16/18pt = Small/Medium/
+// Large/X-Large) so Arabic body text can match the user's chosen size independently
+// of the Latin reading font. Other families were trimmed from flash to keep OTA
+// images small; custom families can still be loaded from the SD card (Settings ->
+// Reader -> Arabic Font). See ArabicFontSystem.cpp for family/size -> font ID
+// resolution.
+
+// KFGQPC Uthmanic Hafs (King Fahd Complex; use/copy/distribute permitted,
+// modification not permitted -- see conversion note in
+// lib/EpdFont/builtinFonts/source/UthmanicHafs/): the Madinah Mushaf's own
+// typeface, Hafs 'an 'Asim riwayah -- the built-in Quranic reading family (see
+// QuranBook.h). Four reading sizes, plus 11pt for the Quran's Mushaf Page size.
+EpdFont uthmanichafs11RegularFont(&uthmanichafs_11_regular);
+EpdFontFamily uthmanichafs11FontFamily(&uthmanichafs11RegularFont);
+EpdFont uthmanichafs16RegularFont(&uthmanichafs_16_regular);
+EpdFontFamily uthmanichafs16FontFamily(&uthmanichafs16RegularFont);
+EpdFont uthmanichafs18RegularFont(&uthmanichafs_18_regular);
+EpdFontFamily uthmanichafs18FontFamily(&uthmanichafs18RegularFont);
+EpdFont uthmanichafs22RegularFont(&uthmanichafs_22_regular);
+EpdFontFamily uthmanichafs22FontFamily(&uthmanichafs22RegularFont);
+EpdFont uthmanichafs26RegularFont(&uthmanichafs_26_regular);
+EpdFontFamily uthmanichafs26FontFamily(&uthmanichafs26RegularFont);
+
+// Tajawal (Boutros International, OFL-licensed, from Google Fonts): a modern
+// geometric-sans reading option, alongside the two traditional book-printing
+// styles above. Same four reading sizes as Naskh/UthmanicHafs, plus 8/10pt so
+// it can also serve as the Arabic UI-chrome font (see applyArabicMappings) --
+// 12pt is shared with the reading tier, so only 8/10 need their own objects.
+EpdFont tajawal8RegularFont(&tajawal_8_regular);
+EpdFontFamily tajawal8FontFamily(&tajawal8RegularFont);
+EpdFont tajawal10RegularFont(&tajawal_10_regular);
+EpdFontFamily tajawal10FontFamily(&tajawal10RegularFont);
+EpdFont tajawal12RegularFont(&tajawal_12_regular);
+EpdFontFamily tajawal12FontFamily(&tajawal12RegularFont);
+EpdFont tajawal14RegularFont(&tajawal_14_regular);
+EpdFontFamily tajawal14FontFamily(&tajawal14RegularFont);
+EpdFont tajawal16RegularFont(&tajawal_16_regular);
+EpdFontFamily tajawal16FontFamily(&tajawal16RegularFont);
+EpdFont tajawal18RegularFont(&tajawal_18_regular);
+EpdFontFamily tajawal18FontFamily(&tajawal18RegularFont);
+
+// Quran Common (same King Fahd Complex-adjacent provenance as UthmanicHafs above --
+// see lib/EpdFont/builtinFonts/source/QuranCommon/): a tiny 1-glyph dedicated font
+// carrying the real Bismillah ligature (U+FDFD), which UthmanicHafs itself lacks.
+// Routed to via GfxRenderer::setBismillahFontId, not the general Arabic font map --
+// see the Bismillah marker branch in GfxRenderer.cpp. Single fixed 18pt size, not
+// one per reading tier: the glyph is a whole vocalized phrase baked into one wide
+// glyph (241px at 18pt), and EpdGlyph::width is a uint8_t (255px cap) -- any size
+// above ~18pt pushes the glyph past that ceiling. 18pt is the largest safe size, so
+// it's used for every Arabic Font Size setting.
+EpdFont quranCommon18RegularFont(&quran_common_18_regular);
+EpdFontFamily quranCommon18FontFamily(&quranCommon18RegularFont);
+
+// Surah banner (same King Fahd Complex-adjacent provenance -- see
+// lib/EpdFont/builtinFonts/source/SurahNameV4/): 114 calligraphic surah-name
+// glyphs baked from surah-name-v4.ttf via fontconvert.py's --glyph-map (this font
+// has no cmap entries at all -- see the NOTICE.md there and
+// tools/quran/gen_surah_banner_glyphmap.py). Routed to via
+// GfxRenderer::parseSurahBannerMarker, not the general Arabic font map. Single
+// fixed 24pt size, not one per reading tier -- this is a once-per-surah chrome
+// element, not line-by-line reading text.
+EpdFont surahBanner24RegularFont(&surah_banner_24_regular);
+EpdFontFamily surahBanner24FontFamily(&surahBanner24RegularFont);
 
 // measurement of power button press duration calibration value
 unsigned long t1 = 0;
@@ -117,14 +237,29 @@ RTC_NOINIT_ATTR uint32_t silentRebootTarget;
 constexpr uint32_t SILENT_REBOOT_MAGIC = 0xC1EAB007;
 constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
+constexpr uint32_t SILENT_REBOOT_TARGET_OTA_INSTALL = 2;
+constexpr uint32_t SILENT_REBOOT_TARGET_OTA_CHECK = 3;
+constexpr uint32_t SILENT_REBOOT_TARGET_FILE_TRANSFER = 4;
+constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 5;
+constexpr uint32_t SILENT_REBOOT_TARGET_NEWS = 6;
+constexpr uint32_t SILENT_REBOOT_TARGET_PRAYER = 7;
+constexpr uint32_t SILENT_REBOOT_TARGET_NEWS_FULLTEXT = 8;
+constexpr uint32_t SILENT_REBOOT_TARGET_DICTIONARY = 9;
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_DICTIONARY;
+// Must always name the highest target above. The boot-time range check below uses it
+// to reject uninitialised RTC memory on a cold boot, and a target outside the range
+// is silently treated as 0 -- which is HOME. Adding a target without moving this
+// makes the new one reboot to the home screen instead, with nothing logged -- which
+// has shipped once already. Targets only live across a single reboot, so they can be
+// renumbered freely.
 
 // How the device is coming back to life, resolved once at boot. Both resume
 // flows suppress the splash and leave the panel holding its pre-boot frame; a
 // plain boot shows the splash. See setup() for the resolution.
 enum class BootResume : uint8_t {
-  Splash,       // cold boot, flash, panic, or plain reboot
-  Silent,       // heap-defrag ESP.restart() (RTC flag; lost on power loss)
-  QuickResume,  // wake from a quick-resume deep sleep (SD flag; survives power loss)
+  Splash,          // cold boot, flash, panic, or plain reboot
+  Silent,          // heap-defrag ESP.restart() (RTC flag; lost on power loss)
+  SplashlessWake,  // wake from deep sleep with the splash suppressed by the SD flag
 };
 
 // Latched true once enterDeepSleep() commits to sleeping, before it tears down
@@ -135,8 +270,29 @@ enum class BootResume : uint8_t {
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
 
+// Set once in setup() from the RTC silent-reboot magic; see SilentRestart.h.
+static bool gBootWasSilentRestart = false;
+bool bootWasSilentRestart() { return gBootWasSilentRestart; }
+
+#if FREEINK_CAP_TOUCH
+static bool finishWifiSessionWithoutRestart() {
+  if (!BoardConfig::hasTouch()) return false;
+
+  // A software reset does not cycle externally powered touch/frontlight rails.
+  // Shut down the network stack in place so those peripherals retain state.
+  HalClock::stopSntp();
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+  LOG_DBG("MAIN", "WiFi stopped without restart on touch device");
+  return true;
+}
+#endif
+
 void silentRestart() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+#if FREEINK_CAP_TOUCH
+  if (finishWifiSessionWithoutRestart()) return;
+#endif
   silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=home)");
@@ -151,9 +307,96 @@ void silentRestart() {
 
 void silentRestartToReader() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+#if FREEINK_CAP_TOUCH
+  if (finishWifiSessionWithoutRestart()) return;
+#endif
   silentRebootTarget = SILENT_REBOOT_TARGET_READER;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=reader)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToOtaInstall() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_OTA_INSTALL;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=ota_install)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToOtaCheck() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_OTA_CHECK;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=ota_check)");
+  // Names the operation rather than showing the generic "Loading" popup: this frame is
+  // what the panel retains for the whole reboot + WiFi + GitHub TLS wait, which is by
+  // far the longest of the silent-restart targets. "Loading" for that long reads as a
+  // hang; "Checking for update..." reads as progress.
+  GUI.drawPopup(renderer, tr(STR_CHECKING_UPDATE));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToFileTransfer() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_FILE_TRANSFER;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=file_transfer)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToNews() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_NEWS;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=news)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToNewsFullText() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_NEWS_FULLTEXT;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=news_fulltext)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToPrayer() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_PRAYER;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=prayer)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToSettings() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_SETTINGS;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=settings)");
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToDictionary() {
+  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  silentRebootTarget = SILENT_REBOOT_TARGET_DICTIONARY;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=dictionary)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
@@ -237,12 +480,15 @@ static bool loadSleepFrameBuffer() {
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+  APP_STATE.lastSleepImagePath = activityManager.wakeResumePath();
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&
        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
-  APP_STATE.showBootScreen = !isQuickResumeSleep;
+  // Every sleep mode leaves a complete retained frame on the e-ink panel. Keep
+  // it visible until the first useful reader or home paint replaces it.
+  APP_STATE.showBootScreen = false;
 
   APP_STATE.saveToFile();
 
@@ -253,13 +499,30 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   if (isQuickResumeSleep) {
     saveSleepFrameBuffer();
+  } else if (Storage.exists(SLEEP_FRAME_FILE)) {
+    // A stale Quick Resume frame must not replace the selected sleep screen during wake.
+    Storage.remove(SLEEP_FRAME_FILE);
   }
 
   // Tear down WiFi so the modem power domain isn't held alive across deep sleep.
   // Wake from deep sleep is effectively a chip reset, so no state needs to survive.
   if (WiFi.getMode() != WIFI_MODE_NULL) {
+    // This backstop firing means some activity's onExit() didn't disconnect WiFi
+    // itself -- worth a permanent record since that's exactly the kind of leak a
+    // "battery drains fast" report can't otherwise be traced to off-device.
+    char wifiBuf[96];
+    snprintf(wifiBuf, sizeof(wifiBuf), "%lu WiFi still on at sleep entry (mode=%d) -- backstop disconnect", millis(),
+             static_cast<int>(WiFi.getMode()));
+    BatteryDiagLog::append(wifiBuf);
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
+  }
+
+  {
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%lu entering deep sleep battery=%u%% fromTimeout=%d", millis(),
+             powerManager.getBatteryPercentage(), fromTimeout);
+    BatteryDiagLog::append(buf);
   }
 
   halTiltSensor.deepSleep();
@@ -269,7 +532,26 @@ void enterDeepSleep(bool fromTimeout = false) {
   powerManager.startDeepSleep(gpio);
 }
 
-void setupDisplayAndFonts(bool seamless = false) {
+// uiOnlyFonts: skip the SD-card reading-font discovery and the Quran self-heal, keeping
+// only what firmware UI needs to paint. For boot paths whose target activity can never
+// show book text and always ends in another reboot (the OTA screens) -- see setup()'s
+// otaBoot. Everything skipped here is reachable on demand later (ensureLoaded /
+// ensureExtracted), so this is a latency trade, not a functional one.
+// splash: show the boot screen once the built-in fonts are in, and step its bar.
+void setupDisplayAndFonts(bool seamless = false, bool uiOnlyFonts = false, bool splash = false) {
+#if !FREEINK_MCU_C3
+  // C3 resolves its controller in HalGPIO::begin() before SPI claims the
+  // display pins. X4 Pro skips that C3-only path, so probe here before
+  // display.begin() selects and initializes its panel driver.
+  static bool controllerResolved = false;
+  if (!controllerResolved) {
+    controllerResolved = true;
+    if (freeink::applyXteinkDisplayController()) {
+      LOG_DBG("MAIN", "Panel controller: UltraChip UC81xx variant detected");
+    }
+  }
+#endif
+
   display.begin(seamless);
   renderer.begin();
   activityManager.begin();
@@ -281,28 +563,85 @@ void setupDisplayAndFonts(bool seamless = false) {
   }
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
-  renderer.insertFont(NOTOSERIF_14_FONT_ID, notoserif14FontFamily);
+  renderer.insertFont(LEXENDDECA_14_FONT_ID, lexenddeca14FontFamily);
 #ifndef OMIT_FONTS
-  renderer.insertFont(NOTOSERIF_12_FONT_ID, notoserif12FontFamily);
-  renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif16FontFamily);
-  renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif18FontFamily);
+  renderer.insertFont(TASBIH_32_FONT_ID, tasbih32FontFamily);
+  renderer.insertFont(STOPWATCH_32_FONT_ID, stopwatch32FontFamily);
+  renderer.insertFont(KIDSLATIN_96_FONT_ID, kidsLatin96FontFamily);
+  renderer.insertFont(KIDSLATIN_72_FONT_ID, kidsLatin72FontFamily);
+  renderer.insertFont(KIDSARABIC_88_FONT_ID, kidsArabic88FontFamily);
+  renderer.insertFont(KIDSLATIN_48_FONT_ID, kidsLatin48FontFamily);
+  renderer.insertFont(KIDSARABIC_48_FONT_ID, kidsArabic48FontFamily);
+  renderer.insertFont(KIDSLATIN_32_FONT_ID, kidsLatin32FontFamily);
+  renderer.insertFont(KIDSARABIC_32_FONT_ID, kidsArabic32FontFamily);
+  renderer.insertFont(LEXENDDECA_12_FONT_ID, lexenddeca12FontFamily);
+  renderer.insertFont(LEXENDDECA_16_FONT_ID, lexenddeca16FontFamily);
+  renderer.insertFont(LEXENDDECA_18_FONT_ID, lexenddeca18FontFamily);
 
-  renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
-  renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
-  renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
-  renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
 #endif  // OMIT_FONTS
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  renderer.insertFont(NOTOSANSARABIC_8_FONT_ID, notosansarabic8FontFamily);
+  renderer.insertFont(NOTOSANSARABIC_10_FONT_ID, notosansarabic10FontFamily);
+  renderer.insertFont(NOTOSANSARABIC_12_FONT_ID, notosansarabic12FontFamily);
+  renderer.insertFont(NOTONASKHARABIC_12_FONT_ID, notonaskharabic12FontFamily);
+  renderer.insertFont(NOTONASKHARABIC_14_FONT_ID, notonaskharabic14FontFamily);
+  renderer.insertFont(NOTONASKHARABIC_16_FONT_ID, notonaskharabic16FontFamily);
+  renderer.insertFont(NOTONASKHARABIC_18_FONT_ID, notonaskharabic18FontFamily);
+  renderer.insertFont(UTHMANICHAFS_11_FONT_ID, uthmanichafs11FontFamily);
+  renderer.insertFont(UTHMANICHAFS_16_FONT_ID, uthmanichafs16FontFamily);
+  renderer.insertFont(UTHMANICHAFS_18_FONT_ID, uthmanichafs18FontFamily);
+  renderer.insertFont(UTHMANICHAFS_22_FONT_ID, uthmanichafs22FontFamily);
+  renderer.insertFont(UTHMANICHAFS_26_FONT_ID, uthmanichafs26FontFamily);
+  renderer.insertFont(TAJAWAL_8_FONT_ID, tajawal8FontFamily);
+  renderer.insertFont(TAJAWAL_10_FONT_ID, tajawal10FontFamily);
+  renderer.insertFont(TAJAWAL_12_FONT_ID, tajawal12FontFamily);
+  renderer.insertFont(TAJAWAL_14_FONT_ID, tajawal14FontFamily);
+  renderer.insertFont(TAJAWAL_16_FONT_ID, tajawal16FontFamily);
+  renderer.insertFont(TAJAWAL_18_FONT_ID, tajawal18FontFamily);
+  renderer.insertFont(QURANCOMMON_18_FONT_ID, quranCommon18FontFamily);
+  renderer.insertFont(SURAHBANNER_24_FONT_ID, surahBanner24FontFamily);
+
+  if (uiOnlyFonts) {
+    // Two SD directory walks (Latin + Arabic font roots) and a Quran integrity check
+    // stand between the reboot and the first OTA paint, for fonts that screen cannot
+    // draw. Arabic UI text still needs its mappings, so that much is kept.
+    arabicFontSystem.beginUiOnly(renderer);
+    LOG_DBG("MAIN", "UI-only font setup (SD font discovery and Quran self-heal skipped)");
+    return;
+  }
+
+  // The boot screen goes up before the slow SD work below so its bar can track it.
+  // Built-in fonts are all in by now; the Arabic UI mappings cover an Arabic
+  // interface's "Booting" label until arabicFontSystem.begin() redoes them.
+  if (splash) {
+    arabicFontSystem.beginUiOnly(renderer);
+    activityManager.goToBoot();
+  }
 
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);
+  arabicFontSystem.begin(renderer);
+  if (splash) BootActivity::showProgress(renderer, 2, 3);
+
+  // Self-heal the extracted Quran (and its default-font sidecar) at boot for
+  // devices where the toggle is already on -- covers SD swaps, torn writes,
+  // and firmware upgrades that changed the embedded copy or sidecar format.
+  if (MIDAD_APP_SETTINGS.quranEnabled) {
+    QuranBook::ensureExtracted();
+  }
+  // Full while Home or the last book opens behind it.
+  if (splash) BootActivity::showProgress(renderer, 3, 3);
 
   LOG_DBG("MAIN", "Fonts setup");
 }
 
 void setup() {
+#ifndef SIMULATOR
+  BoardConfig::holdPowerRails();
+#endif
+
   t1 = millis();
 
 #ifdef ENABLE_SERIAL_LOG
@@ -313,30 +652,81 @@ void setup() {
   // worked without the delay because USB was already enumerated.
   delay(250);
   Serial.begin(115200);
+#if LOG_SERIAL_HAS_TX_TIMEOUT
   logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
+#endif
 #endif
 
   HalSystem::begin();
+  // checkPanic() clears the watchdog capture marker after a successful SD
+  // dump, so retain the boot classification for the later activity route.
+  const bool rebootedFromPanic = HalSystem::isRebootFromPanic();
+
+  // Flash-persisted signal (otadata), not a one-boot event -- see
+  // OtaRollbackDetection.h. Captured here, unconditionally, so it's available
+  // before the routing chain below decides whether to act on it.
+  std::string lastInvalidOtaDigestHex;
+  const bool hasLastInvalidOtaPartition = captureLastInvalidOtaPartitionDigest(lastInvalidOtaDigestHex);
 
   // Read-and-clear so a panic later in setup() doesn't loop into silent reboot.
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t snapshotTarget =
-      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_READER) ? silentRebootTarget : 0;
+      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_MAX) ? silentRebootTarget : 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
+  gBootWasSilentRestart = isSilentReboot;
 
   gpio.begin();
   powerManager.begin();
   halTiltSensor.begin();
   halClock.begin();
 
+  // First of two USB samples (second below, before display bring-up): the SOF
+  // verdict needs two samples a frame apart, and it must be settled before the
+  // first refresh — the boot paint's light-sleep slices would otherwise kill a
+  // live CDC link whenever the charge-based check reads false (full battery,
+  // data-only cable). See HalGPIO::pollUsbState().
+  gpio.pollUsbState();
+
+  // Light-sleep through the render task's e-ink BUSY wait (0.3-2 s of pure pin
+  // polling) in short slices, waking exactly on the BUSY pin's completion level
+  // (falls back to plain polling when WiFi/USB blocks light sleep)
+  display.setBusyWaitSliceHook(
+      [](int8_t busyPin, uint8_t busyLevel) { return powerManager.onEinkBusyWaitSlice(busyPin, busyLevel); });
+
+  const auto wakeupReason = gpio.getWakeupReason();
+
+  // Latch the recovery chord before SD and settings I/O. X4 Pro uses a plain
+  // digital button with 5 ms debounce; other Xteink inputs retain their legacy
+  // settling window. BTN_DOWN avoids the X4 Pro's GPIO0 boot-strap pin.
+  bool recoveryFirmwareMode = false;
+  if (wakeupReason == HalGPIO::WakeupReason::PowerButton) {
+    const unsigned long settleMs = BoardConfig::isX4Pro() ? X4PRO_RECOVERY_SETTLE_MS : DEFAULT_RECOVERY_SETTLE_MS;
+    const unsigned long settleStart = millis();
+    while (millis() - settleStart < settleMs) {
+      gpio.update();
+      delay(10);
+    }
+
+    const uint8_t recoveryButton = BoardConfig::isX4Pro() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP;
+    if (gpio.isPressed(recoveryButton)) {
+      recoveryFirmwareMode = true;
+      LOG_INF("MAIN", "Recovery firmware mode (%s + POWER held at boot)", BoardConfig::isX4Pro() ? "DOWN" : "UP");
+    }
+  }
+
+#if FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
+#else
+  LOG_INF("MAIN", "Device: %s", BoardConfig::ACTIVE.name);
+#endif
 
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
   if (!Storage.begin()) {
     LOG_ERR("MAIN", "SD card initialization failed");
+    gpio.pollUsbState();  // settle the USB verdict before the error paint (see above)
     setupDisplayAndFonts(isSilentReboot);
     activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
     return;
@@ -345,26 +735,43 @@ void setup() {
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
+  MIDAD_APP_SETTINGS.loadFromFile();
   APP_STATE.loadFromFile();
   RECENT_BOOKS.loadFromFile();
+  GAME_SCORES.loadFromFile();
+  TASBIH.loadFromFile();
+  NEWS_FEEDS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
-  OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 
-  const auto wakeupReason = gpio.getWakeupReason();
+  // Brightness and warmth are always restored. A normal wake starts with the
+  // light off unless Restore Light on Wake is enabled; silent maintenance
+  // reboots preserve the live state so they do not unexpectedly go dark.
+  const bool restoreLightOn = SETTINGS.frontlightOn != 0 && (SETTINGS.frontlightRestoreOnWake != 0 || isSilentReboot);
+  Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
+
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration");
-      gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
-                                   SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
+      if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
+                                        SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
+        powerManager.startDeepSleep(gpio);
+      }
+      wakePowerReleasePending = true;
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
       // If USB power caused a cold boot, go back to sleep
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
+#if FREEINK_DEVICE_PAPERMONO
+      // There is no armable GPIO wake because the button is behind the PMIC.
+      // Sleeping here would strand the device in a USB-replug boot loop.
+      break;
+#else
       powerManager.startDeepSleep(gpio);
       break;
+#endif
     case HalGPIO::WakeupReason::AfterFlash:
       // After flashing, just proceed to boot
     case HalGPIO::WakeupReason::Other:
@@ -372,90 +779,186 @@ void setup() {
       break;
   }
 
-  // Recovery firmware mode: hold left side button (BTN_UP) together with the power button at
-  // boot to skip directly to the SD-card firmware update screen. Useful on devices where USB
-  // flashing has been locked down (e.g. recent X3 firmware).
-  bool recoveryFirmwareMode = false;
-  if (wakeupReason == HalGPIO::WakeupReason::PowerButton) {
-    // Refresh the cached button state a few times — isPressed() needs ~half a second to settle
-    // after boot per the HalGPIO contract. Use a millis-based deadline so we always wait the full
-    // settle window even if the loop body takes longer than expected on slow boots.
-    const unsigned long settleStart = millis();
-    while (millis() - settleStart < 500) {
-      gpio.update();
-      delay(10);
-    }
-    if (gpio.isPressed(HalGPIO::BTN_UP)) {
-      recoveryFirmwareMode = true;
-      LOG_INF("MAIN", "Recovery firmware mode (UP + POWER held at boot)");
-    }
-  }
-
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
+  {
+    // Record what the loaded auto-sleep timeout actually resolves to -- separates "the
+    // saved setting is wrong" from "the setting is right but something keeps resetting
+    // the inactivity timer" for a user reporting auto-sleep never triggers.
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%lu boot sleepTimeoutMinutes=%u sleepTimeoutMs=%lu", millis(),
+             (unsigned)SETTINGS.sleepTimeoutMinutes, SETTINGS.getSleepTimeoutMs());
+    SleepDiagLog::append(buf);
+  }
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
   // HalDisplay::begin), so the first paint is FAST_REFRESH (~500ms) over the
   // retained frame and input dispatches against a visible UI.
-  const BootResume resume = isSilentReboot              ? BootResume::Silent
-                            : !APP_STATE.showBootScreen ? BootResume::QuickResume
-                                                        : BootResume::Splash;
+  // Only a verified deep-sleep wake may use the one-shot persisted flag.
+  // Otherwise a stale flag could suppress the splash on a cold boot.
+  const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
+  const BootResume resume = isSilentReboot                             ? BootResume::Silent
+                            : isSleepWake && !APP_STATE.showBootScreen ? BootResume::SplashlessWake
+                                                                       : BootResume::Splash;
+  bool allowFastInitialReaderRefresh = false;
+  bool needsWakeRefresh = false;
 
-  setupDisplayAndFonts(resume != BootResume::Splash);
+  // Second USB sample (first one right after powerManager.begin()): settles the
+  // SOF host-link verdict before the first refresh can slice-sleep.
+  gpio.pollUsbState();
+
+  // The OTA boot targets only ever paint the update screen and then restart again --
+  // every exit path out of OtaUpdateActivity ends in a reboot (success restarts into
+  // the new firmware, back-out goes through onExit's silentRestart) -- so no reader
+  // font loaded on this boot could ever be used. Skip that work to shorten the wait
+  // between pressing "Check for updates" and the first OTA paint. Guarded on the two
+  // routing conditions checked ahead of the OTA branch below, so a panic reboot or a
+  // recovery-mode boot that happens to carry an OTA target still gets full fonts.
+  const bool otaBoot =
+      resume == BootResume::Silent && !recoveryFirmwareMode && !HalSystem::isRebootFromPanic() &&
+      (snapshotTarget == SILENT_REBOOT_TARGET_OTA_CHECK || snapshotTarget == SILENT_REBOOT_TARGET_OTA_INSTALL);
+
+  setupDisplayAndFonts(resume != BootResume::Splash, otaBoot, resume == BootResume::Splash);
+
+#ifdef TLS_HEAP_MEASURE_HARNESS
+  // Debug-only entry point (default_tls_measure env, see platformio.ini):
+  // this build exists only to run the TLS heap measurement harness, so it
+  // bypasses the normal home/reader/OTA routing below entirely.
+  activityManager.replaceActivity(std::make_unique<TlsHeapMeasureActivity>(renderer, mappedInputManager));
+  activityManager.requestUpdateAndWait();
+  return;
+#endif
 
   switch (resume) {
     case BootResume::Silent:
       // Splash skipped: the routing block below picks the target activity; the
       // panel keeps showing the pre-reboot popup until that first paint lands.
       break;
-    case BootResume::QuickResume:
-      // One-shot flag: re-arm the splash for the next non-quick-resume boot. Save
+    case BootResume::SplashlessWake:
+      // One-shot flag: re-arm the splash for the next ordinary boot. Save
       // before any painting so a hang in the blocking paint path can't strand
-      // us in a quick-resume-with-no-frame loop on the next boot.
+      // us in a splashless-with-no-frame loop on the next boot.
       APP_STATE.showBootScreen = true;
       APP_STATE.saveToFile();
-      if (loadSleepFrameBuffer()) {
-        // Frame restored: swap the sleep moon for the loading icon.
+      if (Storage.exists(SLEEP_FRAME_FILE) && loadSleepFrameBuffer()) {
+        const bool useDifferentialRefresh = gpio.deviceIsX3();
+        if (useDifferentialRefresh) {
+          // begin() clears the X3 controller RAM, so restore the saved frame as
+          // the baseline before replacing the moon with the loading icon.
+          renderer.cleanupGrayscaleWithFrameBuffer();
+        }
+
         const auto pageHeight = renderer.getScreenHeight();
         renderer.drawImage(LoadingIcon, 0, pageHeight - LOADINGICON_HEIGHT, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (useDifferentialRefresh) {
+          renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+          allowFastInitialReaderRefresh = true;
+        } else {
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        }
       } else {
-        activityManager.goToBoot();  // frame file missing, fall back to the splash
+        // The first Home/Reader paint is followed by an explicit clean refresh
+        // because the panel still physically shows the sleep image.
+        needsWakeRefresh = true;
       }
       break;
     case BootResume::Splash:
-      activityManager.goToBoot();
-      break;
+      break;  // shown by setupDisplayAndFonts
+  }
+
+  // Output polarity is resolved per render by ActivityManager (night mode
+  // inverts only the reading surfaces), so nothing to restore here.
+
+  // One-shot, whichever branch below runs: a wake that skips the image (Back held,
+  // a silent reboot) must not leave it to reopen on some later power-on. Cleared
+  // before opening, too, so an image that crashes the viewer can't loop the boot.
+  std::string sleepImagePath;
+  if (!APP_STATE.lastSleepImagePath.empty()) {
+    sleepImagePath.swap(APP_STATE.lastSleepImagePath);
+    APP_STATE.saveToFile();
   }
 
   if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(
         std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInputManager, /*recoveryMode=*/true));
-  } else if (HalSystem::isRebootFromPanic()) {
+  } else if (rebootedFromPanic) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
+  } else if (resume == BootResume::Silent &&
+             (snapshotTarget == SILENT_REBOOT_TARGET_OTA_INSTALL || snapshotTarget == SILENT_REBOOT_TARGET_OTA_CHECK)) {
+    // Land straight back in the OTA screen on this freshly-booted (unfragmented)
+    // heap: OTA_CHECK is the flow's entry point (Home/Settings reboot before even
+    // checking), OTA_INSTALL means the user already confirmed the update before
+    // the reboot, so auto-install is armed -- see silentRestartToOtaCheck() /
+    // silentRestartToOtaInstall().
+    //
+    // Gated on OtaRollbackRecoveryPlan: if the bootloader has ever rolled back to
+    // an OTA slot the user hasn't explicitly acknowledged, this specific entry
+    // point is blocked in favor of OtaRollbackRecoveryActivity -- see
+    // OtaRollbackRecoveryPlan.h. Every other branch in this chain is untouched.
+    if (hasLastInvalidOtaPartition &&
+        planOtaRollbackRecovery(hasLastInvalidOtaPartition,
+                                lastInvalidOtaDigestHex == APP_STATE.acknowledgedOtaRollbackDigestHex) ==
+            OtaRollbackRecoveryPlan::EnterRestrictedRecovery) {
+      activityManager.replaceActivity(
+          std::make_unique<OtaRollbackRecoveryActivity>(renderer, mappedInputManager, lastInvalidOtaDigestHex));
+    } else {
+      activityManager.replaceActivity(std::make_unique<OtaUpdateActivity>(
+          renderer, mappedInputManager, /*autoInstall=*/snapshotTarget == SILENT_REBOOT_TARGET_OTA_INSTALL));
+    }
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_FILE_TRANSFER) {
+    // Same fresh-heap treatment as OTA: the web server needs large contiguous
+    // allocations for the WiFi driver and TCP buffers, and a fragmented heap
+    // makes page loads crawl. Settings reboots here before starting it.
+    activityManager.goToFileTransfer();
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_NEWS_FULLTEXT) {
+    // The one News flow that needs more than the app itself: fetching an
+    // article page is Wi-Fi plus a TLS session plus a 440KB stream, and run on
+    // top of the list and the reader it had ~49KB to work with and aborted
+    // out of heap mid-request. Starting it here gives it everything a boot
+    // has; it silent-restarts back to News (and to the article) when done.
+    activityManager.goToNewsFullText();
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_NEWS) {
+    // Fresh heap for News: WiFi, feed parsing and an article fetch stacked on one
+    // session's heap.
+    activityManager.goToNews();
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_PRAYER) {
+    // Return-to-caller: setting the clock is the one thing the prayer app
+    // needs a network for, and it is reached from that app -- landing on Home
+    // afterwards would leave the user to walk back to it to see the times
+    // they had just made possible.
+    activityManager.goToPrayer();
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
+    // Return-to-caller: the font download store reboots here instead of Home.
+    activityManager.goToSettings();
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_DICTIONARY) {
+    // Return-to-caller: the dictionary download store reboots here instead of Home.
+    activityManager.goToDictionary();
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
+  } else if (!sleepImagePath.empty() && !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+    // Slept while viewing an image: reopen it.
+    activityManager.goToReader(std::move(sleepImagePath), allowFastInitialReaderRefresh);
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
     // crashed (indicated by readerActivityLoadCount > 0)
-    activityManager.goHome();
+    activityManager.goHome(HomeMenuItem::NONE, needsWakeRefresh);
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
     const auto path = APP_STATE.openEpubPath;
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
-    activityManager.goToReader(path);
+    activityManager.goToReader(path, allowFastInitialReaderRefresh);
   }
 
   if (resume == BootResume::Silent) {
@@ -475,20 +978,50 @@ void setup() {
     gpio.update();
   }
 
-  // Ensure we're not still holding the power button before leaving setup
-  waitForPowerRelease();
   allowSleepAt = millis() + 2000;
+}
+
+// delay() counts ticks, and the tick stops while onEinkBusyWaitSlice() light-sleeps
+// the chip (millis() is RTC-corrected on wake; the tick is not). A delay(10) mid-refresh
+// would stretch to ~210 ms and starve button sampling. millis() stays honest.
+static void delayWallClock(const unsigned long ms) {
+  const unsigned long deadline = millis() + ms;
+  while (static_cast<long>(millis() - deadline) < 0) {
+    vTaskDelay(1);
+  }
 }
 
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
+  unsigned long lastHeapSample = 0;
 
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
+#ifdef SIMULATOR
+  // The simulator's S key requests a simulated deep sleep (see the simulator
+  // library's HalGPIO); the firmware has to consume it -- exercises the real
+  // SleepActivity render path on the desktop.
+  if (gpio.consumeSimulatorSleepRequest()) {
+    enterDeepSleep();
+  }
+#endif
+
   renderer.setFadingFix(SETTINGS.fadingFix);
+  // Applied per tick like fadingFix, so flipping the toggle inverts the very
+  // next refresh -- including the settings screen itself.
+  renderer.setDarkMode(SETTINGS.darkModeEnabled != 0);
+
+  // Sampled every second and unconditionally -- the LOG_INF below is gated on a
+  // serial connection and a 10s interval, so on a device in someone's hands it never
+  // runs, which is exactly the device whose crash report needs the number.
+  if (millis() - lastHeapSample >= 1000) {
+    HalSystem::noteHeap(ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    lastHeapSample = millis();
+  }
 
   if (Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
@@ -503,22 +1036,94 @@ void loop() {
     if (line.startsWith("CMD:")) {
       String cmd = line.substring(4);
       cmd.trim();
+      bool handled = true;
       if (cmd == "SCREENSHOT") {
         const uint32_t bufferSize = display.getBufferSize();
         logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
+      } else if (cmd == "RESTART") {
+        // Lets a scripted USB test harness reboot the device to exercise boot-path
+        // behavior without physical access.
+        // ESP.restart() is normally reserved for recovery paths (see CLAUDE.md), but a
+        // serial debug command is an explicit operator request, same as the power
+        // button.
+        logSerial.printf("RESTART: rebooting now\n");
+        logSerial.flush();
+        ESP.restart();
+      } else {
+        handled = false;
       }
+      // Raw print, not LOG_*: debugging_monitor.py keys on this ack to report
+      // command success, so it must survive LOG_LEVEL=0 builds. Commands
+      // compiled out of this build report unknown.
+      logSerial.printf(handled ? "CMDACK:%s\n" : "CMDERR:unknown:%s\n", cmd.c_str());
     }
   }
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
+  const bool anyPressed = gpio.wasAnyPressed();
+  const bool anyReleased = gpio.wasAnyReleased();
+  const bool touchActivity = gpio.wasTouchActivity();
+  const bool tiltActivity = halTiltSensor.hadActivity();
+  const bool blockedByActivity = activityManager.preventAutoSleep();
+  if (anyPressed || anyReleased || touchActivity || tiltActivity || blockedByActivity) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
+
+    // A user report of "auto-sleep never triggers" is otherwise unreproducible off-device
+    // (no serial cable in hand) -- log which condition(s) actually kept resetting the
+    // timer, throttled so a stuck/noisy button doesn't spam the bounded log every loop.
+    static unsigned long lastSleepDiagLogMs = 0;
+    const unsigned long nowMs = millis();
+    if (nowMs - lastSleepDiagLogMs >= 3000) {
+      lastSleepDiagLogMs = nowMs;
+      char buf[160];
+      snprintf(buf, sizeof(buf), "%lu pressed=%d released=%d touch=%d tilt=%d activityBlock=%d activity=%s", nowMs,
+               anyPressed, anyReleased, touchActivity, tiltActivity, blockedByActivity,
+               blockedByActivity ? activityManager.currentActivityDebugName() : "-");
+      SleepDiagLog::append(buf);
+    }
+  }
+
+  // Periodic battery/WiFi/CPU-frequency breadcrumb, independent of the sleep-diag
+  // block above (which only fires on activity) -- a "battery drains fast" report has
+  // no serial cable to show us whether the radio was left on or the CPU stuck at full
+  // frequency; sampled every 5 minutes so a long session doesn't crowd out other
+  // subsystems' entries in the shared debug log (DebugLog::MAX_LINES) in minutes.
+  {
+    static unsigned long lastBatteryDiagLogMs = 0;
+    const unsigned long nowMs = millis();
+    if (nowMs - lastBatteryDiagLogMs >= 300000) {
+      lastBatteryDiagLogMs = nowMs;
+      char buf[160];
+      snprintf(buf, sizeof(buf), "%lu battery=%u%% wifiMode=%d wifiStatus=%d powerSaving=%d activity=%s", nowMs,
+               powerManager.getBatteryPercentage(), static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
+               millis() - lastActivityTime >= HalPowerManager::IDLE_DOWNCLOCK_MS,
+               activityManager.currentActivityDebugName());
+      BatteryDiagLog::append(buf);
+    }
+  }
+
+  // Same cadence/rationale as the battery breadcrumb above, for the main loop task's own
+  // stack margin -- see StackDiagLog.h.
+  {
+    static unsigned long lastStackDiagLogMs = 0;
+    const unsigned long nowMs = millis();
+    if (nowMs - lastStackDiagLogMs >= 300000) {
+      lastStackDiagLogMs = nowMs;
+      StackDiagLog::append("main", uxTaskGetStackHighWaterMark(nullptr));
+    }
+  }
+
+  // Let wake continue as soon as its hold has been verified. The release can
+  // arrive after setup, so consume that one input frame rather than making it
+  // a page turn, refresh, or other short power-button action.
+  if (wakePowerReleasePending && !gpio.isPressed(HalGPIO::BTN_POWER)) {
+    wakePowerReleasePending = false;
+    return;
   }
 
   static bool screenshotButtonsReleased = true;
@@ -545,6 +1150,12 @@ void loop() {
     screenshotComboActive = false;
   }
 
+  // Drive X4 Pro's power-button gesture for this frame: a short click is
+  // deferred until the frontlight double-click window resolves, so a
+  // configured short-power action (below) never fires ahead of a second
+  // click that should instead toggle the frontlight. No-op on other boards.
+  mappedInputManager.updateX4ProPowerGesture();
+
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
   if (sleepTimeoutMs > 0 && millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
@@ -553,7 +1164,13 @@ void loop() {
     return;
   }
 
-  if (millis() >= allowSleepAt && gpio.isPressed(HalGPIO::BTN_POWER) &&
+  // A hold that woke the device must be released before it can count as a new
+  // in-app long press. Otherwise a user who keeps holding after wake would put
+  // the device straight back to sleep once allowSleepAt expires.
+  static bool powerReleasedSinceWake = false;
+  if (!gpio.isPressed(HalGPIO::BTN_POWER)) powerReleasedSinceWake = true;
+
+  if (powerReleasedSinceWake && millis() >= allowSleepAt && gpio.isPressed(HalGPIO::BTN_POWER) &&
       gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If the screenshot combination is potentially being pressed, don't sleep
     if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -564,12 +1181,26 @@ void loop() {
     return;
   }
 
+#if FREEINK_DEVICE_PAPERMONO
+  // Paper Mono reports the PMIC power button as a one-tick click, so the held
+  // path above cannot fire. With the default Ignore action, retain the normal
+  // power-button meaning and shut down; explicit alternate bindings still win.
+  if ((SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+       SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::IGNORE) &&
+      millis() >= allowSleepAt && mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
+    enterDeepSleep();
+    return;
+  }
+#endif
+
   // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
-      mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
+      mappedInputManager.wasShortPowerClick()) {
     LOG_DBG("MAIN", "Manual screen refresh triggered");
-    RenderLock lock;
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    if (!activityManager.handleForcedRefresh()) {
+      RenderLock lock;
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    }
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.
@@ -581,6 +1212,9 @@ void loop() {
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
+
+  // Body complete: releases the slice hook's yield (see onEinkBusyWaitSlice).
+  powerManager.noteMainLoopIteration();
 
   const unsigned long loopDuration = millis() - loopStartTime;
   if (loopDuration > maxLoopDuration) {
@@ -597,13 +1231,40 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
-      // If we've been inactive for a while, increase the delay to save power
-      powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-      delay(50);
+    const unsigned long idleMs = millis() - lastActivityTime;
+    if (idleMs >= HalPowerManager::IDLE_LIGHT_SLEEP_MS) {
+      // Idle: light-sleep between input polls instead of busy-delaying (same poll cadence).
+      // Race-to-sleep: run the brief wake windows at normal clock, not LOW_POWER_FREQ.
+      // The board's sleep-floor current is paid per-millisecond regardless of CPU
+      // speed, so finishing the per-wake work ~16x faster and returning to sleep
+      // costs less charge than stretching the window at 10 MHz (measured at 10 MHz:
+      // 8.8 mA for 4.5 ms per wake). The downclock below only serves the pre-sleep
+      // 100 Hz delay-poll phase. The lightSleep()-rejected fallback delay() then
+      // also runs at normal clock, but that only happens when USB (externally
+      // powered), WiFi, or a render Lock (full speed wanted anyway) is active.
+      powerManager.setPowerSaving(false);
+      if (gpio.isDebouncePending()) {
+        // A raw button-state change is mid-debounce: commitment needs a second
+        // matching sample, so poll again quickly instead of sleeping a slice —
+        // a tap shorter than the 50 ms cadence would otherwise land in a single
+        // sample and be dropped, and every press would commit a slice late.
+        delayWallClock(10);
+      } else if (!powerManager.lightSleep(gpio)) {
+        // Light sleep declined = a render Lock, USB, or WiFi is active — the
+        // chip is at full clock anyway, so poll at 100 Hz. A 50 ms cadence
+        // here dropped sub-slice power taps (a press needs two samples >=5 ms
+        // apart to commit), which made short-press sleep flaky during renders
+        // — exactly when a render Lock forces this fallback.
+        delayWallClock(10);
+      }
     } else {
-      // Short delay to prevent tight loop while still being responsive
-      delay(10);
+      // Response window after recent input: keep 100 Hz polling for snappy interaction,
+      // but downclock once rapid-input bursts have settled — renders re-raise the clock
+      // via HalPowerManager::Lock, so full speed only serves loop bookkeeping here
+      if (idleMs >= HalPowerManager::IDLE_DOWNCLOCK_MS) {
+        powerManager.setPowerSaving(true);
+      }
+      delayWallClock(10);
     }
   }
 }

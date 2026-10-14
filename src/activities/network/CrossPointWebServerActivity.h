@@ -20,7 +20,7 @@ enum class WebServerActivityState {
 /**
  * CrossPointWebServerActivity is the entry point for file transfer functionality.
  * It:
- * - First presents a choice between "Join a Network" (STA), "Connect to Calibre", and "Create Hotspot" (AP)
+ * - First presents a choice between "Join a Network" (STA) and "Create Hotspot" (AP)
  * - For STA mode: Launches WifiSelectionActivity to connect to an existing network
  * - For AP mode: Creates an Access Point that clients can connect to
  * - Starts the CrossPointWebServer when connected
@@ -69,4 +69,5 @@ class CrossPointWebServerActivity final : public Activity {
   void render(RenderLock&&) override;
   bool skipLoopDelay() override { return webServer && webServer->isRunning(); }
   bool preventAutoSleep() override { return webServer && webServer->isRunning(); }
+  const char* activityDebugName() const override { return "CrossPointWebServerActivity"; }
 };

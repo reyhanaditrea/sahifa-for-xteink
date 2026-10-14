@@ -1,5 +1,9 @@
 #pragma once
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
 #include <cstdint>
+#include <optional>
 #include <string>
 
 // Document matching method for KOReader sync
@@ -8,36 +12,54 @@ enum class DocumentMatchMethod : uint8_t {
   BINARY = 1,    // Match by partial MD5 of file content (more accurate, but files must be identical)
 };
 
+// A progress upload the reader couldn't deliver live (no reliable WiFi at
+// book-close -- reading never keeps the radio up), queued for the next time the device
+// happens to reconnect for some other reason. Fields mirror what
+// KOReaderSyncActivity::performUpload() sends, precomputed while the Epub was
+// still loaded so the flush itself needs no SD file access beyond this store.
+struct PendingKOReaderSync {
+  std::string documentHash;
+  std::string xpath;
+  float percentage = 0.0f;
+  uint16_t spineIndex = 0;
+  uint16_t pageNumber = 0;
+  uint16_t totalPages = 1;
+  std::optional<uint16_t> paragraphIndex;
+};
+
+// How manual "Sync Progress" resolves differences after fetching remote progress.
+enum class KOReaderSyncBehavior : uint8_t {
+  ASK_EVERY_TIME = 0,  // Preserve legacy behavior: always show Apply/Upload choices.
+  SMART = 1,           // Auto-resolve simple cases using furthest progress.
+};
+
 /**
  * Singleton class for storing KOReader sync credentials on the SD card.
  * Passwords are XOR-obfuscated with the device's unique hardware MAC address
  * and base64-encoded before writing to JSON (not cryptographically secure,
  * but prevents casual reading and ties credentials to the specific device).
  */
-class KOReaderCredentialStore {
+
+class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore> {
  private:
-  static KOReaderCredentialStore instance;
   std::string username;
   std::string password;
   std::string serverUrl;                                            // Custom sync server URL (empty = default)
   DocumentMatchMethod matchMethod = DocumentMatchMethod::FILENAME;  // Default to filename for compatibility
+  bool sendMetadata = false;                                        // Send document metadata with progress sync
+  KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;  // Default to Smart for new configs
+  std::optional<PendingKOReaderSync> pendingSync;                   // Queued upload awaiting a reconnect; see above
 
   // Private constructor for singleton
   KOReaderCredentialStore() = default;
+  ~KOReaderCredentialStore() = default;
 
-  bool loadFromBinaryFile();
+  friend class PersistableStore<KOReaderCredentialStore>;
 
  public:
-  // Delete copy constructor and assignment
-  KOReaderCredentialStore(const KOReaderCredentialStore&) = delete;
-  KOReaderCredentialStore& operator=(const KOReaderCredentialStore&) = delete;
-
-  // Get singleton instance
-  static KOReaderCredentialStore& getInstance() { return instance; }
-
-  // Save/load from SD card
-  bool saveToFile() const;
-  bool loadFromFile();
+  static const char* getFilePath() { return "/.crosspoint/koreader.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
 
   // Credential management
   void setCredentials(const std::string& user, const std::string& pass);
@@ -60,9 +82,27 @@ class KOReaderCredentialStore {
   // Get base URL for API calls (with http:// normalization if no protocol, falls back to default)
   std::string getBaseUrl() const;
 
+  // Whether API calls target the CrossPoint sync server that supports protocol extensions.
+  bool usesCrossPointSyncServer() const;
+
   // Document matching method
   void setMatchMethod(DocumentMatchMethod method);
   DocumentMatchMethod getMatchMethod() const { return matchMethod; }
+
+  // Send metadata setting
+  void setSendMetadata(bool enabled);
+  bool getSendMetadata() const { return sendMetadata; }
+
+  // Sync behavior
+  void setSyncBehavior(KOReaderSyncBehavior behavior);
+  KOReaderSyncBehavior getSyncBehavior() const { return syncBehavior; }
+
+  // Queued upload for the next reconnect (see PendingKOReaderSync above).
+  // Overwrites any previous queued upload -- only the latest position matters.
+  void setPendingSync(const PendingKOReaderSync& pending);
+  bool hasPendingSync() const { return pendingSync.has_value(); }
+  const std::optional<PendingKOReaderSync>& getPendingSync() const { return pendingSync; }
+  void clearPendingSync();
 };
 
 // Helper macro to access credential store

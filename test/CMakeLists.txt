@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(crosspoint_reader_tests CXX)
+project(crosspoint_reader_tests C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,17 @@ set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# Pinned to the same version platformio.ini's [env:default]/[env:sticky]/[env:slim]
+# lib_deps use (bblanchon/ArduinoJson @ 7.4.2) so host tests exercise identical
+# trimming/serialization behavior to the firmware build.
+FetchContent_Declare(
+  ArduinoJson
+  GIT_REPOSITORY https://github.com/bblanchon/ArduinoJson.git
+  GIT_TAG v7.4.2
+)
+set(ARDUINOJSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(ArduinoJson)
+
 set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 
 add_library(crosspoint_test_common INTERFACE)
@@ -29,17 +40,44 @@ target_include_directories(crosspoint_test_common INTERFACE
   ${REPO_ROOT}
   ${REPO_ROOT}/lib
 )
-target_compile_options(crosspoint_test_common INTERFACE
-  -Wall
-  -Wextra
-  -pedantic
-)
+# MSVC rejects the GCC/Clang spellings outright (D8021), so the Windows host
+# build gets the equivalent /W4 instead of no warnings at all.
+if(MSVC)
+  target_compile_options(crosspoint_test_common INTERFACE /W4)
+else()
+  target_compile_options(crosspoint_test_common INTERFACE
+    -Wall
+    -Wextra
+    -pedantic
+  )
+endif()
 
 enable_testing()
 include(GoogleTest)
 
+add_subdirectory(prayer_pure)
 add_subdirectory(streaming_json_parser)
 add_subdirectory(release_json_parser)
 add_subdirectory(differential_rounding)
 add_subdirectory(hyphenation_eval)
 add_subdirectory(utf8_compose)
+add_subdirectory(arabic_shaper)
+add_subdirectory(arabic_stem)
+add_subdirectory(stardict_index)
+add_subdirectory(dict_gloss)
+
+# Not a test: the host dictionary probe shares this build so it links the same
+# libraries the suites do. Run it by hand, see tools/dictprobe/dictprobe.cpp.
+add_subdirectory(${REPO_ROOT}/tools/dictprobe dictprobe)
+add_subdirectory(midad_app_settings_load_plan)
+add_subdirectory(ota_rollback_recovery_plan)
+add_subdirectory(ota_rollback_digest_format)
+add_subdirectory(combining_marks)
+add_subdirectory(credential_integrity)
+add_subdirectory(xml_parser_utils)
+add_subdirectory(token_boundary)
+add_subdirectory(x4pro_power_button_gesture)
+add_subdirectory(line_height_math)
+add_subdirectory(news_pure)
+add_subdirectory(chess_engine)
+add_subdirectory(textbound_pure)

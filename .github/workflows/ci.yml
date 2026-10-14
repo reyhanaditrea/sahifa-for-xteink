@@ -2,8 +2,27 @@ name: CI (build)
 
 on:
   push:
-    branches: [master]
+    # `develop` is this repo's default branch and where work actually lands, so
+    # it has to be listed here or these checks never gate anything. They didn't:
+    # with only `master` (effectively dormant) plus pull_request, and commits
+    # going straight to develop rather than through PRs, the clang-format and
+    # build jobs had never run on the mainline -- which is how 56 files of
+    # formatting drift accumulated unnoticed. `master` is kept so any remaining
+    # work on that branch still gets checked.
+    branches: [develop, master]
   pull_request:
+  # Reusable from other workflows (see update-from-crosspoint.yml), so the sync
+  # automation runs the exact same jobs a normal PR would rather than a second,
+  # drifting copy of them. `ref` lets a caller point checkout at a branch that
+  # didn't exist when this workflow started (e.g. a freshly created sync
+  # branch) -- plain push/pull_request runs leave it unset and fall back to
+  # the triggering ref via `inputs.ref || github.ref` below.
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to check out (defaults to the triggering ref)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -12,13 +31,15 @@ jobs:
   clang-format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install clang-format-21
         run: |
@@ -33,70 +54,122 @@ jobs:
           PATH="/usr/lib/llvm-21/bin:$PATH" ./bin/clang-format-fix
           git diff --exit-code || (echo "Please run 'bin/clang-format-fix' to fix formatting issues" && exit 1)
 
+  ota-signing-flags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+
+      - name: Verify every release/RC env enables the OTA boot-signature check
+        run: python3 scripts/check-ota-signing-flags.py
+
+      - name: Lint the production key ceremony wizard
+        # The wizard itself is macOS-only (uses diskutil for backup-drive
+        # detection) and touches real GitHub secrets/backups, so it isn't
+        # exercised end-to-end here -- see docs/ota-production-key-ceremony.md
+        # for how it was validated in rehearsal mode. This just keeps static
+        # analysis enforced on every change to it.
+        run: shellcheck scripts/ota-key-ceremony.sh
+
   cppcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "latest"
+          version: "0.12.5"
+          checksum: "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2"
           enable-cache: false
 
-      - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+      - name: Install PlatformIO Core and Python dependencies
+        run: uv pip install --system --require-hashes -r scripts/requirements-ci.lock
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
+
+      - name: Verify PlatformIO package integrity
+        # See release.yml's identical step -- issue #179.
+        run: python3 scripts/verify_platformio_packages.py
 
       - name: Run cppcheck
         run: pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
 
   build:
+    name: Build ${{ matrix.env }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Artifact names match the release asset names OtaUpdater requests:
+        # plain firmware.bin for the C3 X4/X3 binary, firmware-<board>.bin for
+        # the S3 boards.
+        include:
+          - env: default
+            asset: firmware.bin
+          - env: sticky
+            asset: firmware-sticky.bin
+          - env: x4pro
+            asset: firmware-x4pro.bin
+          - env: papermono
+            asset: firmware-papermono.bin
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
-          version: "latest"
+          version: "0.12.5"
+          checksum: "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2"
           enable-cache: false
 
-      - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+      - name: Install PlatformIO Core and Python dependencies
+        run: uv pip install --system --require-hashes -r scripts/requirements-ci.lock
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
-      - name: Build CrossPoint
+      - name: Verify PlatformIO package integrity
+        # See release.yml's identical step -- issue #179.
+        run: python3 scripts/verify_platformio_packages.py
+
+      - name: Build ${{ matrix.env }} firmware
         run: |
           set -euo pipefail
-          pio run | tee pio.log
+          pio run -e ${{ matrix.env }} | tee pio.log
 
       - name: Extract firmware stats
-
         run: |
           set -euo pipefail
           ram_line="$(grep -E "RAM:\\s" -m1 pio.log || true)"
@@ -104,23 +177,25 @@ jobs:
           echo "ram_line=${ram_line}" >> "$GITHUB_OUTPUT"
           echo "flash_line=${flash_line}" >> "$GITHUB_OUTPUT"
           {
-            echo "## Firmware build stats"
+            echo "## ${{ matrix.env }} firmware build stats"
             if [ -n "$ram_line" ]; then echo "- ${ram_line}"; else echo "- RAM: not found"; fi
             if [ -n "$flash_line" ]; then echo "- ${flash_line}"; else echo "- Flash: not found"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload firmware.bin artifact
-        uses: actions/upload-artifact@v6
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: firmware.bin
-          path: .pio/build/default/firmware.bin
+          name: ${{ matrix.asset }}
+          path: .pio/build/${{ matrix.env }}/firmware.bin
           if-no-files-found: error
 
   unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
           submodules: recursive
 
       - name: Install build tools
@@ -129,7 +204,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build
 
       - name: Cache googletest source
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: build/test/_deps/googletest-src
           key: ${{ runner.os }}-googletest-${{ hashFiles('test/CMakeLists.txt') }}
@@ -143,6 +218,110 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build/test --output-on-failure -j
 
+  # Fails a PR if scripts/requirements-ci.lock doesn't match what
+  # scripts/requirements-ci.in currently resolves to -- catches an `.in` edit
+  # that wasn't followed by regenerating the `.lock`. Recompiles into a copy
+  # seeded with the checked-in lock (uv then prefers keeping already-resolved
+  # versions rather than re-resolving from the loose ranges from scratch --
+  # confirmed locally: two consecutive seeded runs produce byte-identical
+  # output), so this only fails on a genuine drift, not routine re-runs.
+  # Never passes --upgrade: a version bump must be its own reviewed commit.
+  lock-regression-guard:
+    name: Lock regression guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.12.5"
+          checksum: "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2"
+          enable-cache: false
+
+      - name: Recompile the lock and diff against the checked-in copy
+        # --python-version 3.13 is required, not decorative: at least one
+        # dependency (typing-extensions, pulled in via anyio/starlette) is
+        # only needed on Python <3.13 per its own marker. Without an explicit
+        # version, uv falls back to whatever ambient interpreter it
+        # discovers -- this job has no actions/setup-python step, so its
+        # ambient Python differs from a contributor's local shell, which
+        # made an earlier version of this guard fail on a lock that was
+        # actually correct. Pinning removes that ambiguity entirely.
+        run: |
+          set -euo pipefail
+          cp scripts/requirements-ci.lock /tmp/recompiled.lock
+          uv pip compile scripts/requirements-ci.in --python-platform linux --python-version 3.13 --generate-hashes --no-header -o /tmp/recompiled.lock
+          if ! diff -u scripts/requirements-ci.lock /tmp/recompiled.lock; then
+            echo "::error::scripts/requirements-ci.lock is out of date relative to scripts/requirements-ci.in. Regenerate it with:"
+            echo "::error::uv pip compile scripts/requirements-ci.in --python-platform linux --python-version 3.13 --generate-hashes --no-header -o scripts/requirements-ci.lock"
+            exit 1
+          fi
+
+  # Validates scripts/requirements-ci.lock actually installs and functions on
+  # both Python versions the release-family workflows use (see release.yml /
+  # auto-release.yml: 3.14, release_candidate.yml: 3.13), independent of
+  # `build`/`cppcheck` above which only exercise one of the two.
+  python-lock-validation:
+    name: Validate lock (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.13', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.12.5"
+          checksum: "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2"
+          enable-cache: false
+
+      - name: Install PlatformIO Core and Python dependencies
+        run: uv pip install --system --require-hashes -r scripts/requirements-ci.lock
+
+      - name: Confirm PlatformIO Core version
+        run: |
+          set -euo pipefail
+          actual="$(pio --version)"
+          echo "$actual"
+          [ "$actual" = "PlatformIO Core, version 6.1.19" ] || { echo "::error::Expected PlatformIO Core 6.1.19, got: $actual"; exit 1; }
+
+      - name: Confirm espsecure/esptool version
+        # generate_signing_key's own version banner is the only way to see
+        # espsecure's version without a real sign/verify round-trip -- the
+        # key itself is throwaway, discarded immediately after.
+        run: |
+          set -euo pipefail
+          tmp_key="$(mktemp -u)"  # -u: name only, no file -- generate_signing_key refuses to overwrite an existing one
+          actual="$(espsecure.py generate_signing_key --version 2 --scheme rsa3072 "$tmp_key" 2>&1 | head -1)"
+          rm -f "$tmp_key"
+          echo "$actual"
+          [ "$actual" = "espsecure.py v4.12.0" ] || { echo "::error::Expected espsecure.py v4.12.0, got: $actual"; exit 1; }
+
+      - name: Run Python script tests
+        # Supersedes the old inline "ephemeral sign-and-verify" step: this
+        # suite covers that same real sign+verify round trip (with its own
+        # freshly generated throwaway keys, never secrets.OTA_SIGNING_KEY)
+        # plus tampered/wrong-key/unsigned rejection and sign_firmware.sh's
+        # fail-closed guard clauses (scripts/tests/test_sign_firmware.py),
+        # and scripts/check-ota-signing-flags.py /
+        # scripts/verify_platformio_packages.py's own logic. No artifact,
+        # tag, or release is produced by this step.
+        run: python3 -m unittest discover -s scripts/tests -v
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
@@ -151,7 +330,10 @@ jobs:
       - build
       - clang-format
       - cppcheck
+      - ota-signing-flags
       - unit-tests
+      - lock-regression-guard
+      - python-lock-validation
     if: always()
     runs-on: ubuntu-latest
     steps:

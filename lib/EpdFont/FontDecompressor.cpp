@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Utf8.h>
 
 #include <cstdlib>
@@ -16,11 +17,19 @@ bool FontDecompressor::init() {
 void FontDecompressor::deinit() {
   freePageBuffer();
   freeHotGroup();
+  free(alignedOffsetTable);
+  alignedOffsetTable = nullptr;
+  alignedOffsetTableFont = nullptr;
+  alignedOffsetTableSize = 0;
 }
 
 void FontDecompressor::clearCache() {
   freePageBuffer();
   freeHotGroup();
+  // alignedOffsetTable is deliberately NOT cleared here: it depends only on the font's
+  // static group/glyph layout, never on the per-page prewarm/hot-group state this
+  // function resets, so it stays valid (and cheap to reuse) across every page turn for
+  // as long as the same font is active. See ensureAlignedOffsetTable().
 }
 
 void FontDecompressor::freePageBuffer() {
@@ -33,12 +42,26 @@ void FontDecompressor::freePageBuffer() {
 }
 
 void FontDecompressor::freeHotGroup() {
-  hotGroup.clear();
-  hotGroup.shrink_to_fit();
+  failedGroupFont = nullptr;
+  failedGroupIndex = UINT16_MAX;
+  free(hotGroup);
+  hotGroup = nullptr;
+  hotGroupCapacity = 0;
   hotGroupFont = nullptr;
   hotGroupIndex = UINT16_MAX;
-  hotGlyphBuf.clear();
-  hotGlyphBuf.shrink_to_fit();
+  free(hotGlyphBuf);
+  hotGlyphBuf = nullptr;
+  hotGlyphBufCapacity = 0;
+}
+
+bool FontDecompressor::ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed) {
+  if (capacity >= needed) return true;
+  // Grow-only, free-then-malloc: every caller fully rewrites the buffer after a grow, so the
+  // old contents are dead -- freeing first gives the allocator its best shot on a tight heap.
+  free(buf);
+  buf = static_cast<uint8_t*>(malloc(needed));  // owned by FontDecompressor, freed in freeHotGroup()
+  capacity = buf ? needed : 0;
+  return buf != nullptr;
 }
 
 uint16_t FontDecompressor::getGroupIndex(const EpdFontData* fontData, uint32_t glyphIndex) {
@@ -100,6 +123,69 @@ uint32_t FontDecompressor::getAlignedOffset(const EpdFontData* fontData, uint16_
   }
 
   return offset;
+}
+
+// Precompute getAlignedOffset() for every glyph in the font in one O(totalGlyphs) pass,
+// instead of paying that scan's per-glyph cost (O(glyphIndex) for a frequency-grouped
+// font) on every hot-group fallback lookup in getBitmap(). No-ops if fontData already
+// matches the cached table (the common case: the same font serves every lookup for a
+// whole reading session). Returns false only on allocation failure, in which case the
+// caller falls back to the direct per-call computation.
+bool FontDecompressor::ensureAlignedOffsetTable(const EpdFontData* fontData) {
+  if (alignedOffsetTableFont == fontData && alignedOffsetTable) return true;
+
+  free(alignedOffsetTable);
+  alignedOffsetTable = nullptr;
+  alignedOffsetTableFont = nullptr;
+  alignedOffsetTableSize = 0;
+
+  if (fontData->intervalCount == 0) return false;
+  const auto& lastInterval = fontData->intervals[fontData->intervalCount - 1];
+  const uint32_t totalGlyphs = lastInterval.offset + (lastInterval.last - lastInterval.first + 1);
+  if (totalGlyphs == 0) return false;
+
+  auto* table = static_cast<uint32_t*>(malloc(totalGlyphs * sizeof(uint32_t)));
+  if (!table) {
+    LOG_ERR("FDC", "OOM allocating %lu-entry aligned-offset table", (unsigned long)totalGlyphs);
+    return false;
+  }
+
+  auto accumGlyph = [](uint32_t& offset, const EpdGlyph& g) {
+    if (g.width > 0 && g.height > 0) {
+      offset += ((g.width + 3) / 4) * g.height;
+    }
+  };
+
+  if (fontData->glyphToGroup) {
+    // Frequency-grouped: one running offset per group, single pass over all glyphs.
+    auto perGroupOffset = makeUniqueNoThrow<uint32_t[]>(fontData->groupCount);
+    if (!perGroupOffset) {
+      free(table);
+      LOG_ERR("FDC", "OOM allocating %u-entry per-group offset tracker", fontData->groupCount);
+      return false;
+    }
+    for (uint32_t i = 0; i < totalGlyphs; i++) {
+      const uint16_t gi = fontData->glyphToGroup[i];
+      table[i] = perGroupOffset[gi];
+      accumGlyph(perGroupOffset[gi], fontData->glyph[i]);
+    }
+  } else {
+    // Contiguous-group: offset resets to 0 at each group's firstGlyphIndex.
+    for (uint16_t gi = 0; gi < fontData->groupCount; gi++) {
+      const EpdFontGroup& group = fontData->groups[gi];
+      uint32_t offset = 0;
+      for (uint32_t i = 0; i < group.glyphCount; i++) {
+        const uint32_t glyphI = group.firstGlyphIndex + i;
+        table[glyphI] = offset;
+        accumGlyph(offset, fontData->glyph[glyphI]);
+      }
+    }
+  }
+
+  alignedOffsetTable = table;
+  alignedOffsetTableFont = fontData;
+  alignedOffsetTableSize = totalGlyphs;
+  return true;
 }
 
 void FontDecompressor::compactSingleGlyph(const uint8_t* alignedSrc, uint8_t* packedDst, uint8_t width,
@@ -170,24 +256,32 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
   }
 
   // Check if hot group already has this group decompressed — if not, decompress it
-  if (!(!hotGroup.empty() && hotGroupFont == fontData && hotGroupIndex == groupIndex)) {
+  if (!(hotGroup != nullptr && hotGroupFont == fontData && hotGroupIndex == groupIndex)) {
     stats.cacheMisses++;
     const EpdFontGroup& group = fontData->groups[groupIndex];
 
-    hotGroup.resize(group.uncompressedSize);
-    if (hotGroup.empty()) {
+    // ensureCapacity may free the buffer, so the cached-group identity dies with it either way.
+    hotGroupFont = nullptr;
+    hotGroupIndex = UINT16_MAX;
+    // Already known to be unaffordable, and nothing has been freed since. Bail
+    // without allocating or logging -- the caller gets the same nullptr either way.
+    if (failedGroupFont == fontData && failedGroupIndex == groupIndex) {
+      stats.bitmapAllocFailures++;
+      stats.getBitmapTimeUs += micros() - tStart;
+      return nullptr;
+    }
+    if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
+      failedGroupFont = fontData;
+      failedGroupIndex = groupIndex;
       LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u", group.uncompressedSize, groupIndex);
-      hotGroupFont = nullptr;
-      hotGroupIndex = UINT16_MAX;
+      stats.bitmapAllocFailures++;
+      if (stats.firstFailedAllocBytes == 0) stats.firstFailedAllocBytes = group.uncompressedSize;
       stats.getBitmapTimeUs += micros() - tStart;
       return nullptr;
     }
 
-    if (!decompressGroup(fontData, groupIndex, hotGroup.data(), group.uncompressedSize)) {
-      hotGroup.clear();
-      hotGroup.shrink_to_fit();
-      hotGroupFont = nullptr;
-      hotGroupIndex = UINT16_MAX;
+    if (!decompressGroup(fontData, groupIndex, hotGroup, group.uncompressedSize)) {
+      stats.bitmapAllocFailures++;
       stats.getBitmapTimeUs += micros() - tStart;
       return nullptr;
     }
@@ -195,23 +289,33 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     hotGroupFont = fontData;
     hotGroupIndex = groupIndex;
     stats.hotGroupBytes = group.uncompressedSize;
+    // Memory is evidently available again; stop suppressing whatever failed before.
+    failedGroupFont = nullptr;
+    failedGroupIndex = UINT16_MAX;
   } else {
     stats.cacheHits++;
   }
 
   // Compact just the requested glyph from byte-aligned data into scratch buffer
-  if (glyph->dataLength > hotGlyphBuf.size()) {
-    hotGlyphBuf.resize(glyph->dataLength);
-  }
-  if (hotGlyphBuf.empty()) {
+  if (!ensureCapacity(hotGlyphBuf, hotGlyphBufCapacity, glyph->dataLength)) {
+    LOG_ERR("FDC", "Failed to allocate %u bytes for glyph scratch", (unsigned)glyph->dataLength);
+    stats.bitmapAllocFailures++;
+    if (stats.firstFailedAllocBytes == 0) stats.firstFailedAllocBytes = glyph->dataLength;
     stats.getBitmapTimeUs += micros() - tStart;
     return nullptr;
   }
 
-  uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
-  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf.data(), glyph->width, glyph->height);
+  uint32_t alignedOff;
+  if (ensureAlignedOffsetTable(fontData) && glyphIndex < alignedOffsetTableSize) {
+    alignedOff = alignedOffsetTable[glyphIndex];
+  } else {
+    // Table build failed (OOM) or glyphIndex is out of range for some reason -- fall
+    // back to the direct per-call computation rather than reading garbage/OOB.
+    alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
+  }
+  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf, glyph->width, glyph->height);
   stats.getBitmapTimeUs += micros() - tStart;
-  return hotGlyphBuf.data();
+  return hotGlyphBuf;
 }
 
 // --- Prewarm: pre-decompress glyph bitmaps for a page of text ---
@@ -252,8 +356,15 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
   }
   PageSlot& slot = pageSlots[pageSlotCount];
 
-  // Step 1: Collect unique glyph indices needed for this page
-  uint32_t neededGlyphs[MAX_PAGE_GLYPHS];
+  // Step 1: Collect unique glyph indices needed for this page. Heap-allocated (not a
+  // stack array): at the current MAX_PAGE_GLYPHS this would be 16KB, too large to put
+  // on the task stack safely.
+  auto neededGlyphsBuf = makeUniqueNoThrow<uint32_t[]>(MAX_PAGE_GLYPHS);
+  if (!neededGlyphsBuf) {
+    LOG_ERR("FDC", "OOM allocating %u-entry glyph scratch buffer", MAX_PAGE_GLYPHS);
+    return -1;
+  }
+  uint32_t* neededGlyphs = neededGlyphsBuf.get();
   uint16_t glyphCount = 0;
   bool glyphCapWarned = false;
 
@@ -323,27 +434,35 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
   if (glyphCount == 0) return 0;
 
-  // Step 2: Compute total buffer size and collect unique groups
+  // Step 2: Compute total buffer size and collect unique groups. Heap-allocated like
+  // neededGlyphs above -- at MAX_PAGE_GROUPS this would be 1KB, on top of the 16KB
+  // glyph buffer and the groupAlignedTracker buffer below.
   uint32_t totalBytes = 0;
-  uint16_t neededGroups[128];
-  uint8_t groupCount = 0;
+  auto neededGroupsBuf = makeUniqueNoThrow<uint16_t[]>(MAX_PAGE_GROUPS);
+  if (!neededGroupsBuf) {
+    LOG_ERR("FDC", "OOM allocating %u-entry group scratch buffer", MAX_PAGE_GROUPS);
+    return -1;
+  }
+  uint16_t* neededGroups = neededGroupsBuf.get();
+  uint16_t groupCount = 0;
   bool groupCapWarned = false;
 
   for (uint16_t i = 0; i < glyphCount; i++) {
     totalBytes += fontData->glyph[neededGlyphs[i]].dataLength;
     uint16_t gi = getGroupIndex(fontData, neededGlyphs[i]);
     bool found = false;
-    for (uint8_t j = 0; j < groupCount; j++) {
+    for (uint16_t j = 0; j < groupCount; j++) {
       if (neededGroups[j] == gi) {
         found = true;
         break;
       }
     }
     if (!found) {
-      if (groupCount < 128) {
+      if (groupCount < MAX_PAGE_GROUPS) {
         neededGroups[groupCount++] = gi;
       } else if (!groupCapWarned) {
-        LOG_DBG("FDC", "Group cap (128) reached during prewarm; some groups will use hot-group fallback");
+        LOG_DBG("FDC", "Group cap (%u) reached during prewarm; some groups will use hot-group fallback",
+                MAX_PAGE_GROUPS);
         groupCapWarned = true;
       }
     }
@@ -351,11 +470,18 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
   stats.uniqueGroupsAccessed = groupCount;
 
-  // Step 3: Allocate page buffer and lookup table for this slot
-  slot.buffer = static_cast<uint8_t*>(malloc(totalBytes));
+  // Step 3: Allocate page buffer and lookup table for this slot.
+  // totalBytes can legitimately be 0 (e.g. a page of only blank/space glyphs with no
+  // bitmap data) -- malloc(0) is implementation-defined and commonly returns nullptr,
+  // which isn't an allocation failure in that case. Only skip the buffer malloc (and
+  // its nullptr check) when there's nothing to store.
+  slot.buffer = totalBytes > 0 ? static_cast<uint8_t*>(malloc(totalBytes)) : nullptr;
   slot.glyphs = static_cast<PageGlyphEntry*>(malloc(glyphCount * sizeof(PageGlyphEntry)));
-  if (!slot.buffer || !slot.glyphs) {
+  if ((totalBytes > 0 && !slot.buffer) || !slot.glyphs) {
     LOG_ERR("FDC", "Failed to allocate page buffer (%u bytes, %u glyphs)", totalBytes, glyphCount);
+    if (stats.firstFailedAllocBytes == 0) {
+      stats.firstFailedAllocBytes = (totalBytes > 0 && !slot.buffer) ? totalBytes : glyphCount * sizeof(PageGlyphEntry);
+    }
     free(slot.buffer);
     free(slot.glyphs);
     slot = {};
@@ -386,7 +512,14 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
   // Step 3b: Pre-scan to compute each needed glyph's byte-aligned offset within its group.
   // This avoids recomputing aligned offsets per group during extraction in step 4.
-  uint32_t groupAlignedTracker[128] = {};  // running byte-aligned offset for each needed group
+  // Heap-allocated like neededGroups above, zero-initialized to match the stack array's
+  // prior value-initialization.
+  auto groupAlignedTrackerBuf = makeUniqueNoThrow<uint32_t[]>(MAX_PAGE_GROUPS);
+  if (!groupAlignedTrackerBuf) {
+    LOG_ERR("FDC", "OOM allocating %u-entry group offset tracker", MAX_PAGE_GROUPS);
+    return -1;
+  }
+  uint32_t* groupAlignedTracker = groupAlignedTrackerBuf.get();  // running byte-aligned offset per needed group
 
   if (fontData->glyphToGroup) {
     // Frequency-grouped: single O(totalGlyphs) pass through glyphToGroup
@@ -396,8 +529,8 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     for (uint32_t i = 0; i < totalGlyphs; i++) {
       const uint16_t gi = fontData->glyphToGroup[i];
       // Find this glyph's group position in neededGroups
-      uint8_t gpPos = groupCount;
-      for (uint8_t j = 0; j < groupCount; j++) {
+      uint16_t gpPos = groupCount;
+      for (uint16_t j = 0; j < groupCount; j++) {
         if (neededGroups[j] == gi) {
           gpPos = j;
           break;
@@ -427,7 +560,7 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     }
   } else {
     // Contiguous-group: iterate each needed group's glyphs directly
-    for (uint8_t g = 0; g < groupCount; g++) {
+    for (uint16_t g = 0; g < groupCount; g++) {
       const EpdFontGroup& group = fontData->groups[neededGroups[g]];
       uint32_t alignedOff = 0;
       for (uint16_t j = 0; j < group.glyphCount; j++) {
@@ -458,7 +591,7 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
   uint32_t writeOffset = 0;
   int missed = 0;
 
-  for (uint8_t g = 0; g < groupCount; g++) {
+  for (uint16_t g = 0; g < groupCount; g++) {
     uint16_t groupIdx = neededGroups[g];
     const EpdFontGroup& group = fontData->groups[groupIdx];
 

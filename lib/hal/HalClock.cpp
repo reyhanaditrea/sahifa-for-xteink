@@ -3,48 +3,68 @@
 #include <Logging.h>
 #include <WiFi.h>
 #include <esp_sntp.h>
+#include <sys/time.h>
 #include <time.h>
-
-#include <cassert>
 
 HalClock halClock;  // Singleton instance
 
-// DS3231 register layout (BCD encoded):
-//   0x00: Seconds  (bits 6-4 = tens, bits 3-0 = ones)
-//   0x01: Minutes  (bits 6-4 = tens, bits 3-0 = ones)
-//   0x02: Hours    (bit 6 = 12/24 mode, bits 5-4 = tens, bits 3-0 = ones)
-
-static uint8_t bcdToDec(uint8_t bcd) { return ((bcd >> 4) * 10) + (bcd & 0x0F); }
-static uint8_t decToBcd(uint8_t dec) { return ((dec / 10) << 4) | (dec % 10); }
+namespace {
+// Civil date (UTC) -> Unix epoch. Howard Hinnant's days_from_civil, the same
+// public-domain algorithm src/util/TimeUtils.cpp uses -- copied rather than
+// shared because this is the HAL and must not reach up into the app.
+//
+// mktime() would read the fields through whatever TZ is set, which at this point
+// in boot is nothing in particular, and newlib here has no timegm().
+time_t epochFromUtc(const Rtc::DateTime& dt) {
+  int year = static_cast<int>(dt.year) - (dt.month <= 2 ? 1 : 0);
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(year - era * 400);
+  const unsigned doy = (153U * (dt.month + (dt.month > 2 ? -3U : 9U)) + 2U) / 5U + dt.day - 1U;
+  const unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
+  const int64_t days = static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+  return static_cast<time_t>(days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second);
+}
+}  // namespace
 
 void HalClock::begin() {
-  if (!gpio.deviceIsX3()) {
-    _available = false;
+  _available = _sdkRtc.begin();
+  LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
+  restoreSystemTimeFromRTC();
+}
+
+// The RTC keeps running across a reboot; the system clock does not. Without this the
+// date is back to 1970 on every boot until something reaches WiFi, which is what makes
+// a synced clock look unsynced -- and it silently fails mbedTLS certificate validation
+// on every HTTPS request until then. Cheap enough to do unconditionally at boot: one
+// I2C read of a chip we have just probed.
+void HalClock::restoreSystemTimeFromRTC() {
+  _rtcHasDate = false;
+  if (!_available) return;
+
+  Rtc::DateTime dt;
+  if (!_sdkRtc.now(dt)) return;  // absent, or oscillator stopped -- nothing trustworthy in there
+
+  const time_t epoch = epochFromUtc(dt);
+
+  // A device last synced by firmware that wrote only hour/minute is still ticking, but
+  // stamped year 2000. Its time-of-day is right and the status bar has always shown it;
+  // its date is not, so it must not reach anything that dates a file or checks a
+  // certificate. Leaving the system clock invalid keeps the existing NTP-on-connect
+  // path firing, which repairs the RTC date on the next sync.
+  if (epoch < MIN_PLAUSIBLE_EPOCH) {
+    LOG_INF("CLK", "RTC has no calendar date (year %u), leaving system time unset", static_cast<unsigned>(dt.year));
     return;
   }
+  // Recorded even when the system clock is already set, because it is what tells
+  // the WiFi path whether this chip can carry the date across the next reboot.
+  _rtcHasDate = true;
+  if (isSystemTimeValid()) return;
 
-  // I2C is already initialised by HalPowerManager::begin() for X3.
-  // Probe the DS3231 by reading the seconds register.
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);
-  if (Wire.endTransmission(false) != 0) {
-    LOG_INF("CLK", "DS3231 RTC not found");
-    _available = false;
-    return;
-  }
-  Wire.requestFrom(I2C_ADDR_DS3231, (uint8_t)1);
-  if (Wire.available() < 1) {
-    _available = false;
-    return;
-  }
-  Wire.read();  // discard — just testing connectivity
-
-  _available = true;
-  LOG_INF("CLK", "DS3231 RTC found");
-
-  // Prime the cache with an initial read
-  uint8_t h, m;
-  getTime(h, m);
+  const timeval tv = {epoch, 0};
+  settimeofday(&tv, nullptr);
+  LOG_INF("CLK", "System time restored from RTC: %04u-%02u-%02u %02u:%02u:%02u UTC", static_cast<unsigned>(dt.year),
+          static_cast<unsigned>(dt.month), static_cast<unsigned>(dt.day), static_cast<unsigned>(dt.hour),
+          static_cast<unsigned>(dt.minute), static_cast<unsigned>(dt.second));
 }
 
 bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
@@ -57,44 +77,18 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
     return true;
   }
 
-  // Read 3 bytes starting at register 0x00: seconds, minutes, hours
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);
-  if (Wire.endTransmission(false) != 0) {
+  Rtc::DateTime dt;
+  if (!_sdkRtc.now(dt)) {
     if (!_hasCachedTime) return false;
     _lastPollMs = now;
     hour = _cachedHour;
     minute = _cachedMinute;
     return true;
   }
-  Wire.requestFrom(I2C_ADDR_DS3231, (uint8_t)3);
-  if (Wire.available() < 3) {
-    if (!_hasCachedTime) return false;
-    _lastPollMs = now;
-    hour = _cachedHour;
-    minute = _cachedMinute;
-    return true;
-  }
-
-  Wire.read();  // seconds — not needed
-  const uint8_t rawMin = Wire.read();
-  const uint8_t rawHour = Wire.read();
-
-  _cachedMinute = bcdToDec(rawMin & 0x7F);
-  // Handle 12/24h mode: bit 6 high = 12h mode
-  if (rawHour & 0x40) {
-    // 12h mode: bit 5 = PM, bits 4-0 = hours (1-12)
-    uint8_t h12 = bcdToDec(rawHour & 0x1F);
-    bool pm = rawHour & 0x20;
-    if (h12 == 12) h12 = 0;
-    _cachedHour = pm ? (h12 + 12) : h12;
-  } else {
-    // 24h mode: bits 5-0 = hours (0-23)
-    _cachedHour = bcdToDec(rawHour & 0x3F);
-  }
+  _cachedHour = dt.hour;
+  _cachedMinute = dt.minute;
   _lastPollMs = now;
   _hasCachedTime = true;
-
   hour = _cachedHour;
   minute = _cachedMinute;
   return true;
@@ -127,31 +121,38 @@ bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHou
   return true;
 }
 
-bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
-  assert(hour < 24);
-  assert(minute < 60);
-  assert(second < 60);
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);    // Start at register 0x00
-  Wire.write(decToBcd(second));  // 0x00: Seconds
-  Wire.write(decToBcd(minute));  // 0x01: Minutes
-  Wire.write(decToBcd(hour));    // 0x02: Hours (24h mode, bit 6 = 0)
-  if (Wire.endTransmission() != 0) {
-    LOG_ERR("CLK", "Failed to write time to DS3231");
-    return false;
-  }
-
-  // Invalidate cache so next read fetches fresh data
-  _lastPollMs = 0;
-  _cachedHour = hour;
-  _cachedMinute = minute;
-  _hasCachedTime = true;
-  return true;
-}
-
 bool HalClock::syncFromNTP() {
   if (!_available) return false;
 
+  if (!quickSyncSystemTime()) return false;
+
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
+
+  // The whole date, not just the time of day: it is what lets the next boot restore the
+  // system clock from the RTC instead of needing WiFi again.
+  Rtc::DateTime dt;
+  dt.year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
+  dt.month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
+  dt.day = static_cast<uint8_t>(timeinfo.tm_mday);
+  dt.weekday = static_cast<uint8_t>(timeinfo.tm_wday);
+  dt.hour = static_cast<uint8_t>(timeinfo.tm_hour);
+  dt.minute = static_cast<uint8_t>(timeinfo.tm_min);
+  dt.second = static_cast<uint8_t>(timeinfo.tm_sec);
+
+  if (writeTimeToRTC(dt)) {
+    _rtcHasDate = true;
+    LOG_INF("CLK", "RTC set to %04d-%02d-%02d %02d:%02d:%02d UTC", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1,
+            timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    return true;
+  }
+  return false;
+}
+
+bool HalClock::isSystemTimeValid() { return time(nullptr) >= MIN_PLAUSIBLE_EPOCH; }
+
+bool HalClock::quickSyncSystemTime() {
   if (WiFi.status() != WL_CONNECTED) {
     LOG_ERR("CLK", "WiFi not connected, cannot sync NTP");
     return false;
@@ -164,19 +165,26 @@ bool HalClock::syncFromNTP() {
   constexpr int maxAttempts = 50;
   for (int i = 0; i < maxAttempts; i++) {
     if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
-      time_t now = time(nullptr);
-      struct tm timeinfo;
-      gmtime_r(&now, &timeinfo);
-
-      if (writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
-        LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-        return true;
-      }
-      return false;
+      return true;
     }
     delay(100);
   }
 
   LOG_ERR("CLK", "NTP sync timed out");
   return false;
+}
+
+void HalClock::stopSntp() {
+  if (esp_sntp_enabled()) {
+    esp_sntp_stop();
+  }
+}
+
+bool HalClock::writeTimeToRTC(const Rtc::DateTime& dt) {
+  if (!_sdkRtc.set(dt)) return false;
+  _lastPollMs = 0;
+  _cachedHour = dt.hour;
+  _cachedMinute = dt.minute;
+  _hasCachedTime = true;
+  return true;
 }

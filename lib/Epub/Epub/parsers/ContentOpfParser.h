@@ -31,8 +31,12 @@ class ContentOpfParser final : public Print {
   BookMetadataCache* cache;
   HalFile tempItemStore;
   std::string coverItemId;
+  // True once an explicit type="start" guide reference has been accepted, so a
+  // later one (or a type="text" entry, which EPUB 2 guides use unreliably) can't
+  // override it.
+  bool hasExplicitStartReference = false;
 
-  // Index for fast idref→href lookup (used only for large EPUBs)
+  // Index for fast idref→href lookup (binary search over .items.bin)
   struct ItemIndexEntry {
     uint32_t idHash;      // FNV-1a hash of itemId
     uint16_t idLen;       // length for collision reduction
@@ -40,8 +44,6 @@ class ContentOpfParser final : public Print {
   };
   std::deque<ItemIndexEntry> itemIndex;
   bool useItemIndex = false;
-
-  static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
 
   // FNV-1a hash function
   static uint32_t fnvHash(const std::string& s) {

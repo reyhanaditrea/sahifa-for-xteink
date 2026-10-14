@@ -1,0 +1,303 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #ffffff; color: #000000; }
+    a { color: #000000; } a:hover { color: #000000; }
+    .row { height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box; font-size: 15px; font-weight: 500; cursor: pointer; }
+    .row.sel { background: #000; color: #fff; }
+    .hint { font-size: 11px; font-weight: 500; cursor: pointer; min-width: 60px; text-align: center; }
+  </style>
+</helmet>
+
+<div style="width: 528px; height: 792px; background: #ffffff; position: relative; overflow: hidden;">
+
+  <!-- Header: 5px top + 45px -->
+  <div style="position: absolute; top: 5px; left: 0; width: 528px; height: 45px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.02em;">{{ clock }}</div>
+    <div style="font-size: 16px; font-weight: 700;">{{ title }}</div>
+    <div style="display: flex; align-items: center; gap: 3px;">
+      <div style="width: 15px; height: 12px; border: 1.5px solid #000; box-sizing: border-box; padding: 1.5px;">
+        <div style="width: 70%; height: 100%; background: #000;"></div>
+      </div>
+      <div style="width: 2px; height: 5px; background: #000;"></div>
+    </div>
+  </div>
+  <div style="position: absolute; top: 50px; left: 0; width: 528px; height: 2px; background: #000;"></div>
+
+  <!-- ===== TODAY: settings-style list, one screen ===== -->
+  <sc-if value="{{ isToday }}" hint-placeholder-val="{{ true }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; box-sizing: border-box;">
+
+      <div style="height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box; font-size: 15px; font-weight: 700;">
+        <div>{{ dateLine }}</div>
+        <div>{{ hijriLine }}</div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; padding: 0 12px;">
+        <sc-for list="{{ prayers }}" as="p" hint-placeholder-count="6">
+          <div style="height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; box-sizing: border-box; font-size: 15px; background: {{ p.bg }}; color: {{ p.fg }};">
+            <div style="font-weight: 500; display: flex; gap: 10px;"><div>{{ p.name }}</div><div>{{ p.sub }}</div></div>
+            <div style="font-weight: 500; font-variant-numeric: tabular-nums;">{{ p.time }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="height: 2px; background: #000; margin: 8px 20px;"></div>
+
+      <div style="display: flex; flex-direction: column; padding: 0 12px;">
+        <div class="row" style="height: 40px; padding: 0 8px; background: {{ countryBg }}; color: {{ countryFg }};" onClick="{{ openCountry }}">
+          <div>Country</div>
+          <div>{{ countryValue }}</div>
+        </div>
+        <sc-if value="{{ hasCountry }}" hint-placeholder-val="{{ true }}">
+          <div class="row" style="height: 40px; padding: 0 8px; background: {{ cityBg }}; color: {{ cityFg }};" onClick="{{ openCity }}">
+            <div>City</div>
+            <div>{{ cityValue }}</div>
+          </div>
+        </sc-if>
+        <div class="row" style="height: 40px; padding: 0 8px; background: {{ syncBg }}; color: {{ syncFg }};" onClick="{{ openSync }}">
+          <div>Sync Now</div>
+          <div>{{ syncValue }}</div>
+        </div>
+      </div>
+
+      <div style="margin-top: auto; padding: 0 20px 12px; display: flex; justify-content: space-between; font-size: 15px; font-weight: 500;">
+        <div>{{ infoLeft }}</div>
+        <div>{{ infoRight }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== COUNTRY / CITY / METHOD lists ===== -->
+  <sc-if value="{{ isList }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; padding: 0 12px; box-sizing: border-box; gap: 2px;">
+      <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+        <div class="row" style="background: {{ r.bg }}; color: {{ r.fg }};" onClick="{{ r.pick }}">
+          <div>{{ r.label }}</div>
+          <div style="font-size: 12px;">{{ r.meta }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <!-- ===== CUSTOM COORDINATES ===== -->
+  <sc-if value="{{ isCoords }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px;">
+      <div style="font-size: 13px; font-weight: 500;">Up/Down changes the value, Confirm moves to the next field</div>
+      <div style="display: flex; gap: 24px;">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+          <div style="font-size: 12px; font-weight: 500;">Latitude</div>
+          <div style="font-size: 34px; font-weight: 700; padding: 6px 18px; background: {{ latBg }}; color: {{ latFg }}; font-variant-numeric: tabular-nums;">{{ latText }}</div>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+          <div style="font-size: 12px; font-weight: 500;">Longitude</div>
+          <div style="font-size: 34px; font-weight: 700; padding: 6px 18px; background: {{ lngBg }}; color: {{ lngFg }}; font-variant-numeric: tabular-nums;">{{ lngText }}</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <div class="row" style="border: 2px solid #000; height: 44px; padding: 0 22px;" onClick="{{ coordUp }}">Up</div>
+        <div class="row" style="border: 2px solid #000; height: 44px; padding: 0 22px;" onClick="{{ coordDown }}">Down</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== SYNC ===== -->
+  <sc-if value="{{ isSync }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; top: 60px; left: 0; width: 528px; height: 692px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 0 60px; box-sizing: border-box; text-align: center;">
+      <div style="font-size: 16px; font-weight: 700;">{{ syncTitle }}</div>
+      <div style="font-size: 13px; font-weight: 500; line-height: 1.5; white-space: pre-line;">{{ syncBody }}</div>
+    </div>
+  </sc-if>
+
+  <!-- Button hints: 40px -->
+  <div style="position: absolute; bottom: 0; left: 0; width: 528px; height: 40px; border-top: 2px solid #000; display: flex; align-items: center; justify-content: space-around; padding: 0 20px; box-sizing: border-box;">
+    <div class="hint" onClick="{{ btnBack }}">{{ hint1 }}</div>
+    <div class="hint" onClick="{{ btnConfirm }}">{{ hint2 }}</div>
+    <div class="hint" onClick="{{ btnLeft }}">{{ hint3 }}</div>
+    <div class="hint" onClick="{{ btnRight }}">{{ hint4 }}</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"startState":{"editor":"enum","options":["noLocation","syncNeeded","ready"],"default":"noLocation"},"$preview":{"width":528,"height":792}}'>
+const COUNTRIES = [
+  { iso: '', name: 'Custom coordinates', cities: [] },
+  { iso: 'ID', name: 'Indonesia', cities: ['Bandung', 'Bekasi', 'Bogor', 'Depok', 'Jakarta', 'Makassar', 'Medan', 'Palembang', 'Semarang', 'Surabaya', 'Tangerang', 'Yogyakarta'] },
+  { iso: 'MY', name: 'Malaysia', cities: ['Ipoh', 'Johor Bahru', 'Kuala Lumpur', 'Shah Alam'] },
+  { iso: 'SA', name: 'Saudi Arabia', cities: ['Jeddah', 'Mecca', 'Medina', 'Riyadh'] },
+  { iso: 'SG', name: 'Singapore', cities: ['Singapore'] },
+  { iso: 'TR', name: 'Turkey', cities: ['Ankara', 'Istanbul', 'Izmir'] },
+  { iso: 'GB', name: 'United Kingdom', cities: ['Birmingham', 'London', 'Manchester'] },
+  { iso: 'US', name: 'United States', cities: ['Chicago', 'Houston', 'Los Angeles', 'New York'] },
+];
+const METHODS = [
+  { id: 0, name: 'Auto (by country)' }, { id: 3, name: 'Muslim World League' }, { id: 4, name: 'Umm al-Qura' },
+  { id: 2, name: 'ISNA' }, { id: 5, name: 'Egyptian Authority' }, { id: 1, name: 'Karachi' },
+  { id: 20, name: 'Kemenag Indonesia' }, { id: 17, name: 'JAKIM Malaysia' }, { id: 11, name: 'MUIS Singapore' }, { id: 13, name: 'Diyanet' },
+];
+const AUTO = { ID: 20, SA: 4, US: 2, MY: 17, SG: 11, TR: 13 };
+const SAMPLE = ['04:38', '05:52', '11:54', '15:14', '17:54', '19:03'];
+const NAMES = ['Fajr', 'Sunrise', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
+const NETS = ['Home-WiFi', 'Office-5G', 'Kopi Kenangan'];
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const s = props.startState ?? 'noLocation';
+    this.state = {
+      screen: 'today',
+      country: s === 'noLocation' ? null : COUNTRIES[1],
+      city: s === 'noLocation' ? null : 'Jakarta',
+      synced: s === 'ready',
+      cursor: 0,
+      sel: 0,
+      methodIdx: 0,
+      lat: -6.20, lng: 106.82, field: 0,
+      syncStep: 0,
+    };
+  }
+  componentDidUpdate() {
+    if (this.state.screen === 'sync' && this.state.syncStep === 1 && !this._t) {
+      this._t = setTimeout(() => { this._t = null; this.setState({ syncStep: 2, synced: true }); }, 1800);
+    }
+  }
+  componentWillUnmount() { if (this._t) { clearTimeout(this._t); this._t = null; } }
+  go(screen, extra) { this.setState({ screen, sel: 0, ...(extra || {}) }); }
+  isCustom() { return !!this.state.country && this.state.country.iso === ''; }
+  hasCity() { return this.isCustom() || !!this.state.city; }
+  canSync() { return !!this.state.country && this.hasCity(); }
+  placeName() {
+    const st = this.state;
+    if (!st.country) return '';
+    if (this.isCustom()) return 'Custom';
+    return st.city ? st.city + ', ' + st.country.iso : st.country.name;
+  }
+
+  renderVals() {
+    const st = this.state;
+    const screen = st.screen;
+    const inv = (on) => ({ bg: on ? '#000000' : '#ffffff', fg: on ? '#ffffff' : '#000000' });
+    const iso = st.country ? st.country.iso : '';
+    const meth = METHODS[st.methodIdx];
+    const effective = meth.id === 0 ? (METHODS.find(m => m.id === (AUTO[iso] || 3)) || METHODS[1]).name : meth.name;
+    const f = (v, pos, neg) => (v < 0 ? neg : pos) + ' ' + Math.abs(v).toFixed(2);
+
+    let title = 'Prayer Times', rows = [], hints = ['Back', '', '', ''];
+    let isToday = false, isList = false, isCoords = false, isSync = false;
+
+    if (screen === 'today') {
+      isToday = true;
+      hints = ['Back', 'Select', '\u2191', '\u2193'];
+    } else if (screen === 'country') {
+      title = 'Country'; isList = true; hints = ['Back', 'Select', '\u2191', '\u2193'];
+      rows = COUNTRIES.map((c, i) => ({ label: c.name, meta: c.iso, ...inv(i === st.sel), pick: () => this.pickCountry(i) }));
+    } else if (screen === 'city') {
+      title = st.country.name; isList = true; hints = ['Back', 'Select', '\u2191', '\u2193'];
+      rows = st.country.cities.map((c, i) => ({ label: c, meta: '', ...inv(i === st.sel), pick: () => this.pickCity(i) }));
+    } else if (screen === 'method') {
+      title = 'Calculation method'; isList = true; hints = ['Back', 'Select', '\u2191', '\u2193'];
+      rows = METHODS.map((m, i) => ({ label: m.name, meta: i === st.methodIdx ? '\u25cf' : '', ...inv(i === st.sel), pick: () => this.pickMethod(i) }));
+    } else if (screen === 'coords') {
+      title = 'Coordinates'; isCoords = true; hints = ['Save', 'Next field', '\u2191', '\u2193'];
+    } else if (screen === 'sync') {
+      title = 'Sync'; isSync = true;
+      if (st.syncStep === 0) { isList = true; isSync = false; title = 'Wi-Fi'; hints = ['Cancel', 'Connect', '\u2191', '\u2193'];
+        rows = NETS.map((n, i) => ({ label: n, meta: i === 0 ? 'saved' : '', ...inv(i === st.sel), pick: () => this.setState({ sel: i, syncStep: 1 }) })); }
+      else if (st.syncStep === 1) { hints = ['', '', '', '']; }
+      else { hints = ['Done', '', '', '']; }
+    }
+
+    const ready = this.canSync() && st.synced;
+    const prayers = NAMES.map((n, i) => ({ name: n, sub: ready && i === 3 ? 'in 42 min' : '', time: ready ? SAMPLE[i] : '-', ...inv(ready && i === 3) }));
+    let infoLeft = '', infoRight = '';
+    if (!st.country) infoLeft = 'Pick a country to get started';
+    else if (!this.hasCity()) infoLeft = 'Pick a city in ' + st.country.name;
+    else if (!st.synced) infoLeft = 'Sync to fetch this month';
+    else { infoLeft = 'Source: Aladhan'; }
+    const cRow = inv(screen === 'today' && st.cursor === 0);
+    const tRow = inv(screen === 'today' && st.cursor === 1 && !!st.country);
+    const sRow = inv(screen === 'today' && st.cursor === (st.country ? 2 : 1));
+    const latF = inv(st.field === 0), lngF = inv(st.field === 1);
+
+    return {
+      clock: '14:32', title,
+      hasCountry: !!st.country,
+      countryValue: st.country ? st.country.name : 'Set location',
+      cityValue: this.isCustom() ? f(st.lat, 'N', 'S') + ', ' + f(st.lng, 'E', 'W') : (st.city || 'Select city'),
+      countryBg: cRow.bg, countryFg: cRow.fg, cityBg: tRow.bg, cityFg: tRow.fg, syncBg: sRow.bg, syncFg: sRow.fg,
+      syncValue: this.canSync() ? (st.synced ? 'Last synced 14:02' : 'Never') : '',
+      openSync: () => this.startSync(),
+      infoLeft, infoRight,
+      openCountry: () => this.go('country', { cursor: 0 }),
+      openCity: () => this.openCity(),
+      dateLine: 'Friday, 28 Aug 2026', hijriLine: '15 Rabi al-awwal 1448',
+      prayers, nextLine: 'Asr in 42 min',
+      isToday, isList, isCoords, isSync, rows,
+      latText: f(st.lat, 'N', 'S'), lngText: f(st.lng, 'E', 'W'),
+      latBg: latF.bg, latFg: latF.fg, lngBg: lngF.bg, lngFg: lngF.fg,
+      coordUp: () => this.nudge(0.5), coordDown: () => this.nudge(-0.5),
+      syncTitle: st.syncStep === 1 ? 'Fetching August 2026\u2026' : 'Prayer times updated',
+      syncBody: st.syncStep === 1 ? 'Connected to ' + NETS[st.sel] + '\napi.aladhan.com \u00b7 ' + effective : '31 days stored for ' + this.placeName() + '.\nOlder months removed.\nDevice restarts back here.',
+      hint1: hints[0], hint2: hints[1], hint3: hints[2], hint4: hints[3],
+      btnBack: () => this.back(), btnConfirm: () => this.confirm(), btnLeft: () => this.left(), btnRight: () => this.right(),
+    };
+  }
+
+  // ---- button semantics ----
+  startSync() { const st = this.state; this.setState({ cursor: st.country ? 2 : 1 }); if (this.canSync()) this.go('sync', { syncStep: 0 }); }
+  openCity() { this.setState({ cursor: 1 }); this.isCustom() ? this.go('coords', { field: 0 }) : this.go('city'); }
+  back() {
+    const st = this.state;
+    if (st.screen === 'coords') { this.setState({ synced: false }); return this.go('today', { cursor: 1 }); }
+    if (st.screen === 'sync' && st.syncStep === 1) return;
+    if (st.screen === 'sync') return this.go('today', { syncStep: 0 });
+    this.go('today');
+  }
+  confirm() {
+    const st = this.state;
+    if (st.screen === 'today') { if (st.cursor === 0) return this.go('country'); if (st.cursor === 1 && st.country) return this.openCity(); return this.startSync(); }
+    if (st.screen === 'country') return this.pickCountry(st.sel);
+    if (st.screen === 'city') return this.pickCity(st.sel);
+    if (st.screen === 'method') return this.pickMethod(st.sel);
+    if (st.screen === 'coords') return this.setState({ field: st.field === 0 ? 1 : 0 });
+    if (st.screen === 'sync' && st.syncStep === 0) return this.setState({ syncStep: 1 });
+  }
+  left() {
+    const st = this.state;
+    if (st.screen === 'coords') return this.nudge(0.5);
+    this.move(-1);
+  }
+  right() {
+    const st = this.state;
+    if (st.screen === 'coords') return this.nudge(-0.5);
+    this.move(1);
+  }
+  move(d) {
+    const st = this.state;
+    if (st.screen === 'today') { const n = st.country ? 3 : 2; return this.setState({ cursor: (st.cursor + d + n) % n }); }
+    const listy = st.screen === 'country' || st.screen === 'city' || st.screen === 'method' || (st.screen === 'sync' && st.syncStep === 0);
+    if (!listy) return;
+    const n = st.screen === 'country' ? COUNTRIES.length : st.screen === 'city' ? st.country.cities.length : st.screen === 'method' ? METHODS.length : NETS.length;
+    this.setState({ sel: (st.sel + d + n) % n });
+  }
+  nudge(d) { const st = this.state; st.field === 0 ? this.setState({ lat: Math.max(-90, Math.min(90, st.lat + d)) }) : this.setState({ lng: Math.max(-180, Math.min(180, st.lng + d)) }); }
+  pickCountry(i) {
+    const c = COUNTRIES[i];
+    const same = this.state.country === c;
+    this.setState({ country: c, city: same ? this.state.city : null, synced: same ? this.state.synced : false });
+    this.go('today', { cursor: 1 });
+  }
+  pickCity(i) { const c = this.state.country; this.setState({ city: c.cities[i], synced: false }); this.go('today', { cursor: 1 }); }
+  pickMethod(i) { this.setState({ methodIdx: i, synced: false }); this.go('today'); }
+}
+</script>
+</body>
+</html>

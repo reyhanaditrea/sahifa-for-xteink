@@ -3,28 +3,64 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
-#include <JsonSettingsIO.h>
 #include <Logging.h>
-#include <Serialization.h>
 #include <Xtc.h>
 
 #include <algorithm>
 #include <iterator>
 
-namespace {
-constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 3;
-constexpr char RECENT_BOOKS_FILE_BIN[] = "/.crosspoint/recent.bin";
-constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
-constexpr char RECENT_BOOKS_FILE_BAK[] = "/.crosspoint/recent.bin.bak";
-constexpr int MAX_RECENT_BOOKS = 10;
-}  // namespace
+void RecentBooksStore::toJson(JsonDocument& doc) const {
+  JsonArray arr = doc["books"].to<JsonArray>();
+  for (const auto& book : recentBooks) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["path"] = book.path;
+    obj["title"] = book.title;
+    obj["author"] = book.author;
+    obj["coverBmpPath"] = book.coverBmpPath;
+    }
+  JsonArray hidden = doc["hidden"].to<JsonArray>();
+  for (const auto& path : hiddenPaths) hidden.add(path);
+}
 
-RecentBooksStore RecentBooksStore::instance;
+bool RecentBooksStore::fromJson(JsonVariantConst doc) {
+  // Tolerate a missing/invalid 'books' key (treat as empty list); only a
+  // JSON parse error is fatal. A null JsonArray iterates zero times.
+  recentBooks.clear();
+  JsonArrayConst arr = doc["books"].as<JsonArrayConst>();
+  recentBooks.reserve(std::min(arr.size(), static_cast<size_t>(MAX_RECENT_BOOKS)));
+  for (JsonObjectConst obj : arr) {
+    if (getCount() >= MAX_RECENT_BOOKS) break;
+    RecentBook book;
+    book.path = obj["path"] | "";
+    book.title = obj["title"] | "";
+    book.author = obj["author"] | "";
+    book.coverBmpPath = obj["coverBmpPath"] | "";
+      recentBooks.push_back(book);
+  }
+
+  // Absent in files written before Hide from Recents existed; a null array
+  // iterates zero times, which is the right answer for those.
+  hiddenPaths.clear();
+  for (JsonVariantConst entry : doc["hidden"].as<JsonArrayConst>()) {
+    if (hiddenPaths.size() >= MAX_HIDDEN_BOOKS) break;
+    const std::string path = entry.as<const char*>() ? entry.as<const char*>() : "";
+    if (!path.empty()) hiddenPaths.push_back(path);
+  }
+
+  LOG_DBG("RBS", "Recent books loaded from file (%d entries, %u hidden)", getCount(), (unsigned)hiddenPaths.size());
+  return true;
+}
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
                                const std::string& coverBmpPath) {
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
+
+  // Opening a book unhides it -- the one way back from Hide from Recents, and the
+  // reason hiding is offered without a confirmation. Every route into a reader
+  // lands here (file browser, OPDS download, resume), so this is the single place
+  // it has to be undone.
+  hiddenPaths.erase(std::remove(hiddenPaths.begin(), hiddenPaths.end(), path), hiddenPaths.end());
 
   // Remove existing entry if present
   auto it =
@@ -34,7 +70,12 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   }
 
   // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
+  RecentBook book;
+  book.path = path;
+  book.title = title;
+  book.author = author;
+  book.coverBmpPath = coverBmpPath;
+  recentBooks.insert(recentBooks.begin(), std::move(book));
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {
@@ -55,6 +96,36 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
     book.coverBmpPath = coverBmpPath;
     saveToFile();
   }
+}
+
+void RecentBooksStore::setHiddenFromRecents(const std::string& path, const bool hidden) {
+  if (path.empty()) return;
+  const auto it = std::find(hiddenPaths.begin(), hiddenPaths.end(), path);
+  if (hidden) {
+    if (it != hiddenPaths.end()) return;
+    if (hiddenPaths.size() >= MAX_HIDDEN_BOOKS) {
+      LOG_ERR("RBS", "Hidden-book list full, not hiding: %s", path.c_str());
+      return;
+    }
+    hiddenPaths.push_back(path);
+    // Not removeByPath(): that saves too, and the book is usually open right now,
+    // so this is one write rather than two.
+    recentBooks.erase(
+        std::remove_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& b) { return b.path == path; }),
+        recentBooks.end());
+  } else {
+    if (it == hiddenPaths.end()) return;
+    hiddenPaths.erase(it);
+    // No recents entry is restored: hiding threw it away. The card scan finds the
+    // file again, which is the same state a never-opened book is in.
+  }
+  if (!saveToFile()) {
+    LOG_ERR("RBS", "Failed to persist hidden state for: %s", path.c_str());
+  }
+}
+
+bool RecentBooksStore::isHiddenFromRecents(const std::string& path) const {
+  return std::find(hiddenPaths.begin(), hiddenPaths.end(), path) != hiddenPaths.end();
 }
 
 bool RecentBooksStore::removeByPath(const std::string& path) {
@@ -84,17 +155,23 @@ void RecentBooksStore::updatePath(const std::string& oldPath, const std::string&
   saveToFile();
 }
 
-bool RecentBooksStore::isMissing(const RecentBook& book) { return !Storage.exists(book.path.c_str()); }
+bool RecentBooksStore::isMissing(const RecentBook& book) {
+  // Only real book files count as present: the formats a reader activity can
+  // actually open (.epub/.xtc/.xtch/.txt/.md). Corrupt or legacy entries (empty
+  // paths, non-book paths, folders that merely exist) must not survive pruning --
+  // they inflated the home screen's "+N" stack badge with entries that are not
+  // books.
+  if (book.path.empty() || !(FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path) ||
+                             FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path))) {
+    return true;
+  }
+  return !Storage.exists(book.path.c_str());
+}
 
 bool RecentBooksStore::pruneMissing() {
   const size_t before = recentBooks.size();
   recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(), &isMissing), recentBooks.end());
   return recentBooks.size() != before;
-}
-
-bool RecentBooksStore::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveRecentBooks(*this, RECENT_BOOKS_FILE_JSON);
 }
 
 RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
@@ -123,96 +200,4 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
     return RecentBook{path, lastBookFileName, "", ""};
   }
   return RecentBook{path, "", "", ""};
-}
-
-bool RecentBooksStore::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(RECENT_BOOKS_FILE_JSON)) {
-    String json = Storage.readFile(RECENT_BOOKS_FILE_JSON);
-    if (!json.isEmpty()) {
-      return JsonSettingsIO::loadRecentBooks(*this, json.c_str());
-    }
-  }
-
-  // Fall back to binary migration
-  if (Storage.exists(RECENT_BOOKS_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
-      saveToFile();
-      Storage.rename(RECENT_BOOKS_FILE_BIN, RECENT_BOOKS_FILE_BAK);
-      LOG_DBG("RBS", "Migrated recent.bin to recent.json");
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool RecentBooksStore::loadFromBinaryFile() {
-  HalFile inputFile;
-  if (!Storage.openFileForRead("RBS", RECENT_BOOKS_FILE_BIN, inputFile)) {
-    return false;
-  }
-
-  uint8_t version;
-  serialization::readPod(inputFile, version);
-  if (version == 1 || version == 2) {
-    // Old version, just read paths
-    uint8_t count;
-    serialization::readPod(inputFile, count);
-    recentBooks.clear();
-    recentBooks.reserve(count);
-    for (uint8_t i = 0; i < count; i++) {
-      std::string path;
-      serialization::readString(inputFile, path);
-
-      // load book to get missing data
-      RecentBook book = getDataFromBook(path);
-      if (book.title.empty() && book.author.empty() && version == 2) {
-        // Fall back to loading what we can from the store
-        std::string title, author;
-        serialization::readString(inputFile, title);
-        serialization::readString(inputFile, author);
-        recentBooks.push_back({path, title, author, ""});
-      } else {
-        recentBooks.push_back(book);
-      }
-    }
-  } else if (version == 3) {
-    uint8_t count;
-    serialization::readPod(inputFile, count);
-
-    recentBooks.clear();
-    recentBooks.reserve(count);
-    uint8_t omitted = 0;
-
-    for (uint8_t i = 0; i < count; i++) {
-      std::string path, title, author, coverBmpPath;
-      serialization::readString(inputFile, path);
-      serialization::readString(inputFile, title);
-      serialization::readString(inputFile, author);
-      serialization::readString(inputFile, coverBmpPath);
-
-      // Omit books with missing title (e.g. saved before metadata was available)
-      if (title.empty()) {
-        omitted++;
-        continue;
-      }
-
-      recentBooks.push_back({path, title, author, coverBmpPath});
-    }
-
-    if (omitted > 0) {
-      // Explicitly close() file before saveToFile() rewrites the same file
-      inputFile.close();
-      saveToFile();
-      LOG_DBG("RBS", "Omitted %u recent book(s) with missing title", omitted);
-      return true;
-    }
-  } else {
-    LOG_ERR("RBS", "Deserialization failed: Unknown version %u", version);
-    return false;
-  }
-
-  LOG_DBG("RBS", "Recent books loaded from binary file (%d entries)", static_cast<int>(recentBooks.size()));
-  return true;
 }

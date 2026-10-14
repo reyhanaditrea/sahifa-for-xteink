@@ -1,118 +1,116 @@
 #include "KOReaderCredentialStore.h"
 
-#include <HalStorage.h>
 #include <Logging.h>
 #include <MD5Builder.h>
 #include <ObfuscationUtils.h>
-#include <Serialization.h>
-
-#include "KOReaderJsonIO.h"
-
-// Initialize the static instance
-KOReaderCredentialStore KOReaderCredentialStore::instance;
 
 namespace {
-// File format version (for binary migration)
-constexpr uint8_t KOREADER_FILE_VERSION = 1;
+// Default sync server URL. crosspoint-sync speaks the full KOSync protocol, so
+// pointing at any other kosync server (e.g. https://sync.koreader.rocks:443)
+// still works via the custom server URL setting.
+constexpr char DEFAULT_SERVER_URL[] = "https://sync.crosspointreader.com";
 
-// File paths
-constexpr char KOREADER_FILE_BIN[] = "/.crosspoint/koreader.bin";
-constexpr char KOREADER_FILE_JSON[] = "/.crosspoint/koreader.json";
-constexpr char KOREADER_FILE_BAK[] = "/.crosspoint/koreader.bin.bak";
+// Default before config version 2. Configs saved without a version stamp and an
+// empty serverUrl were implicitly syncing here — they get pinned on upgrade.
+constexpr char LEGACY_DEFAULT_SERVER_URL[] = "https://sync.koreader.rocks:443";
 
-// Default sync server URL
-constexpr char DEFAULT_SERVER_URL[] = "https://sync.koreader.rocks:443";
-
-// Legacy obfuscation key - "KOReader" in ASCII (only used for binary migration)
-constexpr uint8_t LEGACY_OBFUSCATION_KEY[] = {0x4B, 0x4F, 0x52, 0x65, 0x61, 0x64, 0x65, 0x72};
-constexpr size_t LEGACY_KEY_LENGTH = sizeof(LEGACY_OBFUSCATION_KEY);
-
-void legacyDeobfuscate(std::string& data) {
-  for (size_t i = 0; i < data.size(); i++) {
-    data[i] ^= LEGACY_OBFUSCATION_KEY[i % LEGACY_KEY_LENGTH];
-  }
-}
+// Bumped when a change to defaults would alter behavior for existing configs.
+constexpr uint8_t CONFIG_VERSION = 2;
 }  // namespace
 
-bool KOReaderCredentialStore::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return KOReaderJsonIO::save(*this, KOREADER_FILE_JSON);
+void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
+  doc["cfgVersion"] = CONFIG_VERSION;
+  doc["username"] = getUsername();
+  doc["password_obf"] = obfuscation::obfuscateToBase64(getPassword());
+  doc["serverUrl"] = getServerUrl();
+  doc["matchMethod"] = static_cast<uint8_t>(getMatchMethod());
+  doc["sendMetadata"] = getSendMetadata();
+  doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
+  if (pendingSync) {
+    JsonObject p = doc["pendingSync"].to<JsonObject>();
+    p["documentHash"] = pendingSync->documentHash;
+    p["xpath"] = pendingSync->xpath;
+    p["percentage"] = pendingSync->percentage;
+    p["spineIndex"] = pendingSync->spineIndex;
+    p["pageNumber"] = pendingSync->pageNumber;
+    p["totalPages"] = pendingSync->totalPages;
+    if (pendingSync->paragraphIndex) {
+      p["paragraphIndex"] = *pendingSync->paragraphIndex;
+    }
+  }
 }
 
-bool KOReaderCredentialStore::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(KOREADER_FILE_JSON)) {
-    String json = Storage.readFile(KOREADER_FILE_JSON);
-    if (!json.isEmpty()) {
-      bool resave = false;
-      bool result = KOReaderJsonIO::load(*this, json.c_str(), &resave);
-      if (result && resave) {
-        saveToFile();
-        LOG_DBG("KRS", "Resaved KOReader credentials to update format");
+bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
+  std::string user = doc["username"] | "";
+
+  bool needsResave = false;
+  std::string pass = extractPassword(doc, needsResave);
+
+  setCredentials(user, pass);
+  setServerUrl(doc["serverUrl"] | "");
+
+  // The default server changed in config v2 (sync.koreader.rocks -> crosspoint-sync).
+  // A pre-v2 config with credentials and no explicit URL was actively syncing
+  // against the old default — pin that URL so the upgrade doesn't switch servers
+  // out from under the user. Fresh setups get the new default.
+  const uint8_t cfgVersion = doc["cfgVersion"] | (uint8_t)1;
+  if (cfgVersion < CONFIG_VERSION) {
+    if (getServerUrl().empty() && hasCredentials()) {
+      LOG_DBG("KRS", "Pre-v2 config used the old default server; pinning %s", LEGACY_DEFAULT_SERVER_URL);
+      setServerUrl(LEGACY_DEFAULT_SERVER_URL);
+    }
+    needsResave = true;  // stamp cfgVersion so this migration runs once
+  }
+
+  uint8_t method = doc["matchMethod"] | (uint8_t)0;
+  if (method <= static_cast<uint8_t>(DocumentMatchMethod::BINARY)) {
+    setMatchMethod(static_cast<DocumentMatchMethod>(method));
+  } else {
+    LOG_DBG("KRS", "Invalid matchMethod %u in JSON, resetting to FILENAME", method);
+    setMatchMethod(DocumentMatchMethod::FILENAME);
+  }
+  setSendMetadata(doc["sendMetadata"] | false);
+
+  // Migration: a credential file predating this setting has no "syncBehavior" key and must
+  // default to ASK_EVERY_TIME to preserve existing users' behavior. Only a brand-new store
+  // (no file on disk yet, in-memory default from the class member initializer) gets SMART.
+  const JsonVariantConst behaviorValue = doc["syncBehavior"];
+  const bool missingBehavior = behaviorValue.isNull();
+  uint8_t behavior = behaviorValue | static_cast<uint8_t>(KOReaderSyncBehavior::ASK_EVERY_TIME);
+  if (behavior <= static_cast<uint8_t>(KOReaderSyncBehavior::SMART)) {
+    setSyncBehavior(static_cast<KOReaderSyncBehavior>(behavior));
+    needsResave = needsResave || missingBehavior;
+  } else {
+    LOG_DBG("KRS", "Invalid syncBehavior %u in JSON, resetting to ASK_EVERY_TIME", behavior);
+    setSyncBehavior(KOReaderSyncBehavior::ASK_EVERY_TIME);
+    needsResave = true;
+  }
+
+  const JsonVariantConst pendingValue = doc["pendingSync"];
+  if (!pendingValue.isNull()) {
+    PendingKOReaderSync pending;
+    pending.documentHash = pendingValue["documentHash"] | "";
+    pending.xpath = pendingValue["xpath"] | "";
+    pending.percentage = pendingValue["percentage"] | 0.0f;
+    pending.spineIndex = pendingValue["spineIndex"] | (uint16_t)0;
+    pending.pageNumber = pendingValue["pageNumber"] | (uint16_t)0;
+    pending.totalPages = pendingValue["totalPages"] | (uint16_t)1;
+    // An empty hash means a prior partial/corrupt write; drop it rather than
+    // later uploading progress attached to no document.
+    if (!pending.documentHash.empty()) {
+      const JsonVariantConst paraValue = pendingValue["paragraphIndex"];
+      if (!paraValue.isNull()) {
+        pending.paragraphIndex = paraValue.as<uint16_t>();
       }
-      return result;
+      pendingSync = std::move(pending);
     }
   }
 
-  // Fall back to binary migration
-  if (Storage.exists(KOREADER_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
-      if (saveToFile()) {
-        Storage.rename(KOREADER_FILE_BIN, KOREADER_FILE_BAK);
-        LOG_DBG("KRS", "Migrated koreader.bin to koreader.json");
-        return true;
-      } else {
-        LOG_ERR("KRS", "Failed to save KOReader credentials during migration");
-        return false;
-      }
-    }
+  if (needsResave) {
+    LOG_DBG("KRS", "Resaving KOReader credentials to update format");
+    requestResave();
   }
 
-  LOG_DBG("KRS", "No credentials file found");
-  return false;
-}
-
-bool KOReaderCredentialStore::loadFromBinaryFile() {
-  HalFile file;
-  if (!Storage.openFileForRead("KRS", KOREADER_FILE_BIN, file)) {
-    return false;
-  }
-
-  uint8_t version;
-  serialization::readPod(file, version);
-  if (version != KOREADER_FILE_VERSION) {
-    LOG_DBG("KRS", "Unknown file version: %u", version);
-    return false;
-  }
-
-  if (file.available()) {
-    serialization::readString(file, username);
-  } else {
-    username.clear();
-  }
-
-  if (file.available()) {
-    serialization::readString(file, password);
-    legacyDeobfuscate(password);
-  } else {
-    password.clear();
-  }
-
-  if (file.available()) {
-    serialization::readString(file, serverUrl);
-  } else {
-    serverUrl.clear();
-  }
-
-  if (file.available()) {
-    uint8_t method;
-    serialization::readPod(file, method);
-    matchMethod = static_cast<DocumentMatchMethod>(method);
-  } else {
-    matchMethod = DocumentMatchMethod::FILENAME;
-  }
-
-  LOG_DBG("KRS", "Loaded KOReader credentials from binary for user: %s", username.c_str());
   return true;
 }
 
@@ -169,7 +167,35 @@ std::string KOReaderCredentialStore::getBaseUrl() const {
   return url;
 }
 
+bool KOReaderCredentialStore::usesCrossPointSyncServer() const { return getBaseUrl() == DEFAULT_SERVER_URL; }
+
 void KOReaderCredentialStore::setMatchMethod(DocumentMatchMethod method) {
   matchMethod = method;
   LOG_DBG("KRS", "Set match method: %s", method == DocumentMatchMethod::FILENAME ? "Filename" : "Binary");
+}
+
+void KOReaderCredentialStore::setSendMetadata(bool enabled) {
+  sendMetadata = enabled;
+  LOG_DBG("KRS", "Set send metadata: %s", enabled ? "true" : "false");
+}
+
+void KOReaderCredentialStore::setSyncBehavior(KOReaderSyncBehavior behavior) {
+  if (static_cast<uint8_t>(behavior) > static_cast<uint8_t>(KOReaderSyncBehavior::SMART)) {
+    behavior = KOReaderSyncBehavior::ASK_EVERY_TIME;
+  }
+  syncBehavior = behavior;
+  LOG_DBG("KRS", "Set sync behavior: %s", behavior == KOReaderSyncBehavior::SMART ? "Smart" : "Ask");
+}
+
+void KOReaderCredentialStore::setPendingSync(const PendingKOReaderSync& pending) {
+  pendingSync = pending;
+  saveToFile();
+  LOG_DBG("KRS", "Queued KOReader sync for next reconnect (doc=%s, %.1f%%)", pending.documentHash.c_str(),
+          pending.percentage * 100.0f);
+}
+
+void KOReaderCredentialStore::clearPendingSync() {
+  if (!pendingSync) return;
+  pendingSync.reset();
+  saveToFile();
 }

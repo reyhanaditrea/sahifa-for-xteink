@@ -67,13 +67,6 @@ constexpr bool iequalsAscii(std::string_view value, std::string_view lowercaseKe
                     [](char a, char b) { return asciiToLower(a) == b; });
 }
 
-// Case-insensitive ASCII substring search. Only needed by text-decoration,
-// which accepts multi-value strings like "underline solid red".
-constexpr bool icontainsAscii(std::string_view value, std::string_view lowercaseKeyword) {
-  return std::search(value.begin(), value.end(), lowercaseKeyword.begin(), lowercaseKeyword.end(),
-                     [](char a, char b) { return asciiToLower(a) == b; }) != value.end();
-}
-
 // Walk s and invoke fn(token) for each non-empty run between delimiters.
 // Tokens are boundary-trimmed and yielded as string_views into s; no
 // allocation. Runs of consecutive delimiters coalesce — no empty tokens are
@@ -219,8 +212,14 @@ bool CssParser::SvEqual::operator()(std::string_view sv, CompositeKey k) const n
 CssTextAlign CssParser::interpretAlignment(std::string_view val) {
   val = trimCssWhitespace(val);
 
-  if (iequalsAscii(val, "left") || iequalsAscii(val, "start")) return CssTextAlign::Left;
-  if (iequalsAscii(val, "right") || iequalsAscii(val, "end")) return CssTextAlign::Right;
+  if (iequalsAscii(val, "left")) return CssTextAlign::Left;
+  if (iequalsAscii(val, "right")) return CssTextAlign::Right;
+  // Logical values: direction-relative, resolved to physical Left/Right per paragraph
+  // once its direction is known (ParsedText::layoutAndExtractLines). Mapping them
+  // statically to Left/Right here (the old behavior) rendered Arabic books styled with
+  // the spec-recommended `text-align: start` left-aligned instead of right-aligned.
+  if (iequalsAscii(val, "start")) return CssTextAlign::Start;
+  if (iequalsAscii(val, "end")) return CssTextAlign::End;
   if (iequalsAscii(val, "center")) return CssTextAlign::Center;
   if (iequalsAscii(val, "justify")) return CssTextAlign::Justify;
 
@@ -252,11 +251,20 @@ CssFontWeight CssParser::interpretFontWeight(std::string_view val) {
 }
 
 CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
-  // text-decoration can have multiple space-separated values
-  if (icontainsAscii(val, "underline")) {
-    return CssTextDecoration::Underline;
-  }
-  return CssTextDecoration::None;
+  // text-decoration can have multiple space-separated values. Compare whole tokens
+  // so malformed values like "notunderline" do not accidentally enable a line.
+  CssTextDecoration result = CssTextDecoration::None;
+  bool explicitNone = false;
+  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      explicitNone = true;
+    } else if (iequalsAscii(token, "underline")) {
+      result = result | CssTextDecoration::Underline;
+    } else if (iequalsAscii(token, "line-through")) {
+      result = result | CssTextDecoration::LineThrough;
+    }
+  });
+  return explicitNone ? CssTextDecoration::None : result;
 }
 
 CssLength CssParser::interpretLength(std::string_view val) {
@@ -399,6 +407,13 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.direction = CssTextDirection::Ltr;
       style.defined.direction = 1;
     }
+  } else if (iequalsAscii(name, "page-break-before") || iequalsAscii(name, "break-before")) {
+    const std::string_view breakValue = stripTrailingImportant(value);
+    if (iequalsAscii(breakValue, "always") || iequalsAscii(breakValue, "page")) style.defined.pageBreakBefore = 1;
+  } else if (iequalsAscii(name, "text-align-last")) {
+    if (iequalsAscii(stripTrailingImportant(value), "justify")) style.defined.textAlignLastJustify = 1;
+  } else if (iequalsAscii(name, "-sahifa-page-fill")) {
+    if (iequalsAscii(stripTrailingImportant(value), "justify")) style.defined.pageFill = 1;
   } else if (iequalsAscii(name, "vertical-align")) {
     if (iequalsAscii(value, "super")) {
       style.verticalAlign = CssVerticalAlign::Super;
@@ -429,6 +444,11 @@ CssStyle CssParser::parseDeclarations(std::string_view declBlock) {
 // Rule processing
 
 void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style) {
+  // Skip rules that don't define any supported properties to save RAM.
+  if (!style.defined.anySet()) {
+    return;
+  }
+
   // Check if we've reached the rule limit before processing
   if (rulesBySelector_.size() >= MAX_RULES) {
     LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);
@@ -758,6 +778,9 @@ bool CssParser::saveToCache() const {
     if (style.defined.display) definedBits |= 1 << 15;
     if (style.defined.direction) definedBits |= 1 << 16;
     if (style.defined.verticalAlign) definedBits |= 1 << 17;
+    if (style.defined.pageBreakBefore) definedBits |= 1 << 18;
+    if (style.defined.pageFill) definedBits |= 1 << 19;
+    if (style.defined.textAlignLastJustify) definedBits |= 1 << 20;
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
@@ -800,6 +823,9 @@ bool CssParser::loadFromCache() {
     rulesBySelector_.clear();
     return false;
   }
+
+  // Size the bucket array up front to avoid incremental rehashes while loading rules.
+  rulesBySelector_.reserve(ruleCount);
 
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
     return static_cast<size_t>(file.available()) >= neededBytes;
@@ -868,7 +894,7 @@ bool CssParser::loadFromCache() {
       rulesBySelector_.clear();
       return false;
     }
-    style.textDecoration = static_cast<CssTextDecoration>(enumVal);
+    style.textDecoration = static_cast<CssTextDecoration>(enumVal & CSS_TEXT_DECORATION_MASK);
 
     if (file.read(&enumVal, 1) != 1) {
       rulesBySelector_.clear();
@@ -937,6 +963,9 @@ bool CssParser::loadFromCache() {
     style.defined.display = (definedBits & 1 << 15) != 0;
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+    style.defined.pageBreakBefore = (definedBits & 1 << 18) != 0;
+    style.defined.pageFill = (definedBits & 1 << 19) != 0;
+    style.defined.textAlignLastJustify = (definedBits & 1 << 20) != 0;
 
     rulesBySelector_[selector] = style;
   }

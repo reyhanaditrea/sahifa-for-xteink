@@ -2,11 +2,15 @@
 
 #include <HalDisplay.h>
 #include <HalStorage.h>
-#include <InflateReader.h>
+#include <InflateStream.h>
 #include <Logging.h>
+#include <Memory.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "BitmapHelpers.h"
 
@@ -71,6 +75,12 @@ enum PngFilter : uint8_t {
   PNG_FILTER_AVERAGE = 3,
   PNG_FILTER_PAETH = 4,
 };
+
+void yieldDuringDecode(uint8_t& rowsSinceYield) {
+  if (++rowsSinceYield < 8) return;
+  rowsSinceYield = 0;
+  vTaskDelay(1);
+}
 
 // Read a big-endian 32-bit value from file
 bool readBE32(HalFile& file, uint32_t& value) {
@@ -174,9 +184,8 @@ void writeBmpHeader2bit(Print& bmpOut, const int width, const int height) {
 }  // namespace
 
 // Context for streaming PNG decompression
-// IMPORTANT: reader must be the first field - the uzlib callback casts uzlib_uncomp* to PngDecodeContext*
 struct PngDecodeContext {
-  InflateReader reader;  // Must be first — callback casts uzlib_uncomp* to PngDecodeContext*
+  InflateStream reader;
   HalFile* file;
 
   // PNG image properties
@@ -195,7 +204,7 @@ struct PngDecodeContext {
   uint32_t chunkBytesRemaining;  // bytes left in current IDAT chunk
   bool idatFinished;             // no more IDAT chunks
 
-  // File read buffer for feeding uzlib
+  // File read buffer for feeding the inflate stream
   uint8_t readBuf[2048];
 
   // Palette for indexed color (type 3)
@@ -229,21 +238,21 @@ static bool findNextIdatChunk(PngDecodeContext& ctx) {
   }
 }
 
-// uzlib callback: reads the next batch of IDAT data from the file
-static int pngIdatReadCallback(uzlib_uncomp* uncomp) {
-  auto* ctx = reinterpret_cast<PngDecodeContext*>(uncomp);
+// Fill callback: reads the next batch of IDAT data from the file
+static size_t pngIdatFillCallback(void* vctx, const uint8_t** data) {
+  auto* ctx = static_cast<PngDecodeContext*>(vctx);
 
-  if (ctx->idatFinished) return -1;
+  if (ctx->idatFinished) return 0;
 
   // Skip 4-byte CRC and find next IDAT chunk when current chunk is exhausted
   while (ctx->chunkBytesRemaining == 0) {
     if (!ctx->file->seekCur(4)) {  // skip 4-byte CRC of previous IDAT
       ctx->idatFinished = true;
-      return -1;
+      return 0;
     }
     if (!findNextIdatChunk(*ctx)) {
       ctx->idatFinished = true;
-      return -1;
+      return 0;
     }
   }
 
@@ -251,30 +260,23 @@ static int pngIdatReadCallback(uzlib_uncomp* uncomp) {
   size_t toRead = sizeof(ctx->readBuf);
   if (toRead > ctx->chunkBytesRemaining) toRead = ctx->chunkBytesRemaining;
 
-  int bytesRead = ctx->file->read(ctx->readBuf, toRead);
+  const int bytesRead = ctx->file->read(ctx->readBuf, toRead);
   if (bytesRead <= 0) {
     ctx->idatFinished = true;
-    return -1;
+    return 0;
   }
 
   ctx->chunkBytesRemaining -= bytesRead;
-
-  // Give uzlib the buffer (skip first byte since we return it directly)
-  uncomp->source = ctx->readBuf + 1;
-  uncomp->source_limit = ctx->readBuf + bytesRead;
-  return ctx->readBuf[0];
+  *data = ctx->readBuf;
+  return static_cast<size_t>(bytesRead);
 }
 
-// Decode one scanline: decompress filter byte + raw bytes, then unfilter
-static bool decodeScanline(PngDecodeContext& ctx) {
-  // Decompress filter byte
-  uint8_t filterType;
-  if (!ctx.reader.read(&filterType, 1)) return false;
-
-  // Decompress raw row data into currentRow
-  if (!ctx.reader.read(ctx.currentRow, ctx.rawRowBytes)) return false;
-
-  // Apply reverse filter
+// Reconstruct one already-decompressed scanline in place (ctx.currentRow holds the raw
+// filtered bytes on entry), using ctx.previousRow for the Up/Average/Paeth filter types.
+// Shared by both the normal streaming decode and the one-shot fallback below -- the only
+// difference between those two paths is how the raw filtered bytes got into ctx.currentRow
+// in the first place, not how they're reconstructed.
+static bool applyScanlineFilter(PngDecodeContext& ctx, const uint8_t filterType) {
   const int bpp = ctx.bytesPerPixel;
 
   switch (filterType) {
@@ -316,6 +318,30 @@ static bool decodeScanline(PngDecodeContext& ctx) {
   }
 
   return true;
+}
+
+// Decode one scanline: decompress filter byte + raw bytes from the streaming reader, then
+// unfilter. Used when the 32KB streaming ring buffer allocation succeeded.
+static bool decodeScanline(PngDecodeContext& ctx) {
+  // Decompress filter byte
+  uint8_t filterType;
+  if (!ctx.reader.read(&filterType, 1)) return false;
+
+  // Decompress raw row data into currentRow
+  if (!ctx.reader.read(ctx.currentRow, ctx.rawRowBytes)) return false;
+
+  return applyScanlineFilter(ctx, filterType);
+}
+
+// Decode one scanline from a buffer that was already fully decompressed in one shot (see the
+// one-shot fallback in pngFileToBmpStreamInternal). rowSrc points at this row's filter byte,
+// followed by rawRowBytes of raw filtered data -- the same per-row layout the streaming path
+// consumes one piece at a time, just already sitting in memory instead of pulled from the
+// decompressor call by call.
+static bool decodeScanlineFromBuffer(PngDecodeContext& ctx, const uint8_t* rowSrc) {
+  const uint8_t filterType = rowSrc[0];
+  memcpy(ctx.currentRow, rowSrc + 1, ctx.rawRowBytes);
+  return applyScanlineFilter(ctx, filterType);
 }
 
 // Batch-convert an entire scanline to grayscale.
@@ -396,7 +422,7 @@ static void convertScanlineToGray(const PngDecodeContext& ctx, uint8_t* grayRow)
 }
 
 bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
-                                                   bool oneBit, bool crop) {
+                                                   bool oneBit, bool crop, bool allowUpscale) {
   LOG_DBG("PNG", "Converting PNG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
   // Verify PNG signature
@@ -555,16 +581,58 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     return false;
   }
 
-  // Initialize streaming decompressor with 32KB ring buffer for back-reference history
+  // Initialize streaming decompressor with 32KB ring buffer for back-reference history. This
+  // is comfortably the single largest allocation in this whole pipeline, and on a heap
+  // already under pressure elsewhere in the app (WiFi/HTTP stack, UI state, font caches) it
+  // can fail even with tens of KB of *aggregate* free heap if nothing that large happens to
+  // be contiguous -- confirmed via a real device log: "connected, free heap: 43152 bytes"
+  // immediately followed by this exact failure, for every single OPDS cover fetched.
+  bool oneShotMode = false;
+  std::unique_ptr<uint8_t[]> oneShotBuffer;
+  const size_t oneShotTotalBytes = static_cast<size_t>(rawRowBytes + 1) * height;
   if (!ctx.reader.init(true)) {
-    LOG_ERR("PNG", "Failed to init inflate reader");
-    free(ctx.currentRow);
-    free(ctx.previousRow);
-    return false;
+    // Fall back to one-shot decode: it resolves back-references directly against the
+    // destination buffer instead of a separate window, so it needs no extra 32KB
+    // allocation at all -- just the (much smaller) decompressed image data itself. Only
+    // safe when the whole image comfortably fits in one buffer -- true for every OPDS
+    // cover (the server caps these at 160x240, 1-bit) and small embedded EPUB covers, but
+    // not guaranteed for a large embedded cover, hence the cap rather than always trying.
+    constexpr size_t ONE_SHOT_FALLBACK_MAX_BYTES = 24576;
+    if (oneShotTotalBytes > ONE_SHOT_FALLBACK_MAX_BYTES) {
+      LOG_ERR("PNG", "Failed to init inflate reader (image too large for one-shot fallback: %zu bytes)",
+              oneShotTotalBytes);
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+      return false;
+    }
+    oneShotBuffer = makeUniqueNoThrow<uint8_t[]>(oneShotTotalBytes);
+    if (!oneShotBuffer) {
+      LOG_ERR("PNG", "OOM: %zu byte one-shot fallback buffer", oneShotTotalBytes);
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+      return false;
+    }
+    if (!ctx.reader.init(false)) {
+      LOG_ERR("PNG", "Failed to init one-shot inflate reader");
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+      return false;
+    }
+    oneShotMode = true;
+    LOG_DBG("PNG", "Streaming ring buffer unavailable, using one-shot fallback (%zu bytes)", oneShotTotalBytes);
   }
-  ctx.reader.setReadCallback(pngIdatReadCallback);
-  // PNG IDAT data is zlib-wrapped: consume the 2-byte zlib header (CMF + FLG)
-  ctx.reader.skipZlibHeader();
+  ctx.reader.setFill(pngIdatFillCallback, &ctx);
+  // PNG IDAT data is zlib-wrapped (2-byte header + trailing adler32)
+  ctx.reader.setZlibWrapped();
+
+  if (oneShotMode) {
+    if (!ctx.reader.read(oneShotBuffer.get(), oneShotTotalBytes)) {
+      LOG_ERR("PNG", "One-shot decompress failed");
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+      return false;
+    }
+  }
 
   // Calculate output dimensions (same logic as JpegToBmpConverter)
   int outWidth = width;
@@ -583,18 +651,27 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     } else {
       scale = (scaleToFitWidth < scaleToFitHeight) ? scaleToFitWidth : scaleToFitHeight;
     }
+    // Never upscale a source smaller than the target when the caller asked us not to. Capping
+    // at 1.0 also makes outWidth/outHeight below collapse back to the source's own dimensions,
+    // which then takes the direct-copy path a few lines down instead of the costlier
+    // area-averaging resample loop -- cheaper AND sharper for small covers.
+    if (!allowUpscale && scale > 1.0f) {
+      scale = 1.0f;
+    }
 
     outWidth = static_cast<int>(width * scale);
     outHeight = static_cast<int>(height * scale);
     if (outWidth < 1) outWidth = 1;
     if (outHeight < 1) outHeight = 1;
 
-    scaleX_fp = (width << 16) / outWidth;
-    scaleY_fp = (height << 16) / outHeight;
-    needsScaling = true;
+    if (static_cast<uint32_t>(outWidth) != width || static_cast<uint32_t>(outHeight) != height) {
+      scaleX_fp = (width << 16) / outWidth;
+      scaleY_fp = (height << 16) / outHeight;
+      needsScaling = true;
 
-    LOG_DBG("PNG", "Scaling %ux%u -> %dx%d (target %dx%d)", width, height, outWidth, outHeight, targetWidth,
-            targetHeight);
+      LOG_DBG("PNG", "Scaling %ux%u -> %dx%d (target %dx%d)", width, height, outWidth, outHeight, targetWidth,
+              targetHeight);
+    }
   }
 
   // Write BMP header
@@ -619,18 +696,44 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     return false;
   }
 
-  // Create ditherers (same as JpegToBmpConverter)
+  // Create ditherers (same as JpegToBmpConverter). Both the outer object and its internal
+  // error-row buffers (see BitmapHelpers.h) must be nothrow + null-checked: with
+  // -fno-exceptions a bare `new` that fails calls abort() instead of returning nullptr.
   AtkinsonDitherer* atkinsonDitherer = nullptr;
   FloydSteinbergDitherer* fsDitherer = nullptr;
   Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
 
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
+    atkinson1BitDitherer = new (std::nothrow) Atkinson1BitDitherer(outWidth);
+    if (!atkinson1BitDitherer || !atkinson1BitDitherer->ok()) {
+      LOG_ERR("PNG", "OOM: Atkinson1BitDitherer");
+      delete atkinson1BitDitherer;
+      free(rowBuffer);
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+      return false;
+    }
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(outWidth);
+      if (!atkinsonDitherer || !atkinsonDitherer->ok()) {
+        LOG_ERR("PNG", "OOM: AtkinsonDitherer");
+        delete atkinsonDitherer;
+        free(rowBuffer);
+        free(ctx.currentRow);
+        free(ctx.previousRow);
+        return false;
+      }
     } else if (USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(outWidth);
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(outWidth);
+      if (!fsDitherer || !fsDitherer->ok()) {
+        LOG_ERR("PNG", "OOM: FloydSteinbergDitherer");
+        delete fsDitherer;
+        free(rowBuffer);
+        free(ctx.currentRow);
+        free(ctx.previousRow);
+        return false;
+      }
     }
   }
 
@@ -641,8 +744,20 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   uint32_t nextOutY_srcStart = 0;
 
   if (needsScaling) {
-    rowAccum = new uint32_t[outWidth]();
-    rowCount = new uint16_t[outWidth]();
+    rowAccum = new (std::nothrow) uint32_t[outWidth]();
+    rowCount = new (std::nothrow) uint16_t[outWidth]();
+    if (!rowAccum || !rowCount) {
+      LOG_ERR("PNG", "OOM: scaling accumulators");
+      delete[] rowAccum;
+      delete[] rowCount;
+      delete atkinsonDitherer;
+      delete fsDitherer;
+      delete atkinson1BitDitherer;
+      free(rowBuffer);
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+      return false;
+    }
     nextOutY_srcStart = scaleY_fp;
   }
 
@@ -663,11 +778,16 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   }
 
   bool success = true;
+  uint8_t rowsSinceYield = 0;
 
   // Process each scanline
   for (uint32_t y = 0; y < height; y++) {
-    // Decode one scanline
-    if (!decodeScanline(ctx)) {
+    // Decode one scanline -- from the streaming reader normally, or by slicing the
+    // already-fully-decompressed one-shot buffer when the streaming ring buffer couldn't
+    // be allocated (see above).
+    const bool scanlineDecoded =
+        oneShotMode ? decodeScanlineFromBuffer(ctx, oneShotBuffer.get() + y * (rawRowBytes + 1)) : decodeScanline(ctx);
+    if (!scanlineDecoded) {
       LOG_ERR("PNG", "Failed to decode scanline %u", y);
       success = false;
       break;
@@ -714,6 +834,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
           fsDitherer->nextRow();
       }
       bmpOut.write(rowBuffer, bytesPerRow);
+      yieldDuringDecode(rowsSinceYield);
     } else {
       // Area-averaging scaling (same as JpegToBmpConverter)
       for (int outX = 0; outX < outWidth; outX++) {
@@ -782,6 +903,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
 
         bmpOut.write(rowBuffer, bytesPerRow);
         currentOutY++;
+        yieldDuringDecode(rowsSinceYield);
 
         nextOutY_srcStart = static_cast<uint32_t>(currentOutY + 1) * scaleY_fp;
 
@@ -833,6 +955,6 @@ bool PngToBmpConverter::pngFileToBmpStreamWithSize(HalFile& pngFile, Print& bmpO
 }
 
 bool PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(HalFile& pngFile, Print& bmpOut, int targetMaxWidth,
-                                                       int targetMaxHeight) {
-  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true);
+                                                       int targetMaxHeight, bool allowUpscale) {
+  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, allowUpscale);
 }

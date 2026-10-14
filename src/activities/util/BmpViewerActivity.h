@@ -13,10 +13,13 @@ class BmpViewerActivity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  std::string wakeResumePath() const override { return filePath; }
 
  private:
   void loadSiblingImages();
   void doSetSleepCover();
+  bool canSetSleepCover() const;
+  bool renderPng();
 
   std::string filePath;
   std::vector<std::string> siblingImages;

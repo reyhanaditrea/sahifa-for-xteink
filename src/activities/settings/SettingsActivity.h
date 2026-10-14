@@ -7,6 +7,7 @@
 
 #include "CrossPointSettings.h"
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
 
 enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
@@ -16,13 +17,15 @@ enum class SettingAction {
   RemapFrontButtons,
   CustomiseStatusBar,
   KOReaderSync,
-  OPDSBrowser,
   Network,
   ClearCache,
   CheckForUpdates,
   SdFirmwareUpdate,
   Language,
   DownloadFonts,
+  Dictionary,
+  BrowseFiles,
+  FileTransfer,
 };
 
 struct SettingInfo {
@@ -54,8 +57,23 @@ struct SettingInfo {
   std::function<std::string()> stringGetter;
   std::function<void(const std::string&)> stringSetter;
 
+  // Hides this row on the device until whatever it depends on is in the state that
+  // makes it mean anything -- Pomodoro's durations while the Pomodoro app is off,
+  // the sleep-cover options while the sleep screen shows no cover. Empty = always
+  // shown, which is almost every setting.
+  //
+  // Device UI only: rebuildSettingsLists() applies it, while the web settings API
+  // reads getCombinedSettingsList(), so every key stays reachable over HTTP no
+  // matter what the device is currently displaying.
+  std::function<bool()> visibleWhen;
+
   SettingInfo& withObfuscated() {
     obfuscated = true;
+    return *this;
+  }
+
+  SettingInfo& shownWhen(std::function<bool()> predicate) {
+    visibleWhen = std::move(predicate);
     return *this;
   }
 
@@ -128,6 +146,35 @@ struct SettingInfo {
     return s;
   }
 
+  // For a TOGGLE/VALUE field stored outside CrossPointSettings (e.g.
+  // MidadAppSettings) -- same reasoning as DynamicEnum above: Toggle()/Value()'s
+  // pointer-to-member only works for fields that actually live on CrossPointSettings.
+  static SettingInfo DynamicToggle(StrId nameId, std::function<uint8_t()> getter, std::function<void(uint8_t)> setter,
+                                   const char* key = nullptr, StrId category = StrId::STR_NONE_OPT) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::TOGGLE;
+    s.valueGetter = std::move(getter);
+    s.valueSetter = std::move(setter);
+    s.key = key;
+    s.category = category;
+    return s;
+  }
+
+  static SettingInfo DynamicValue(StrId nameId, std::function<uint8_t()> getter, std::function<void(uint8_t)> setter,
+                                  const ValueRange valueRange, const char* key = nullptr,
+                                  StrId category = StrId::STR_NONE_OPT) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::VALUE;
+    s.valueGetter = std::move(getter);
+    s.valueSetter = std::move(setter);
+    s.valueRange = valueRange;
+    s.key = key;
+    s.category = category;
+    return s;
+  }
+
   static SettingInfo DynamicString(StrId nameId, std::function<std::string()> getter,
                                    std::function<void(const std::string&)> setter, const char* key = nullptr,
                                    StrId category = StrId::STR_NONE_OPT) {
@@ -153,13 +200,16 @@ class SettingsActivity final : public Activity {
   std::vector<SettingInfo> displaySettings;
   std::vector<SettingInfo> readerSettings;
   std::vector<SettingInfo> controlsSettings;
+  std::vector<SettingInfo> appsSettings;
   std::vector<SettingInfo> systemSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
 
-  static constexpr int categoryCount = 4;
+  OptionPopup optionPopup;
+
+  static constexpr int categoryCount = 5;
   static const StrId categoryNames[categoryCount];
 
   void enterCategory(int categoryIndex);

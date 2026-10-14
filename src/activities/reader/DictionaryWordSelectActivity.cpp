@@ -1,0 +1,578 @@
+#include "DictionaryWordSelectActivity.h"
+
+#include <ArabicStem.h>
+#include <FontCacheManager.h>
+#include <GfxRenderer.h>
+#include <HalGPIO.h>
+#include <I18n.h>
+#include <ScriptDetector.h>
+
+#include <algorithm>
+#include <climits>
+#include <cstdlib>
+#include <cstring>
+#include <optional>
+
+#include "CrossPointSettings.h"
+#include "DictionaryDefinitionActivity.h"
+#include "DictionaryStore.h"
+#include "DictionarySuggestionsActivity.h"
+#include "MappedInputManager.h"
+#include "components/UITheme.h"
+#include "fontIds.h"
+
+namespace {
+constexpr int HIGHLIGHT_PADDING_X = 2;
+constexpr int HIGHLIGHT_PADDING_Y = 1;
+constexpr int HIGHLIGHT_RADIUS = 3;
+}  // namespace
+
+void DictionaryWordSelectActivity::onEnter() {
+  Activity::onEnter();
+  invalidateSelectionRegionCache();
+  extractWords();
+  mergeHyphenatedWords();
+  if (!rows.empty()) {
+    currentRow = std::min<int>(static_cast<int>(rows.size()) / 3, static_cast<int>(rows.size()) - 1);
+    currentWordInRow = 0;
+  }
+  requestUpdate();
+}
+
+void DictionaryWordSelectActivity::onExit() {
+  freeSelectionRegionCache();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+  Activity::onExit();
+}
+
+void DictionaryWordSelectActivity::extractWords() {
+  words.clear();
+  rows.clear();
+  if (!page) return;
+
+  prepareReaderFontMetrics();
+
+  for (const auto& element : page->elements) {
+    if (!element || element->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*element);
+    const auto& block = line.getBlock();
+    if (!block) continue;
+
+    // Foulad fork: TextBlock exposes a compact accessor API (wordCount/
+    // wordText/wordXpos) instead of vcodex's vector getters. wordText() is the
+    // ORIGINAL unshaped UTF-8 word -- Arabic shaping happens at draw time -- so
+    // the selected word is already lookup-ready for DictionaryStore.
+    for (uint16_t i = 0; i < block->wordCount(); ++i) {
+      const std::string wordStr = block->wordText(i);
+      const std::string cleaned = DictionaryStore::cleanWord(wordStr);
+      if (cleaned.empty()) continue;
+      const int16_t y = static_cast<int16_t>(line.yPos + marginTop);
+      const uint16_t kashida = block->kashidaExtraPx(i);
+      int16_t x = static_cast<int16_t>(line.xPos + block->wordXpos(i) + marginLeft);
+      int16_t width = static_cast<int16_t>(std::max(1, measureWordWidth(wordStr.c_str()) + kashida));
+
+      // A mushaf writes the ayah's citation straight onto its last word, with no
+      // space for the layout to split on: "...الصَّاغِرِينَ﴾[الأعراف: ١٠-١٣]" arrives as one
+      // word. The lookup already takes only what stands before the ornate paren, so
+      // the highlight covers that much too -- and in an Arabic word that part is at
+      // the right-hand end, where the line starts.
+      const size_t keep = ArabicStem::wordLookupLength(wordStr);
+      std::string shown = wordStr;
+      if (keep < wordStr.size()) {
+        shown = wordStr.substr(0, keep);
+        const int16_t kept = static_cast<int16_t>(std::max(1, measureWordWidth(shown.c_str())));
+        if (ScriptDetector::containsArabic(wordStr.c_str())) x = static_cast<int16_t>(x + width - kept);
+        width = kept;
+      }
+      words.push_back(WordInfo{shown, cleaned, x, y, width, 0, -1, -1, kashida});
+    }
+  }
+
+  if (words.empty()) return;
+  std::sort(words.begin(), words.end(), [](const WordInfo& a, const WordInfo& b) {
+    if (std::abs(a.screenY - b.screenY) > 2) return a.screenY < b.screenY;
+    return a.screenX < b.screenX;
+  });
+
+  int16_t currentY = words[0].screenY;
+  rows.push_back(Row{currentY, {}});
+  for (size_t i = 0; i < words.size(); ++i) {
+    if (std::abs(words[i].screenY - currentY) > 2) {
+      currentY = words[i].screenY;
+      rows.push_back(Row{currentY, {}});
+    }
+    words[i].row = static_cast<int16_t>(rows.size() - 1);
+    rows.back().wordIndices.push_back(static_cast<int>(i));
+  }
+}
+
+void DictionaryWordSelectActivity::prepareReaderFontMetrics() {
+  if (!page || !renderer.isSdCardFont(readerFontId)) return;
+
+  std::string pageText;
+  pageText.reserve(2048);
+  for (const auto& element : page->elements) {
+    if (!element || element->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*element);
+    const auto& block = line.getBlock();
+    if (!block) continue;
+
+    for (uint16_t i = 0; i < block->wordCount(); ++i) {
+      if (!pageText.empty()) pageText.push_back(' ');
+      pageText += block->wordText(i);
+    }
+  }
+
+  if (!pageText.empty()) {
+    renderer.ensureSdCardFontReady(readerFontId, pageText.c_str(), 0x01);
+  }
+}
+
+int DictionaryWordSelectActivity::measureWordWidth(const char* text) const {
+  return renderer.getTextAdvanceX(readerFontId, text, EpdFontFamily::REGULAR);
+}
+
+void DictionaryWordSelectActivity::mergeHyphenatedWords() {
+  for (size_t rowIndex = 0; rowIndex + 1 < rows.size(); ++rowIndex) {
+    if (rows[rowIndex].wordIndices.empty() || rows[rowIndex + 1].wordIndices.empty()) continue;
+
+    const int lastIndex = rows[rowIndex].wordIndices.back();
+    const int nextIndex = rows[rowIndex + 1].wordIndices.front();
+    const std::string& raw = words[lastIndex].text;
+    if (raw.empty()) continue;
+
+    bool hyphenated = raw.back() == '-';
+    if (!hyphenated && raw.size() >= 2 && static_cast<unsigned char>(raw[raw.size() - 2]) == 0xC2 &&
+        static_cast<unsigned char>(raw[raw.size() - 1]) == 0xAD) {
+      hyphenated = true;
+    }
+    if (!hyphenated) continue;
+
+    // `raw` is non-empty on every path that reaches here: `hyphenated` is only
+    // set by a trailing '-' or a trailing U+00AD, both of which require content.
+    std::string first = raw;
+    if (first.back() == '-') {
+      first.pop_back();
+    } else if (first.size() >= 2) {
+      first.erase(first.size() - 2);
+    }
+
+    const std::string merged = DictionaryStore::cleanWord(first + words[nextIndex].text);
+    if (merged.empty()) continue;
+    words[lastIndex].lookupText = merged;
+    words[nextIndex].lookupText = merged;
+    words[lastIndex].continuationIndex = nextIndex;
+    words[nextIndex].continuationOf = lastIndex;
+  }
+}
+
+void DictionaryWordSelectActivity::moveRow(const int delta) {
+  if (rows.empty()) return;
+  const int oldWordIndex = rows[currentRow].wordIndices[currentWordInRow];
+  const int oldCenter = words[oldWordIndex].screenX + words[oldWordIndex].width / 2;
+
+  currentRow = (currentRow + delta + static_cast<int>(rows.size())) % static_cast<int>(rows.size());
+  int bestIndex = 0;
+  int bestDistance = INT_MAX;
+  for (int i = 0; i < static_cast<int>(rows[currentRow].wordIndices.size()); ++i) {
+    const int wordIndex = rows[currentRow].wordIndices[i];
+    const int center = words[wordIndex].screenX + words[wordIndex].width / 2;
+    const int distance = std::abs(center - oldCenter);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+  currentWordInRow = bestIndex;
+  updateSelectionHighlight();
+}
+
+void DictionaryWordSelectActivity::moveWord(const int delta) {
+  if (rows.empty()) return;
+  const int rowCount = static_cast<int>(rows.size());
+  const int wordCount = static_cast<int>(rows[currentRow].wordIndices.size());
+  if (wordCount <= 0) return;
+
+  if (delta < 0 && currentWordInRow > 0) {
+    --currentWordInRow;
+  } else if (delta > 0 && currentWordInRow + 1 < wordCount) {
+    ++currentWordInRow;
+  } else if (delta < 0) {
+    currentRow = (currentRow + rowCount - 1) % rowCount;
+    currentWordInRow = static_cast<int>(rows[currentRow].wordIndices.size()) - 1;
+  } else {
+    currentRow = (currentRow + 1) % rowCount;
+    currentWordInRow = 0;
+  }
+  updateSelectionHighlight();
+}
+
+void DictionaryWordSelectActivity::updateSelectionHighlight() {
+  if (redrawSelectionFast()) return;
+  requestUpdate();
+}
+
+bool DictionaryWordSelectActivity::redrawSelectionFast() {
+  if (selectionRegionCount == 0) return false;
+
+  RenderLock lock(*this);
+  if (!restoreSelectionBaseRegions()) return false;
+  if (!storeSelectionBaseRegions()) return false;
+
+  prewarmCurrentSelectionText();
+  drawSelectionHighlight();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  return true;
+}
+
+void DictionaryWordSelectActivity::prewarmCurrentSelectionText() const {
+  if (rows.empty() || currentRow < 0 || currentRow >= static_cast<int>(rows.size()) || currentWordInRow < 0 ||
+      currentWordInRow >= static_cast<int>(rows[currentRow].wordIndices.size())) {
+    return;
+  }
+
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm) return;
+
+  const int wordIndex = rows[currentRow].wordIndices[currentWordInRow];
+  std::string text = words[wordIndex].text;
+  const int linkedIndex =
+      words[wordIndex].continuationOf >= 0 ? words[wordIndex].continuationOf : words[wordIndex].continuationIndex;
+  if (linkedIndex >= 0 && linkedIndex != wordIndex && linkedIndex < static_cast<int>(words.size())) {
+    text.push_back(' ');
+    text += words[linkedIndex].text;
+  }
+
+  if (!text.empty()) {
+    fcm->prewarmCache(readerFontId, text.c_str(), 0x01);
+  }
+}
+
+int DictionaryWordSelectActivity::lineHeightForWord(const WordInfo& word) const {
+  const int latinLineHeight = renderer.getLineHeight(readerFontId);
+  if (!ScriptDetector::containsArabic(word.text.c_str())) return latinLineHeight;
+  const int arabicLineHeight = renderer.getLineHeight(renderer.getResolvedArabicFontId(readerFontId));
+  return std::max(latinLineHeight, arabicLineHeight);
+}
+
+size_t DictionaryWordSelectActivity::collectSelectionRects(SelectionRect* rects, const size_t maxRects) const {
+  if (!rects || maxRects == 0 || rows.empty() || currentRow < 0 || currentRow >= static_cast<int>(rows.size()) ||
+      currentWordInRow < 0 || currentWordInRow >= static_cast<int>(rows[currentRow].wordIndices.size())) {
+    return 0;
+  }
+
+  auto addRect = [&](const WordInfo& selectedWord, size_t& count) {
+    if (count >= maxRects) return;
+    const int lineHeight = lineHeightForWord(selectedWord);
+    rects[count++] =
+        SelectionRect{selectedWord.screenX - HIGHLIGHT_PADDING_X, selectedWord.screenY - HIGHLIGHT_PADDING_Y,
+                      selectedWord.width + HIGHLIGHT_PADDING_X * 2, lineHeight + HIGHLIGHT_PADDING_Y * 2};
+  };
+
+  size_t count = 0;
+  const int wordIndex = rows[currentRow].wordIndices[currentWordInRow];
+  addRect(words[wordIndex], count);
+
+  const int linkedIndex =
+      words[wordIndex].continuationOf >= 0 ? words[wordIndex].continuationOf : words[wordIndex].continuationIndex;
+  if (linkedIndex >= 0 && linkedIndex != wordIndex && linkedIndex < static_cast<int>(words.size())) {
+    addRect(words[linkedIndex], count);
+  }
+
+  return count;
+}
+
+bool DictionaryWordSelectActivity::storeSelectionBaseRegions() {
+  SelectionRect rects[MAX_SELECTION_REGIONS];
+  const size_t rectCount = collectSelectionRects(rects, MAX_SELECTION_REGIONS);
+  invalidateSelectionRegionCache();
+  if (rectCount == 0) return false;
+
+  for (size_t i = 0; i < rectCount; ++i) {
+    const size_t required = renderer.getRegionByteSize(rects[i].x, rects[i].y, rects[i].width, rects[i].height);
+    if (required == 0) {
+      invalidateSelectionRegionCache();
+      return false;
+    }
+
+    SelectionRegionCache& region = selectionRegions[i];
+    if (region.capacity < required) {
+      uint8_t* replacement = static_cast<uint8_t*>(malloc(required));
+      if (!replacement) {
+        invalidateSelectionRegionCache();
+        return false;
+      }
+      free(region.buffer);
+      region.buffer = replacement;
+      region.capacity = required;
+    }
+
+    if (!renderer.copyRegionToBuffer(rects[i].x, rects[i].y, rects[i].width, rects[i].height, region.buffer,
+                                     region.capacity)) {
+      invalidateSelectionRegionCache();
+      return false;
+    }
+
+    region.rect = rects[i];
+    region.size = required;
+    region.stored = true;
+  }
+
+  selectionRegionCount = rectCount;
+  return true;
+}
+
+bool DictionaryWordSelectActivity::restoreSelectionBaseRegions() const {
+  if (selectionRegionCount == 0) return false;
+
+  for (size_t i = 0; i < selectionRegionCount; ++i) {
+    const SelectionRegionCache& region = selectionRegions[i];
+    if (!region.stored || !region.buffer || region.size == 0) return false;
+    if (!renderer.copyBufferToRegion(region.rect.x, region.rect.y, region.rect.width, region.rect.height, region.buffer,
+                                     region.size)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void DictionaryWordSelectActivity::invalidateSelectionRegionCache() {
+  selectionRegionCount = 0;
+  for (auto& region : selectionRegions) {
+    region.stored = false;
+    region.size = 0;
+  }
+}
+
+void DictionaryWordSelectActivity::freeSelectionRegionCache() {
+  for (auto& region : selectionRegions) {
+    free(region.buffer);
+    region.buffer = nullptr;
+    region.capacity = 0;
+    region.size = 0;
+    region.stored = false;
+  }
+  selectionRegionCount = 0;
+}
+
+void DictionaryWordSelectActivity::drawSelectionHighlight() {
+  if (rows.empty() || currentRow < 0 || currentRow >= static_cast<int>(rows.size()) || currentWordInRow < 0 ||
+      currentWordInRow >= static_cast<int>(rows[currentRow].wordIndices.size())) {
+    return;
+  }
+
+  const int wordIndex = rows[currentRow].wordIndices[currentWordInRow];
+  const auto& word = words[wordIndex];
+
+  auto drawSelectedWord = [&](const WordInfo& selectedWord) {
+    const int lineHeight = lineHeightForWord(selectedWord);
+    renderer.fillRoundedRect(selectedWord.screenX - HIGHLIGHT_PADDING_X, selectedWord.screenY - HIGHLIGHT_PADDING_Y,
+                             selectedWord.width + HIGHLIGHT_PADDING_X * 2, lineHeight + HIGHLIGHT_PADDING_Y * 2,
+                             HIGHLIGHT_RADIUS, Color::Black);
+    renderer.drawText(readerFontId, selectedWord.screenX, selectedWord.screenY, selectedWord.text.c_str(), false,
+                      EpdFontFamily::REGULAR, BidiUtils::BidiBaseDir::AUTO, selectedWord.kashidaExtraPx);
+  };
+
+  drawSelectedWord(word);
+
+  const int linkedIndex = word.continuationOf >= 0 ? word.continuationOf : word.continuationIndex;
+  if (linkedIndex >= 0 && linkedIndex != wordIndex && linkedIndex < static_cast<int>(words.size())) {
+    drawSelectedWord(words[linkedIndex]);
+  }
+}
+
+void DictionaryWordSelectActivity::lookupSelectedWord() {
+  if (rows.empty()) return;
+  const int wordIndex = rows[currentRow].wordIndices[currentWordInRow];
+
+  // The token in front of this one, which is evidence about it: أَقُل behind لم is
+  // the verb أقول written contracted, not the noun أقل. A word split across a line
+  // break is one word, so its other half is not what came before it.
+  int previousIndex = wordIndex - 1;
+  if (words[wordIndex].continuationOf >= 0 && words[wordIndex].continuationOf == previousIndex) --previousIndex;
+  const std::string previousWord = previousIndex >= 0 ? words[previousIndex].text : std::string();
+
+  lookupQuery(words[wordIndex].lookupText.empty() ? DictionaryStore::cleanWord(words[wordIndex].text)
+                                                  : words[wordIndex].lookupText,
+              previousWord);
+}
+
+void DictionaryWordSelectActivity::lookupQuery(const std::string& query, const std::string& previousWord) {
+  freeSelectionRegionCache();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+  if (query.empty()) {
+    GUI.drawPopup(renderer, tr(STR_LOOKUP_EMPTY_PAGE));
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    delay(700);
+    if (!finishTypedLookup(true)) requestUpdate();
+    return;
+  }
+
+  Rect popup;
+  {
+    RenderLock lock(*this);
+    popup = GUI.drawPopup(renderer, tr(STR_DICTIONARY_PREPARING));
+  }
+  if (!DICTIONARIES.prepareActive([this, &popup](int percent) {
+        RenderLock lock(*this);
+        GUI.fillPopupProgress(renderer, popup, percent);
+      })) {
+    GUI.drawPopup(renderer, tr(STR_DICTIONARY_NOT_READY));
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    delay(900);
+    if (!finishTypedLookup(true)) requestUpdate();
+    return;
+  }
+
+  {
+    RenderLock lock(*this);
+    popup = GUI.drawPopup(renderer, tr(STR_DICTIONARY_LOOKUP));
+  }
+  const auto lookup = DICTIONARIES.lookup(query, previousWord, true);
+  if (lookup.status == DictionaryLookupResult::Status::Found) {
+    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(
+                               renderer, mappedInput, page, lookup, readerFontId,
+                               DICTIONARIES.getDefinitionFontId(readerFontId), marginLeft, marginTop),
+                           // Both Done and Back land back here rather than closing: opening the
+                           // dictionary is a mode, and a mode ends when the user says so. Looking
+                           // up two words in a row used to mean re-entering word select and
+                           // re-finding your place on the page after the first one. A typed
+                           // lookup has no page word behind it, so it ends here instead.
+                           [this](const ActivityResult& result) {
+                             if (!finishTypedLookup(result.isCancelled)) requestUpdate();
+                           });
+    return;
+  }
+
+  if (!lookup.suggestions.empty()) {
+    startActivityForResult(
+        std::make_unique<DictionarySuggestionsActivity>(renderer, mappedInput, page, query, lookup.suggestions,
+                                                        readerFontId, marginLeft, marginTop),
+        // Same rule as the definition branch above. The suggestions screen still
+        // distinguishes the two itself: Done on a definition reached through it
+        // finishes the list (you settled on a word, so the candidates are spent
+        // and you come back here), while Back returns to the candidates.
+        [this](const ActivityResult& result) {
+          if (!finishTypedLookup(result.isCancelled)) requestUpdate();
+        });
+    return;
+  }
+
+  const char* msg;
+  switch (lookup.status) {
+    case DictionaryLookupResult::Status::NoDictionary:
+      msg = tr(STR_DICTIONARY_NONE_SELECTED);
+      break;
+    case DictionaryLookupResult::Status::LowMemory:
+      msg = tr(STR_DICTIONARY_LOW_MEMORY);
+      break;
+    case DictionaryLookupResult::Status::DecompressError:
+      msg = tr(STR_DICTIONARY_DECOMPRESS_ERROR);
+      break;
+    case DictionaryLookupResult::Status::ReadError:
+      msg = tr(STR_DICTIONARY_READ_ERROR);
+      break;
+    default:
+      msg = tr(STR_DEFINITION_NOT_FOUND);
+      break;
+  }
+  GUI.drawPopup(renderer, msg);
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  delay(900);
+  if (!finishTypedLookup(true)) requestUpdate();
+}
+
+bool DictionaryWordSelectActivity::finishTypedLookup(bool cancelled) {
+  if (!typedLookup) return false;
+  ActivityResult result;
+  result.isCancelled = cancelled;
+  setResult(std::move(result));
+  finish();
+  return true;
+}
+
+void DictionaryWordSelectActivity::loop() {
+  // Deferred to the first loop rather than run in onEnter(): the lookup draws its
+  // own progress popup and pushes a child activity, both of which need this screen
+  // to be the one the render task is actually serving.
+  if (!initialQuery.empty()) {
+    const std::string query = DictionaryStore::cleanWord(initialQuery);
+    initialQuery.clear();
+    lookupQuery(query);
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    lookupSelectedWord();
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::PageBack)) {
+    moveRow(-1);
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::PageForward)) {
+    moveRow(1);
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    moveWord(-1);
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    moveWord(1);
+  }
+}
+
+void DictionaryWordSelectActivity::render(RenderLock&&) {
+  renderer.clearScreen();
+  std::optional<FontCacheManager::PrewarmScope> fontPrewarm;
+  if (page) {
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fontPrewarm.emplace(*fcm);
+      // Our fork records fonts via the scan pass (render during an active
+      // PrewarmScope), not vcodex's recordFontUsage/bionic params.
+      page->render(renderer, readerFontId, marginLeft, marginTop);
+      fontPrewarm->endScanAndPrewarm();
+    }
+    page->render(renderer, readerFontId, marginLeft, marginTop);
+  }
+
+  if (rows.empty()) {
+    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_LOOKUP_EMPTY_PAGE));
+  }
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int sideBackgroundWidth = metrics.sideButtonHintsWidth + 8;
+  const int sideBackgroundHeight = 168;
+  if (gpio.deviceIsX3()) {
+    constexpr int sideY = 151;
+    renderer.fillRect(0, sideY, sideBackgroundWidth, sideBackgroundHeight / 2, false);
+    renderer.fillRect(renderer.getScreenWidth() - sideBackgroundWidth, sideY, sideBackgroundWidth,
+                      sideBackgroundHeight / 2, false);
+  } else {
+    const int sideY = std::min(341, std::max(0, renderer.getScreenHeight() - sideBackgroundHeight - 4));
+    renderer.fillRect(renderer.getScreenWidth() - sideBackgroundWidth, sideY, sideBackgroundWidth, sideBackgroundHeight,
+                      false);
+  }
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+
+  storeSelectionBaseRegions();
+  prewarmCurrentSelectionText();
+  drawSelectionHighlight();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}

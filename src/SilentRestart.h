@@ -6,3 +6,47 @@
 
 void silentRestart();          // home screen
 void silentRestartToReader();  // currently-open EPUB (APP_STATE.openEpubPath)
+
+// OTA update entry points, landing straight back in OtaUpdateActivity on a
+// fresh boot. Device reports showed BOTH the version-check GET and the
+// firmware-download TLS handshake failing with a recurring ~35KB
+// largest-contiguous-block ceiling even with 50-75KB free in total --
+// whatever fragmented the heap during Home/library browsing before OTA was
+// even opened can't be un-fragmented by freeing this session's own memory.
+// Rebooting first gives every TLS handshake in the flow a heap with nothing
+// else having allocated anything yet.
+void silentRestartToOtaCheck();    // start of the flow (Home/Settings entry)
+void silentRestartToOtaInstall();  // user already confirmed; auto-install armed
+
+// File Transfer (web server), same rationale as OTA: the WiFi driver plus the
+// web server's TCP buffers want large contiguous allocations, and on a
+// fragmented heap page loads slow to a crawl. The exit path already
+// silentRestart()s (CrossPointWebServerActivity::onExit); this makes the entry
+// path symmetric.
+void silentRestartToFileTransfer();
+
+void silentRestartToNews();  // Apps -> News (EINK_NEWS_TASKS.md)
+
+// News -> "Get full text" -> "Fetch now". Same rationale as the two above,
+// and the sharpest case of it: an article page is 130-440KB streaming through
+// a TLS session, and started from the list plus the article screen it had
+// ~49KB of heap and aborted inside the HTTP response parser. The article to
+// fetch is in NEWS_FEEDS (setPendingArticle/setFullTextPending), since RTC
+// carries only the target.
+void silentRestartToNewsFullText();
+
+// Return-to-caller targets: a WiFi flow launched FROM this menu should land
+// back on it, not on Home, once its own onExit() silent-restarts to clear
+// heap fragmentation. Landing on Home instead of the caller was a real user
+// complaint -- the font download store and the
+// dictionary download store all used the bare silentRestart() (home-only)
+// with no way back to where the user actually was.
+void silentRestartToSettings();    // SettingsActivity (font download caller)
+void silentRestartToDictionary();  // DictionaryActivity (dictionary download caller)
+void silentRestartToPrayer();      // PrayerActivity (clock sync caller)
+
+// True when the current boot was produced by any silentRestart* call -- i.e.
+// the heap is as fresh as a reboot can make it. Used as a loop guard by
+// callers that trigger a silent restart to escape heap fragmentation: if the
+// fresh boot STILL can't satisfy them, rebooting again won't help.
+bool bootWasSilentRestart();

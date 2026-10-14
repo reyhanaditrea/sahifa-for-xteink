@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Generate src/prayer/PrayerCities.h from GeoNames dumps.
+
+The Prayer Times app needs a location without GPS, so the firmware bundles a
+city table the user picks from (Country -> City) and sends that city's
+coordinates to the Aladhan API. Selection rules:
+
+  * every populated place (feature class P) worldwide with population >= --min-pop
+  * every country's capital (PPLC), so countries with no city that big still
+    have one entry
+  * for --all-country (Indonesia by default) the ADM2 rows -- regencies and
+    cities (kabupaten/kota) -- which are NOT populated places and so never
+    appear in cities500.txt; they come from the per-country dump (ID.txt)
+
+Inputs (https://download.geonames.org/export/dump/):
+  cities500.zip / cities500.txt   all places with population > 500
+  countryInfo.txt                 ISO code -> English country name
+  ID.zip / ID.txt                 full Indonesia dump (for ADM2 rows)
+
+Usage:
+  python scripts/gen_prayer_cities.py --cities cities500.zip \
+      --countries countryInfo.txt --extra-dump ID.zip \
+      --min-pop 300000 --all-country ID --out src/prayer/PrayerCities.h
+
+Stdlib only (same as gen_i18n.py). Output is sorted by country name, then
+city name, and the country table carries the first city index so a country's
+cities are the contiguous range [firstCity[i], firstCity[i+1]). Row 0 of the
+country table is the synthetic "Custom coordinates" entry (iso "", no cities)
+so the on-device picker can be the table itself.
+"""
+
+import argparse
+import io
+import re
+import sys
+import zipfile
+
+NAME_MAX = 31
+CUSTOM_ISO = ""  # row 0: custom coordinates pseudo-country
+ASCII_KEEP = re.compile(r"[^A-Za-z0-9 .'()\-/]")
+
+
+def open_dump(path, inner=None):
+    if path.lower().endswith(".zip"):
+        zf = zipfile.ZipFile(path)
+        name = inner or next(n for n in zf.namelist() if n.lower().endswith(".txt") and "readme" not in n.lower())
+        return io.TextIOWrapper(zf.open(name), encoding="utf-8")
+    return open(path, encoding="utf-8")
+
+
+def rows(path):
+    with open_dump(path) as f:
+        for line in f:
+            if not line or line.startswith("#"):
+                continue
+            yield line.rstrip("\n").split("\t")
+
+
+def clean_name(name):
+    name = ASCII_KEEP.sub("", name).strip()
+    name = re.sub(r"\s+", " ", name)
+    if len(name) > NAME_MAX:
+        name = name[:NAME_MAX].rstrip()
+    return name
+
+
+def load_countries(path):
+    out = {}
+    for r in rows(path):
+        if len(r) < 5:
+            continue
+        iso, name = r[0], r[4]
+        if len(iso) == 2 and name:
+            out[iso] = clean_name(name)
+    return out
+
+
+def c_str(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--cities", required=True, help="cities500.zip or .txt")
+    ap.add_argument("--countries", required=True, help="countryInfo.txt")
+    ap.add_argument("--extra-dump", action="append", default=[], help="per-country dump (ID.zip) for ADM2 rows")
+    ap.add_argument("--min-pop", type=int, default=300000)
+    ap.add_argument("--all-country", action="append", default=["ID"], help="ISO codes to include ADM2 rows for")
+    ap.add_argument("--out", default="src/prayer/PrayerCities.h")
+    args = ap.parse_args()
+
+    countries = load_countries(args.countries)
+    # (iso, name) -> (latE2, lngE2)
+    picked = {}
+
+    def add(iso, name, lat, lng):
+        name = clean_name(name)
+        if not name or iso not in countries:
+            return
+        key = (iso, name.lower())
+        if key in picked:
+            return
+        picked[key] = (name, int(round(float(lat) * 100)), int(round(float(lng) * 100)))
+
+    world = capitals = 0
+    for r in rows(args.cities):
+        if len(r) < 15 or r[6] != "P":
+            continue
+        iso, code = r[8], r[7]
+        pop = int(r[14] or 0)
+        if pop >= args.min_pop:
+            add(iso, r[2], r[4], r[5])
+            world += 1
+        elif code == "PPLC":
+            add(iso, r[2], r[4], r[5])
+            capitals += 1
+
+    adm2 = 0
+    for dump in args.extra_dump:
+        for r in rows(dump):
+            if len(r) < 9 or r[6] != "A" or r[7] != "ADM2" or r[8] not in args.all_country:
+                continue
+            add(r[8], r[2], r[4], r[5])
+            adm2 += 1
+
+    # Group by country, sort by country English name then city name.
+    by_country = {}
+    for (iso, _), (name, lat, lng) in picked.items():
+        by_country.setdefault(iso, []).append((name, lat, lng))
+    ordered = sorted(by_country.items(), key=lambda kv: countries[kv[0]].lower())
+    for _, cities in ordered:
+        cities.sort(key=lambda c: c[0].lower())
+
+    if len(ordered) + 1 > 255:
+        sys.exit("too many countries for uint8_t countryIdx")
+
+    lines = [
+        "// Generated by scripts/gen_prayer_cities.py from GeoNames dumps -- do not edit.",
+        "// %d countries, %d cities (world >= %d pop: %d, capitals: %d, ADM2 rows: %d)."
+        % (len(ordered) + 1, len(picked), args.min_pop, world, capitals, adm2),
+        "#pragma once",
+        "",
+        "#include <cstdint>",
+        "",
+        '#include "prayer/PrayerCityTable.h"',
+        "",
+        "namespace PrayerCityData {",
+        "",
+        "// Row 0 is the custom-coordinates pseudo-country; the sentinel last row carries",
+        "// the total city count so cityEnd(last real country) works without a branch.",
+        "static constexpr PrayerCountry COUNTRIES[] = {",
+        '    {"", "Custom coordinates", 0},',
+    ]
+    city_lines = []
+    idx = 0
+    for ci, (iso, cities) in enumerate(ordered, start=1):
+        lines.append("    {%s, %s, %d}," % (c_str(iso), c_str(countries[iso]), idx))
+        for name, lat, lng in cities:
+            city_lines.append("    {%d, %d, %d, %s}," % (lat, lng, ci, c_str(name)))
+            idx += 1
+    lines.append('    {"", "", %d},' % idx)
+    lines.append("};")
+    lines.append("")
+    lines.append("static constexpr uint16_t COUNTRY_COUNT = %d;  // excluding the sentinel" % (len(ordered) + 1))
+    lines.append("static constexpr uint16_t CITY_COUNT = %d;" % idx)
+    lines.append("")
+    lines.append("static constexpr PrayerCity CITIES[] = {")
+    lines.extend(city_lines)
+    lines.append("};")
+    lines.append("")
+    lines.append("}  // namespace PrayerCityData")
+    lines.append("")
+
+    with open(args.out, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines))
+    print("wrote %s: %d countries, %d cities" % (args.out, len(ordered) + 1, idx))
+
+
+if __name__ == "__main__":
+    main()

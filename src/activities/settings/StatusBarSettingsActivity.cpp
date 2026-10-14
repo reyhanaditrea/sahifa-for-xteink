@@ -90,13 +90,13 @@ void StatusBarSettingsActivity::onEnter() {
   selectedIndex = 0;
   visibleItemCount = halClock.isAvailable() ? FULL_MENU_ITEMS : BASE_MENU_ITEMS;
 
-  // Clamp statusBarProgressBar and statusBarTitle in case of corrupt/migrated data
+  // Clamp statusBarProgressBar, statusBarProgressBarThickness, and statusBarTitle in case of corrupt/migrated data
   if (SETTINGS.statusBarProgressBar >= PROGRESS_BAR_ITEMS) {
     SETTINGS.statusBarProgressBar = CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
   }
 
-  if (SETTINGS.statusBarTitle >= PROGRESS_BAR_THICKNESS_ITEMS) {
-    SETTINGS.statusBarTitle = CrossPointSettings::STATUS_BAR_PROGRESS_BAR_THICKNESS::PROGRESS_BAR_NORMAL;
+  if (SETTINGS.statusBarProgressBarThickness >= PROGRESS_BAR_THICKNESS_ITEMS) {
+    SETTINGS.statusBarProgressBarThickness = CrossPointSettings::STATUS_BAR_PROGRESS_BAR_THICKNESS::PROGRESS_BAR_NORMAL;
   }
 
   if (SETTINGS.statusBarTitle >= TITLE_ITEMS) {
@@ -125,6 +125,8 @@ void StatusBarSettingsActivity::onEnter() {
 void StatusBarSettingsActivity::onExit() { Activity::onExit(); }
 
 void StatusBarSettingsActivity::loop() {
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     finish();
     return;
@@ -137,22 +139,22 @@ void StatusBarSettingsActivity::loop() {
   }
 
   // Handle navigation
-  buttonNavigator.onNextRelease([this] {
+  buttonNavigator.onScrollNextRelease([this] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, visibleItemCount);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousRelease([this] {
+  buttonNavigator.onScrollPreviousRelease([this] {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, visibleItemCount);
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this] {
+  buttonNavigator.onScrollNextContinuous([this] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, visibleItemCount);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this] {
+  buttonNavigator.onScrollPreviousContinuous([this] {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, visibleItemCount);
     requestUpdate();
   });
@@ -167,21 +169,35 @@ void StatusBarSettingsActivity::handleSelection() {
       SETTINGS.statusBarBookProgressPercentage = (SETTINGS.statusBarBookProgressPercentage + 1) % 2;
       break;
     case ITEM_PROGRESS_BAR:
-      SETTINGS.statusBarProgressBar = (SETTINGS.statusBarProgressBar + 1) % PROGRESS_BAR_ITEMS;
-      break;
+      optionPopup.show(StrId::STR_PROGRESS_BAR, progressBarNames, PROGRESS_BAR_ITEMS, SETTINGS.statusBarProgressBar,
+                       [this](int idx) {
+                         SETTINGS.statusBarProgressBar = idx;
+                         SETTINGS.saveToFile();
+                       });
+      return;
     case ITEM_PROGRESS_BAR_THICKNESS:
-      SETTINGS.statusBarProgressBarThickness =
-          (SETTINGS.statusBarProgressBarThickness + 1) % PROGRESS_BAR_THICKNESS_ITEMS;
-      break;
+      optionPopup.show(StrId::STR_PROGRESS_BAR_THICKNESS, progressBarThicknessNames, PROGRESS_BAR_THICKNESS_ITEMS,
+                       SETTINGS.statusBarProgressBarThickness, [this](int idx) {
+                         SETTINGS.statusBarProgressBarThickness = idx;
+                         SETTINGS.saveToFile();
+                       });
+      return;
     case ITEM_TITLE:
-      SETTINGS.statusBarTitle = (SETTINGS.statusBarTitle + 1) % TITLE_ITEMS;
-      break;
+      optionPopup.show(StrId::STR_TITLE, titleNames, TITLE_ITEMS, SETTINGS.statusBarTitle, [this](int idx) {
+        SETTINGS.statusBarTitle = idx;
+        SETTINGS.saveToFile();
+      });
+      return;
     case ITEM_BATTERY:
       SETTINGS.statusBarBattery = (SETTINGS.statusBarBattery + 1) % 2;
       break;
     case ITEM_XTC_STATUS_BAR:
-      SETTINGS.xtcStatusBarMode = (SETTINGS.xtcStatusBarMode + 1) % XTC_STATUS_BAR_ITEMS;
-      break;
+      optionPopup.show(StrId::STR_XTC_STATUS_BAR, xtcStatusBarNames, XTC_STATUS_BAR_ITEMS, SETTINGS.xtcStatusBarMode,
+                       [this](int idx) {
+                         SETTINGS.xtcStatusBarMode = idx;
+                         SETTINGS.saveToFile();
+                       });
+      return;
     case ITEM_CLOCK:
       SETTINGS.statusBarClock = (SETTINGS.statusBarClock + 1) % STATUS_BAR_CLOCK_ITEMS;
       break;
@@ -202,6 +218,8 @@ void StatusBarSettingsActivity::handleSelection() {
 }
 
 void StatusBarSettingsActivity::render(RenderLock&&) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+
   renderer.clearScreen();
 
   auto metrics = UITheme::getInstance().getMetrics();
@@ -248,7 +266,8 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
       true);
 
   // Draw button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN), /*rtlSwap=*/false);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   std::string title;

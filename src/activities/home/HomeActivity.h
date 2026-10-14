@@ -2,11 +2,10 @@
 #include <functional>
 #include <vector>
 
-#include "./FileBrowserActivity.h"
+#include "RecentBooksStore.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-struct RecentBook;
 struct Rect;
 
 class HomeActivity final : public Activity {
@@ -15,7 +14,12 @@ class HomeActivity final : public Activity {
   bool recentsLoading = false;
   bool recentsLoaded = false;
   bool firstRenderDone = false;
-  bool hasOpdsServers = false;
+  // Last periodic anti-drift redraw; see the idle-whitening block in loop().
+  unsigned long lastIdleWhitenMs = 0;
+  // Set by loop()'s idle timer; makes the next render full-drive the panel
+  // (HALF refresh) to clear accumulated e-ink fade instead of a FAST pass
+  // that skips unchanged pixels. Cleared in render().
+  bool idleWhitenPending = false;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
@@ -29,38 +33,46 @@ class HomeActivity final : public Activity {
   int coverRectH = 0;
   std::vector<RecentBook> recentBooks;
   const HomeMenuItem initialMenuItem;
+  const bool cleanInitialRefresh;
 
-  // Convert HomeMenuItem to menu index (used in onEnter)
-  static int menuItemToIndex(HomeMenuItem item, bool hasOpdsUrl) {
+  // A Back press from SettingsActivity::loop() fires onGoHome() on the press
+  // edge; Home is then entered fresh and would otherwise see the trailing
+  // release of that SAME physical press and mistake it for "open the most
+  // recent book" (see the Back handling in loop()). Same
+  // held-on-entry-locks-the-release idiom as FileBrowserActivity's
+  // lockNextConfirmRelease.
+  bool lockNextBackRelease = false;
+
+  // Convert HomeMenuItem to menu index (used in onEnter). Order matches render()'s
+  // menuItems construction: Files, Stats, Apps, Settings ("Continue Reading" isn't
+  // a HomeMenuItem -- it's a prepended label tied to the recentBooks selection range,
+  // handled separately in loop()). Every slot is one fixed destination.
+  static int menuItemToIndex(HomeMenuItem item) {
     int i = 0;
     if (item == HomeMenuItem::FILE_BROWSER) return i;
     ++i;
-    if (item == HomeMenuItem::RECENTS) return i;
+    if (item == HomeMenuItem::STATS) return i;
     ++i;
-    if (item == HomeMenuItem::OPDS_BROWSER) return hasOpdsUrl ? i : 0;
-    if (hasOpdsUrl) ++i;
-    if (item == HomeMenuItem::FILE_TRANSFER) return i;
+    if (item == HomeMenuItem::APPS) return i;
     ++i;
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
 
   // Convert menu index to HomeMenuItem (used in loop)
-  static HomeMenuItem indexToMenuItem(int idx, bool hasOpdsUrl) {
+  static HomeMenuItem indexToMenuItem(int idx) {
     int i = 0;
     if (idx == i++) return HomeMenuItem::FILE_BROWSER;
-    if (idx == i++) return HomeMenuItem::RECENTS;
-    if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
-    if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
+    if (idx == i++) return HomeMenuItem::STATS;
+    if (idx == i++) return HomeMenuItem::APPS;
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
   void onSelectBook(const std::string& path);
-  void onFileBrowserOpen();
   void onRecentsOpen();
+  void onStatsOpen();
   void onSettingsOpen();
-  void onFileTransferOpen();
-  void onOpdsBrowserOpen();
+  void onFilesOpen();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
@@ -71,10 +83,13 @@ class HomeActivity final : public Activity {
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                        HomeMenuItem initialMenuItemValue = HomeMenuItem::NONE)
-      : Activity("Home", renderer, mappedInput), initialMenuItem(initialMenuItemValue) {}
+                        HomeMenuItem initialMenuItemValue = HomeMenuItem::NONE, bool cleanInitialRefresh = false)
+      : Activity("Home", renderer, mappedInput),
+        initialMenuItem(initialMenuItemValue),
+        cleanInitialRefresh(cleanInitialRefresh) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  bool isHomeActivity() const override { return true; }
 };

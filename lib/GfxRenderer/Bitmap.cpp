@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 // ============================================================================
 // IMAGE PROCESSING OPTIONS
@@ -12,6 +13,13 @@
 // For cover images, dithering is done in JpegToBmpConverter.cpp instead.
 constexpr bool USE_ATKINSON = true;  // Use Atkinson dithering instead of Floyd-Steinberg
 // ============================================================================
+
+bool Bitmap::isValidCachedBmp(const std::string& path) {
+  HalFile file;
+  if (!Storage.openFileForRead("BMP", path, file)) return false;
+  Bitmap bitmap(file);
+  return bitmap.parseHeaders() == BmpReaderError::Ok;
+}
 
 Bitmap::~Bitmap() {
   delete[] errorCurRow;
@@ -76,6 +84,8 @@ const char* Bitmap::errorToString(BmpReaderError err) {
 
     case BmpReaderError::OomRowBuffer:
       return "OomRowBuffer";
+    case BmpReaderError::OomDitherer:
+      return "OomDitherer";
     case BmpReaderError::ShortReadRow:
       return "ShortReadRow";
   }
@@ -167,10 +177,23 @@ BmpReaderError Bitmap::parseHeaders() {
   //  - High-color + dithering disabled → simple quantization (no error diffusion)
   const bool highColor = !nativePalette;
   if (highColor && dithering) {
+    // std::nothrow guards the outer allocation; ok() covers the ditherer's own internal
+    // buffer allocations (see BitmapHelpers.h) -- with -fno-exceptions a bare `new` that
+    // fails calls abort() instead of returning nullptr, so both must be checked.
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(width);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(width);
+      if (!atkinsonDitherer || !atkinsonDitherer->ok()) {
+        delete atkinsonDitherer;
+        atkinsonDitherer = nullptr;
+        return BmpReaderError::OomDitherer;
+      }
     } else {
-      fsDitherer = new FloydSteinbergDitherer(width);
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(width);
+      if (!fsDitherer || !fsDitherer->ok()) {
+        delete fsDitherer;
+        fsDitherer = nullptr;
+        return BmpReaderError::OomDitherer;
+      }
     }
   }
 

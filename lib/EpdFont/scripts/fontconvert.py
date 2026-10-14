@@ -1,5 +1,6 @@
 #!python3
 import zlib
+import unicodedata
 import sys
 import re
 import math
@@ -19,10 +20,17 @@ parser.add_argument("name", action="store", help="name of the font.")
 parser.add_argument("size", type=int, help="font size to use.")
 parser.add_argument("fontstack", action="store", nargs='+', help="list of font files, ordered by descending priority.")
 parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate 2-bit greyscale bitmap instead of 1-bit black and white.")
+parser.add_argument("--mono", dest="mono", action="store_true", help="For 1-bit fonts, rasterise with FreeType's native monochrome renderer (hinted, drop-out controlled) instead of antialiased-greyscale then threshold. Crisper stems on well-hinted faces (e.g. Ubuntu); avoid on thin faces whose sub-pixel stems would drop out. Ignored with --2bit.")
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
+parser.add_argument("--shape-fallback", dest="shape_fallback", action="store_true", help="Synthesize Arabic presentation-form glyphs missing from cmap by shaping the base letters through the font's own OpenType GSUB rules (HarfBuzz). Needed for Quranic fonts (Neirizi, KFGQPC) that only expose contextual forms via GSUB.")
+parser.add_argument("--reposition-marks", dest="reposition_marks", action="store_true", help="Move combining marks (harakat) to fixed above/below-baseline heights. For fonts that anchor marks at the baseline and rely on OpenType GPOS mark attachment, which the firmware renderer doesn't run.")
+parser.add_argument("--contrast-gamma", dest="contrast_gamma", type=float, default=1.0, help="Gamma-correct each glyph's raw anti-aliased coverage before quantizing: v' = min(255, round(255 * (v/255)**gamma)). gamma<1.0 boosts mid-gray coverage toward black -- for fonts whose fine strokes anti-alias into mostly-gray pixels at small e-ink sizes, which then read as faded once quantized to --2bit's 4 levels. 1.0 (default) is a no-op. Only affects ink darkness, never glyph metrics (advance/bearing), so it can't perturb layout or kashida-point math.")
+parser.add_argument("--script", dest="script", choices=["latin", "arabic", "none"], default="latin", help="Base code point interval set to export. 'latin' (default) is the existing Latin/Cyrillic/etc. set used by all bundled reading fonts. 'arabic' swaps in a minimal set (basic Latin punctuation/digits + Arabic blocks) sized for a dedicated Arabic-only font, not the full multi-script coverage. 'none' starts from an empty base set, relying entirely on --additional-intervals -- for narrow single-purpose fonts (e.g. a font bundling just one specific ligature glyph) where even 'arabic''s minimal set would pull in unwanted incidental cmap entries.")
+parser.add_argument("--line-height", dest="line_height", type=int, default=0, help="Override the emitted newline distance (EpdFontData::advanceY) with this pixel value instead of the face's own. advanceY is a uint8_t, so a face whose natural line height exceeds 255px cannot be emitted at all -- which caps the point size of a display face well below what the glyph fields (also uint8_t, but per glyph) would allow. Only for faces that draw one centred line and never wrap or stack rows: getLineHeight() returns this value, so anything laying out running text with it would set its lines too close. Ignored when 0.")
+parser.add_argument("--glyph-map", dest="glyph_map", help="Path to a TSV file mapping arbitrary trigger strings to target codepoints, for fonts that only expose glyphs via GSUB contextual substitution triggered by a specific input string (no direct cmap entry, and no Unicode presentation-form decomposition for --shape-fallback to key off). Each line: '<hex-codepoint>\\t<trigger-string>\\t<shaped-glyph-index>' -- the trigger is shaped once via HarfBuzz against the FIRST fontstack face, and the glyph at the given index in the shaped output is baked as that codepoint's glyph (must also appear in --additional-intervals to actually be exported). Same load_glyph() override mechanism as --pnum/--shape-fallback.")
 args = parser.parse_args()
 
 import freetype
@@ -34,7 +42,15 @@ font_stack = [freetype.Face(f) for f in args.fontstack]
 is2Bit = args.is2Bit
 size = args.size
 font_name = args.name
+# --mono only affects 1-bit fonts; it is meaningless for 2-bit greyscale.
+useMono = args.mono and not is2Bit
 load_flags = freetype.FT_LOAD_RENDER
+if useMono:
+    # Rasterise with FreeType's native monochrome renderer (hinted, drop-out
+    # controlled) instead of rendering antialiased grey and thresholding.
+    # Produces crisper, evenly-weighted stems at small sizes on well-hinted
+    # faces. Still 1 bit/pixel, so glyph metrics and layout are unchanged.
+    load_flags |= freetype.FT_LOAD_TARGET_MONO
 if args.force_autohint:
     load_flags |= freetype.FT_LOAD_FORCE_AUTOHINT
 
@@ -135,6 +151,33 @@ intervals = [
     (0xFFFD, 0xFFFD),
 ]
 
+if args.script == "arabic":
+    # Minimal set for a dedicated Arabic-only font (ArabicFontSystem): digits/space/
+    # ASCII punctuation that can appear inline in mixed Arabic-Latin titles, the
+    # ellipsis truncatedText() appends, and the three Arabic Unicode blocks
+    # ArabicShaper's shaping tables target (matches the SD-card Arabic preset in
+    # fontconvert_sdcard.py's INTERVAL_PRESETS["arabic"]). Deliberately excludes the
+    # Cyrillic/Greek/CJK ranges above -- this font is never used for non-Arabic text.
+    intervals = [
+        (0x0020, 0x007E),  # Basic Latin: digits, space, ASCII punctuation
+        (0x2010, 0x2027),  # General Punctuation: dashes, quotes, ellipsis
+        (0x0600, 0x06FF),  # Arabic
+        (0x0750, 0x077F),  # Arabic Supplement
+        (0xFDF2, 0xFDF2),  # Arabic Ligature Allah Isolated Form (Presentation Forms-A) --
+                           # a single codepoint, not the full FB50-FDFF block, so ArabicShaper
+                           # can special-case the four-letter "الله" sequence into one glyph.
+        (0xFB56, 0xFB59),  # Peh forms (Persian)
+        (0xFB7A, 0xFB7D),  # Tcheh forms (Persian)
+        (0xFB8A, 0xFB95),  # Jeh/Keheh/Gaf forms (Persian; span includes Rreh)
+        (0xFBA4, 0xFBA5),  # Heh with Yeh Above forms (Persian)
+        (0xFBD3, 0xFBD6),  # Ng forms (Ottoman Turkish)
+        (0xFBFC, 0xFBFF),  # Farsi Yeh forms (dotless-final yeh)
+        (0xFD3E, 0xFD3F),  # Ornate parentheses -- Quran ayah-number markers, e.g. "﴿١٢٣﴾"
+        (0xFE70, 0xFEFF),  # Arabic Presentation Forms-B
+    ]
+elif args.script == "none":
+    intervals = []
+
 add_ints = []
 if args.additional_intervals:
     add_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.additional_intervals]
@@ -231,6 +274,104 @@ if args.pnum:
         if count > 0:
             print(f"pnum: {count} glyph substitutions from {font_path}", file=sys.stderr)
 
+# --- Presentation-forms fallback via OpenType shaping (--shape-fallback) ---
+# Quranic fonts often omit cmap entries for Arabic Presentation Forms (they map
+# contextual forms only through GSUB, which the firmware's renderer doesn't
+# run). For every presentation-form codepoint missing from the FIRST face's
+# cmap whose Unicode compatibility decomposition is tagged <isolated>/<final>/
+# <initial>/<medial>, shape its base letter(s) with HarfBuzz in the matching
+# join context (ZWJ neighbours) and record the resulting glyph index as a
+# load_glyph() override -- the rest of the pipeline (metrics, rasterization,
+# kerning) then treats it like any cmap-mapped glyph.
+if args.shape_fallback:
+    import unicodedata
+    import uharfbuzz as hb
+
+    _hb_blob = hb.Blob.from_file_path(args.fontstack[0])
+    _hb_font = hb.Font(hb.Face(_hb_blob))
+    ZWJ = "\u200d"
+    _join_context = {
+        "<isolated>": ("", ""),
+        "<final>": (ZWJ, ""),
+        "<initial>": ("", ZWJ),
+        "<medial>": (ZWJ, ZWJ),
+    }
+    _face0 = font_stack[0]
+    _fallback_count = 0
+    for _cp in list(range(0xFB50, 0xFE00)) + list(range(0xFE70, 0xFF00)):
+        if _face0.get_char_index(_cp) > 0:
+            continue
+        _d = unicodedata.decomposition(chr(_cp))
+        if not _d.startswith("<"):
+            continue
+        _tag, _, _rest = _d.partition("> ")
+        _tag += ">"
+        if _tag not in _join_context:
+            continue
+        _base = "".join(chr(int(h, 16)) for h in _rest.split())
+        _pre, _post = _join_context[_tag]
+        _buf = hb.Buffer()
+        _buf.add_str(_pre + _base + _post)
+        _buf.guess_segment_properties()
+        hb.shape(_hb_font, _buf)
+        # ZWJ padding glyphs must be filtered by rendered width, not by cluster index
+        # or by matching HarfBuzz's cmap-nominal glyph for U+200D: the Arabic shaper
+        # merges the joiner's cluster into the base letter's cluster (so cluster-range
+        # filtering can't tell them apart), and GSUB can substitute the joiner into a
+        # different glyph than its nominal one (observed on KFGQPC Uthmanic Hafs: the
+        # padding glyph came out as glyph "space", not the joiner's own nominal glyph
+        # -- silently breaking the cluster/codepoint filter and skipping synthesis for
+        # nearly every initial/medial letter form, so entire letters vanished mid-word).
+        # A padding joiner is always zero-width; the real letterform never is.
+        _gids = [g.codepoint for g, p in zip(_buf.glyph_infos, _buf.glyph_positions)
+                 if g.codepoint != 0 and (p.x_advance != 0 or p.y_advance != 0)]
+        if len(_gids) != 1:
+            continue  # only single-glyph results are unambiguous (ligatures collapse to one)
+        pnum_glyph_overrides[(0, _cp)] = _gids[0]
+        _fallback_count += 1
+    print(f"shape-fallback: synthesized {_fallback_count} presentation-form glyphs via GSUB", file=sys.stderr)
+
+# --- Explicit trigger-string glyph mapping via OpenType shaping (--glyph-map) ---
+# For fonts whose glyphs are reachable only by shaping a specific (often
+# non-Unicode, ASCII trigger) string through GSUB -- e.g. KFGQPC's
+# surah-name-v4.ttf, which has no cmap entries at all and resolves a calligraphic
+# surah name only by shaping "surah018surah-icon" through the font's own rules.
+# Unlike --shape-fallback (which derives its trigger from Unicode decomposition
+# data), the caller supplies the exact trigger string and which glyph in the
+# shaped output to keep, since there's no general rule to derive either from the
+# target codepoint alone.
+if args.glyph_map:
+    import uharfbuzz as hb
+
+    _hb_blob_gm = hb.Blob.from_file_path(args.fontstack[0])
+    _hb_font_gm = hb.Font(hb.Face(_hb_blob_gm))
+    _glyph_map_count = 0
+    with open(args.glyph_map, encoding="utf-8") as _f:
+        for _lineno, _line in enumerate(_f, 1):
+            _line = _line.rstrip("\n")
+            if not _line or _line.startswith("#"):
+                continue
+            _parts = _line.split("\t")
+            if len(_parts) != 3:
+                print(f"glyph-map: {args.glyph_map}:{_lineno}: expected 3 tab-separated fields, got {len(_parts)}",
+                      file=sys.stderr)
+                sys.exit(1)
+            _cp_gm = int(_parts[0], 16)
+            _trigger_gm = _parts[1]
+            _shaped_index = int(_parts[2])
+            _buf_gm = hb.Buffer()
+            _buf_gm.add_str(_trigger_gm)
+            _buf_gm.guess_segment_properties()
+            hb.shape(_hb_font_gm, _buf_gm)
+            _gids_gm = [g.codepoint for g in _buf_gm.glyph_infos]
+            if _shaped_index >= len(_gids_gm):
+                print(f"glyph-map: {args.glyph_map}:{_lineno}: trigger {_trigger_gm!r} shaped to only "
+                      f"{len(_gids_gm)} glyph(s), index {_shaped_index} out of range", file=sys.stderr)
+                sys.exit(1)
+            pnum_glyph_overrides[(0, _cp_gm)] = _gids_gm[_shaped_index]
+            _glyph_map_count += 1
+    print(f"glyph-map: mapped {_glyph_map_count} codepoints via {args.glyph_map}", file=sys.stderr)
+
 def load_glyph(code_point):
     face_index = 0
     while face_index < len(font_stack):
@@ -253,19 +394,36 @@ for i_start, i_end in unmerged_intervals:
         continue
     unvalidated_intervals.append((i_start, i_end))
 
+# Must run before validation (not after, as originally): EpdGlyph.width/height are
+# uint8_t in the C++ struct, so validation needs to see bitmaps rasterized at our
+# actual target size to catch any codepoint whose glyph is too big to fit before
+# it ends up in `intervals` and reaches the C++ output as a > 255 literal (observed
+# with KFGQPC Uthmanic Hafs's U+0600/U+0601 ARABIC NUMBER SIGN glyphs, which are
+# wide decorative overlays spanning an entire following digit sequence -- not
+# needed for body text, so simply excluding them like any other missing glyph is
+# the right behavior, not a bug to work around glyph-by-glyph).
+for face in font_stack:
+    face.set_char_size(size << 6, size << 6, 150, 150)
+
+MAX_GLYPH_DIM = 255  # EpdGlyph.width/height are uint8_t
+oversized_warned = False
 for i_start, i_end in unvalidated_intervals:
     start = i_start
     for code_point in range(i_start, i_end + 1):
         face = load_glyph(code_point)
+        if face is not None and (face.glyph.bitmap.width > MAX_GLYPH_DIM or face.glyph.bitmap.rows > MAX_GLYPH_DIM):
+            if not oversized_warned:
+                print(f"WARNING: skipping oversized glyph(s) (> {MAX_GLYPH_DIM}px, doesn't fit EpdGlyph's uint8_t "
+                      f"width/height) starting at U+{code_point:04X} "
+                      f"({face.glyph.bitmap.width}x{face.glyph.bitmap.rows})", file=sys.stderr)
+                oversized_warned = True
+            face = None
         if face is None:
             if start < code_point:
                 intervals.append((start, code_point - 1))
             start = code_point + 1
     if start != i_end + 1:
         intervals.append((start, i_end))
-
-for face in font_stack:
-    face.set_char_size(size << 6, size << 6, 150, 150)
 
 total_size = 0
 all_glyphs = []
@@ -275,68 +433,19 @@ for i_start, i_end in intervals:
         face = load_glyph(code_point)
         bitmap = face.glyph.bitmap
 
-        # Build out 4-bit greyscale bitmap
-        pixels4g = []
-        px = 0
-        for i, v in enumerate(bitmap.buffer):
-            y = i / bitmap.width
-            x = i % bitmap.width
-            if x % 2 == 0:
-                px = (v >> 4)
-            else:
-                px = px | (v & 0xF0)
-                pixels4g.append(px);
-                px = 0
-            # eol
-            if x == bitmap.width - 1 and bitmap.width % 2 > 0:
-                pixels4g.append(px)
-                px = 0
-
-        if is2Bit:
-            # 0-3 white, 4-7 light grey, 8-11 dark grey, 12-15 black
-            # Downsample to 2-bit bitmap
-            pixels2b = []
-            px = 0
-            pitch = (bitmap.width // 2) + (bitmap.width % 2)
-            for y in range(bitmap.rows):
-                for x in range(bitmap.width):
-                    px = px << 2
-                    bm = pixels4g[y * pitch + (x // 2)]
-                    bm = (bm >> ((x % 2) * 4)) & 0xF
-
-                    if bm >= 12:
-                        px += 3
-                    elif bm >= 8:
-                        px += 2
-                    elif bm >= 4:
-                        px += 1
-
-                    if (y * bitmap.width + x) % 4 == 3:
-                        pixels2b.append(px)
-                        px = 0
-            if (bitmap.width * bitmap.rows) % 4 != 0:
-                px = px << (4 - (bitmap.width * bitmap.rows) % 4) * 2
-                pixels2b.append(px)
-
-            # for y in range(bitmap.rows):
-            #     line = ''
-            #     for x in range(bitmap.width):
-            #         pixelPosition = y * bitmap.width + x
-            #         byte = pixels2b[pixelPosition // 4]
-            #         bit_index = (3 - (pixelPosition % 4)) * 2
-            #         line += '#' if ((byte >> bit_index) & 3) > 0 else '.'
-            #     print(line)
-            # print('')
-        else:
-            # Downsample to 1-bit bitmap - treat any 2+ as black
+        if useMono:
+            # 1-bit + --mono: FreeType already rasterised this glyph in monochrome
+            # (FT_LOAD_TARGET_MONO), so every source pixel is a single bit in a
+            # row-padded, MSB-first buffer. Repack it into the firmware's
+            # continuous (non-row-padded) 1-bit bitstream.
             pixelsbw = []
             px = 0
-            pitch = (bitmap.width // 2) + (bitmap.width % 2)
+            src_pitch = abs(bitmap.pitch)
             for y in range(bitmap.rows):
                 for x in range(bitmap.width):
-                    px = px << 1
-                    bm = pixels4g[y * pitch + (x // 2)]
-                    px += 1 if ((x & 1) == 0 and bm & 0xE > 0) or ((x & 1) == 1 and bm & 0xE0 > 0) else 0
+                    src_byte = bitmap.buffer[y * src_pitch + (x >> 3)]
+                    bit = (src_byte >> (7 - (x & 7))) & 1
+                    px = (px << 1) | bit
 
                     if (y * bitmap.width + x) % 8 == 7:
                         pixelsbw.append(px)
@@ -344,18 +453,116 @@ for i_start, i_end in intervals:
             if (bitmap.width * bitmap.rows) % 8 != 0:
                 px = px << (8 - (bitmap.width * bitmap.rows) % 8)
                 pixelsbw.append(px)
+        else:
+            # Build out 4-bit greyscale bitmap (shared by the 2-bit and the
+            # 1-bit antialiased-threshold paths below).
+            pixels4g = []
+            px = 0
+            for i, v in enumerate(bitmap.buffer):
+                if args.contrast_gamma != 1.0:
+                    # Boost raw AA coverage before any downsampling: --2bit only keeps
+                    # 4 levels, so a font whose strokes rasterize as mostly mid-gray
+                    # coverage (thin calligraphic hairlines at small e-ink sizes) reads
+                    # as faded once quantized. Applied to the coverage byte only --
+                    # never touches bitmap_left/top or linearHoriAdvance below, so this
+                    # can't perturb glyph metrics, advance widths, or kashida-point math.
+                    v = min(255, round(255 * (v / 255.0) ** args.contrast_gamma))
+                y = i / bitmap.width
+                x = i % bitmap.width
+                if x % 2 == 0:
+                    px = (v >> 4)
+                else:
+                    px = px | (v & 0xF0)
+                    pixels4g.append(px)
+                    px = 0
+                # eol
+                if x == bitmap.width - 1 and bitmap.width % 2 > 0:
+                    pixels4g.append(px)
+                    px = 0
 
-            # for y in range(bitmap.rows):
-            #     line = ''
-            #     for x in range(bitmap.width):
-            #         pixelPosition = y * bitmap.width + x
-            #         byte = pixelsbw[pixelPosition // 8]
-            #         bit_index = 7 - (pixelPosition % 8)
-            #         line += '#' if (byte >> bit_index) & 1 else '.'
-            #     print(line)
-            # print('')
+            if is2Bit:
+                # 0-3 white, 4-7 light grey, 8-11 dark grey, 12-15 black
+                # Downsample to 2-bit bitmap
+                pixels2b = []
+                px = 0
+                pitch = (bitmap.width // 2) + (bitmap.width % 2)
+                for y in range(bitmap.rows):
+                    for x in range(bitmap.width):
+                        px = px << 2
+                        bm = pixels4g[y * pitch + (x // 2)]
+                        bm = (bm >> ((x % 2) * 4)) & 0xF
+
+                        if bm >= 12:
+                            px += 3
+                        elif bm >= 8:
+                            px += 2
+                        elif bm >= 4:
+                            px += 1
+
+                        if (y * bitmap.width + x) % 4 == 3:
+                            pixels2b.append(px)
+                            px = 0
+                if (bitmap.width * bitmap.rows) % 4 != 0:
+                    px = px << (4 - (bitmap.width * bitmap.rows) % 4) * 2
+                    pixels2b.append(px)
+            else:
+                # Downsample to 1-bit bitmap - treat any 2+ as black
+                pixelsbw = []
+                px = 0
+                pitch = (bitmap.width // 2) + (bitmap.width % 2)
+                for y in range(bitmap.rows):
+                    for x in range(bitmap.width):
+                        px = px << 1
+                        bm = pixels4g[y * pitch + (x // 2)]
+                        px += 1 if ((x & 1) == 0 and bm & 0xE > 0) or ((x & 1) == 1 and bm & 0xE0 > 0) else 0
+
+                        if (y * bitmap.width + x) % 8 == 7:
+                            pixelsbw.append(px)
+                            px = 0
+                if (bitmap.width * bitmap.rows) % 8 != 0:
+                    px = px << (8 - (bitmap.width * bitmap.rows) % 8)
+                    pixelsbw.append(px)
 
         pixels = pixels2b if is2Bit else pixelsbw
+
+        # --reposition-marks: GPOS-reliant fonts anchor combining marks at the
+        # baseline; without mark attachment they'd draw on top of the letter
+        # bodies (observed with Neirizi: harakat invisible). Move them to the
+        # fixed heights statically-positioned fonts use: above-marks just over
+        # the tallest letters, below-marks just under the baseline. Targets
+        # are em-relative (Noto Naskh carries fatha at ~0.89 em, kasra just
+        # below baseline).
+        #
+        # A single fixed "above" height isn't enough for fully-vocalized Quranic
+        # text: shadda commonly stacks with a vowel mark on the SAME letter (e.g.
+        # "الرَّحْمَٰنِ" -- confirmed via corpus scan: shadda+fatha alone occurs
+        # 1300+ times just in the first 20 of 114 surahs), and both marks would
+        # land at the identical position and collide. Since this height is baked
+        # per-CODEPOINT at conversion time (not computed from the actual runtime
+        # sequence), the fix is a small ordered set of tiers keyed to each mark's
+        # canonical stacking role (shadda always innermost, vowels stack outward
+        # from it, Quranic small-high annotation marks/maddah outermost) rather
+        # than a single shared height -- using Unicode's own canonical combining
+        # class (unicodedata.combining()) to classify each mark programmatically.
+        glyph_top = face.glyph.bitmap_top
+        glyph_left = face.glyph.bitmap_left
+        if args.reposition_marks and unicodedata.category(chr(code_point)) == 'Mn':
+            em_px = size * 150 / 72.0
+            below_marks = {0x0650, 0x064D, 0x0655, 0x0656, 0x065C}  # kasra, kasratan, hamza/subscript below
+            ccc = unicodedata.combining(chr(code_point))
+            if code_point in below_marks:
+                glyph_top = -max(1, round(em_px * 0.05))
+            elif code_point == 0x0651:  # shadda: innermost above-mark
+                glyph_top = round(em_px * 0.75)
+            elif ccc in (27, 28, 30, 31, 34, 35):  # tanwin/fatha/damma/sukun/dagger-alef
+                glyph_top = round(em_px * 0.9)
+            else:  # outer: maddah, hamza-above, Quranic small-high annotation marks
+                glyph_top = round(em_px * 1.05)
+            # Horizontal centering is done at RUNTIME (GfxRenderer::drawArabicText,
+            # via combiningMark::centerOver against the mark's actual base letter) --
+            # it depends on the base letter's width, which varies letter to letter and
+            # can't be baked per-mark-codepoint here. Keep the font's natural
+            # bitmap_left (small, near zero) as centerOver's own markLeft term.
 
         # Build output data
         packed = bytes(pixels)
@@ -365,8 +572,8 @@ for i_start, i_end in intervals:
             # We use linearHoriAdvance (16.16 fixed-point, unhinted) instead of
             # advance.x (26.6 fixed-point, grid-fitted to whole pixels by hinter)
             advance_x = fp4_from_ft16_16(face.glyph.linearHoriAdvance),
-            left = face.glyph.bitmap_left,
-            top = face.glyph.bitmap_top,
+            left = glyph_left,
+            top = glyph_top,
             data_length = len(packed),
             data_offset = total_size,
             code_point = code_point,
@@ -428,17 +635,28 @@ def _extract_pairpos_subtable(subtable, glyph_to_cp, raw_kern):
                     key = (coverage_glyph, pvr.SecondGlyph)
                     raw_kern[key] = raw_kern.get(key, 0) + xa
     elif subtable.Format == 2:
-        # Class-based pairs
-        class_def1 = subtable.ClassDef1.classDefs if subtable.ClassDef1 else {}
-        class_def2 = subtable.ClassDef2.classDefs if subtable.ClassDef2 else {}
+        # Class-based pairs. Some fonts' PairPos Format 2 subtables (seen in Amiri,
+        # Scheherazade New) omit fields fontTools normally expects here (ClassDef1,
+        # ClassDef2, even Class1Record itself) -- direct attribute access raises
+        # AttributeError rather than returning None/empty, unlike Value1 below.
+        # Kerning is a nice-to-have refinement, not essential correctness, so skip
+        # a subtable we can't parse instead of aborting the whole font conversion.
+        try:
+            class_def1_table = getattr(subtable, 'ClassDef1', None)
+            class_def2_table = getattr(subtable, 'ClassDef2', None)
+            class_def1 = class_def1_table.classDefs if class_def1_table else {}
+            class_def2 = class_def2_table.classDefs if class_def2_table else {}
+            class1_records = subtable.Class1Record
+        except AttributeError:
+            return
         coverage_set = set(subtable.Coverage.glyphs)
         for left_glyph in glyph_to_cp:
             if left_glyph not in coverage_set:
                 continue
             c1 = class_def1.get(left_glyph, 0)
-            if c1 >= len(subtable.Class1Record):
+            if c1 >= len(class1_records):
                 continue
-            class1_rec = subtable.Class1Record[c1]
+            class1_rec = class1_records[c1]
             for right_glyph in glyph_to_cp:
                 c2 = class_def2.get(right_glyph, 0)
                 if c2 >= len(class1_rec.Class2Record):
@@ -815,6 +1033,9 @@ if compress:
         (0x0180, 0x024F),   # Latin Extended-B
         (0x0300, 0x036F),   # Combining Diacritical Marks
         (0x0400, 0x04FF),   # Cyrillic
+        (0x0600, 0x06FF),   # Arabic
+        (0x0750, 0x077F),   # Arabic Supplement
+        (0x08A0, 0x08FF),   # Arabic Extended-A
         (0x1EA0, 0x1EF9),   # Vietnamese Extended
         (0x2000, 0x206F),   # General Punctuation
         (0x2070, 0x209F),   # Superscripts & Subscripts
@@ -822,13 +1043,28 @@ if compress:
         (0x2190, 0x21FF),   # Arrows
         (0x2200, 0x22FF),   # Math Operators
         (0xFB00, 0xFB06),   # Alphabetic Presentation Forms (ligatures)
+        (0xFB50, 0xFDFF),   # Arabic Presentation Forms-A
+        (0xFE70, 0xFEFF),   # Arabic Presentation Forms-B
         (0xFFFD, 0xFFFD),   # Replacement Character
     ]
 
-    # 64 KB cap: large enough to hold any single built-in script group with
-    # headroom, small enough to be a comfortable transient malloc on the
-    # ESP32-C3.
-    GROUP_MAX_UNCOMPRESSED_BYTES = 65536
+    # 12 KB cap (was 64 KB): a fully-vocalized Arabic font has no script-range split
+    # above (Arabic script simply wasn't in SCRIPT_GROUP_RANGES before this fix), so
+    # every Arabic glyph fell into one "unknown script" bucket capped only by this
+    # constant -- UthmanicHafs 18pt ended up with a single 414-glyph, 47924-byte
+    # group. Real-device logs (bitmap_fail == misses almost 1:1, firstFailedAllocBytes
+    # == 47924, reported free heap 75-90KB) showed prewarmCache()'s per-group temp
+    # buffer (and getBitmap()'s hot-group fallback, same size) regularly failing to
+    # allocate that ~48KB in one contiguous block despite the reported free heap
+    # being nominally larger -- fragmentation, not exhaustion, per FontDecompressor's
+    # own firstFailedAllocBytes-vs-heap comparison. Silent failure mode: every
+    # caller treats a failed getBitmap() as "skip this glyph" with no visible error,
+    # so the page just renders with entire lines of body text missing (only markers
+    # drawn through other fonts, like the ayah-number glyph, survive). 12 KB keeps
+    # each group's transient malloc comfortably inside even a moderately fragmented
+    # ~75 KB heap; the added Arabic script ranges above additionally keep related
+    # contextual/positional forms grouped together rather than split arbitrarily.
+    GROUP_MAX_UNCOMPRESSED_BYTES = 12288
 
     def get_script_group(code_point):
         for i, (start, end) in enumerate(SCRIPT_GROUP_RANGES):
@@ -919,7 +1155,7 @@ print(f"""/**
  * generated by fontconvert.py
  * name: {font_name}
  * size: {size}
- * mode: {'2-bit' if is2Bit else '1-bit'}{'  compressed: true' if compress else ''}
+ * mode: {'2-bit' if is2Bit else ('1-bit mono' if useMono else '1-bit')}{'  compressed: true' if compress else ''}
  * Command used: {' '.join(sys.argv)}
  */
 #pragma once
@@ -986,14 +1222,25 @@ if ligature_pairs:
         print(f"    {{ 0x{packed_pair:08X}, 0x{lig_cp:04X} }}, // {cp_label(packed_pair >> 16)} {cp_label(packed_pair & 0xFFFF)} -> {cp_label(lig_cp)}")
     print("};\n")
 
+# Face-level metrics (height/ascender/descender) are identical across every face
+# in font_stack once set_char_size() ran on all of them above -- use font_stack[0]
+# directly rather than the `face` loop variable, which is left over from whichever
+# codepoint the glyph-rendering loop processed last (or, if `intervals` ended up
+# empty for this font, from the interval-validation loop instead, where it can be
+# None -- e.g. a font with sparse enough coverage of a requested range).
 print(f"static const EpdFontData {font_name} = {{")
 print(f"    {font_name}Bitmaps,")
 print(f"    {font_name}Glyphs,")
 print(f"    {font_name}Intervals,")
 print(f"    {len(intervals)},")
-print(f"    {norm_ceil(face.size.height)},")
-print(f"    {norm_ceil(face.size.ascender)},")
-print(f"    {norm_floor(face.size.descender)},")
+natural_line_height = norm_ceil(font_stack[0].size.height)
+line_height = args.line_height if args.line_height > 0 else natural_line_height
+if line_height > 255:
+    sys.exit(f"ERROR: line height {line_height}px exceeds EpdFontData::advanceY's uint8_t range. "
+             f"Reduce the point size, or pass --line-height for a display face that never wraps.")
+print(f"    {line_height},")
+print(f"    {norm_ceil(font_stack[0].size.ascender)},")
+print(f"    {norm_floor(font_stack[0].size.descender)},")
 print(f"    {'true' if is2Bit else 'false'},")
 if compress:
     print(f"    {font_name}Groups,")

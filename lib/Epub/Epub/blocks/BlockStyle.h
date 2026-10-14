@@ -31,6 +31,14 @@ struct BlockStyle {
   bool textAlignDefined = false;   // true if text-align was explicitly set in CSS
   bool isRtl = false;              // true if resolved direction is RTL
   bool directionDefined = false;   // true if direction was explicitly set in CSS/HTML
+  // text-align-last: justify -- a one-line block is justified too. Layout-time
+  // only (lines are positioned when built), so not serialized with the block.
+  bool justifyLast = false;
+
+  // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
+  // a full line-height gap when the <br> block stays empty (section-break use case).
+  // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
+  bool fromBrElement = false;
 
   // Combined insets (margin + padding)
   [[nodiscard]] int16_t leftInset() const { return marginLeft + paddingLeft; }
@@ -44,6 +52,14 @@ struct BlockStyle {
     BlockStyle result = *this;
     result.marginBottom = 0;
     result.paddingBottom = 0;
+    return result;
+  }
+
+  // Return a copy with top margins/padding zeroed out.
+  [[nodiscard]] BlockStyle withoutTop() const {
+    BlockStyle result = *this;
+    result.marginTop = 0;
+    result.paddingTop = 0;
     return result;
   }
 
@@ -92,6 +108,9 @@ struct BlockStyle {
       result.directionDefined = true;
     }
 
+    // fromBrElement is consumed by startNewTextBlock when an empty <br> block
+    // is merged with the following paragraph; never propagate it further.
+    result.fromBrElement = false;
     return result;
   }
 
@@ -127,6 +146,7 @@ struct BlockStyle {
     } else {
       blockStyle.alignment = paragraphAlignment;
     }
+    blockStyle.justifyLast = cssStyle.hasTextAlignLastJustify();
     // RTL direction from CSS/HTML
     if (cssStyle.hasDirection()) {
       blockStyle.isRtl = (cssStyle.direction == CssTextDirection::Rtl);

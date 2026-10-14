@@ -6,25 +6,76 @@
 #include <base64.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
+#include <esp_task_wdt.h>
+#include <esp_wifi.h>
+#include <strings.h>  // strcasecmp, for the case-insensitive response-header match
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
 #include <string>
+#include <utility>
+#include <vector>
+
+
+#if defined(FREEINK_NET_WOLFSSL)
+#include <SecureHttpClient.h>
+
+extern "C" void wolfSSL_Arduino_Serial_Print(const char* const msg) { LOG_DBG("WOLFSSL", "%s", msg); }
+#endif
+// Always available, not only in the !FREEINK_NET_WOLFSSL branch above: runGet()
+// below has no wolfSSL equivalent (conditional-GET via ETag) and stays on
+// esp_http_client regardless of which backend runGetSecure() picks for plain fetches.
+#include <esp_crt_bundle.h>
+#include <esp_http_client.h>
 
 namespace {
-// RX holds the response headers. 4096 fits real OPDS servers; GitHub's release
-// CDN sends more and logs HTTP_HEADER "Buffer length is small", but that's
-// non-fatal: the headers we read (Location, Content-Length) come first and
-// survive. Smaller keeps contiguous heap free while WiFi and TLS are up. TX
-// only carries our GET; the body streams in READ_CHUNK pieces.
-constexpr int HTTP_RX_BUF = 4096;
-constexpr int HTTP_TX_BUF = 1024;
+// RX holds the response headers. Smaller buffers leave enough contiguous heap
+// for mbedTLS on redirect-heavy OPDS feeds while still preserving the headers
+// we read directly (Location, Content-Length). Used by runGet() below, which stays
+// on esp_http_client regardless of FREEINK_NET_WOLFSSL (see the include block above).
+constexpr int HTTP_RX_BUF = 2048;
+constexpr int HTTP_TX_BUF = 512;
 // Per-socket-op timeout. Some OPDS download endpoints are slow to send headers
 // (>15s) and chunked catalogs stall mid-body, so 15s killed them. 60s gives
 // slow servers room. esp_http_client's timeout_ms is uint32, so unlike Arduino
 // HTTPClient's uint16 setTimeout it doesn't silently truncate.
 constexpr int HTTP_TIMEOUT_MS = 60000;
-constexpr size_t READ_CHUNK = 2048;
+constexpr size_t READ_CHUNK = 1024;
+constexpr int MAX_REDIRECTS = 5;
+
+// The simulator's esp_http_client.h stub (crosspoint-simulator, an external repo)
+// doesn't implement esp_http_client_get_errno -- only real ESP-IDF has it.
+#ifdef SIMULATOR
+int getHttpClientErrno(esp_http_client_handle_t) { return 0; }
+void logTlsError(esp_http_client_handle_t) {}
+#else
+int getHttpClientErrno(esp_http_client_handle_t client) { return esp_http_client_get_errno(client); }
+// A bare ESP_ERR_HTTP_CONNECT + errno=0 means the raw socket connect succeeded (or
+// was never attempted) and something above it -- the TLS handshake or certificate
+// verification -- is what actually failed; the plain socket errno can't distinguish
+// that from DNS/TCP-level trouble. esp_tls_error_code is the underlying mbedtls
+// error (a handshake failure); esp_tls_flags is mbedtls' cert verify bitmask
+// (expired/untrusted/hostname-mismatch/etc. -- see mbedtls x509.h X509_BADCERT_*).
+void logTlsError(esp_http_client_handle_t client) {
+  int tlsErrorCode = 0;
+  int tlsFlags = 0;
+  esp_http_client_get_and_clear_last_tls_error(client, &tlsErrorCode, &tlsFlags);
+  if (tlsErrorCode != 0 || tlsFlags != 0) {
+    // esp_http_client reports this as the positive magnitude of the mbedTLS code
+    // (e.g. 0x3000 for MBEDTLS_ERR_X509_FATAL_ERROR, which mbedtls's own headers define
+    // as -0x3000) -- print it as mbedTLS's own negative convention for readability.
+    LOG_ERR("HTTP", "tls detail: esp_tls_error_code=-0x%X esp_tls_flags=0x%X", tlsErrorCode, tlsFlags);
+  }
+}
+#endif
+
+// Set at every runGet() failure point (and cleared at the top of runGet), so a
+// caller can read WHY the last HTTP_ERROR/FILE_ERROR happened -- see
+// HttpDownloader::FailStage for what each stage means.
+HttpDownloader::LastFailure gLastFailure;
+
+void setLastFailure(const HttpDownloader::FailStage stage, const int detail) { gLastFailure = {stage, detail}; }
 
 struct Sink {
   std::function<bool(const uint8_t*, size_t)> write;  // returns false to abort the transfer
@@ -38,13 +89,182 @@ bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
+// scheme://host[:port] prefix, i.e. everything before the first '/', '?', or
+// '#' after the scheme separator (a URL with no path but a query/fragment --
+// e.g. "https://host?key=value" -- has no '/' at all, so stopping at '/' alone
+// would fold the query string into the "origin" and misclassify a same-origin
+// redirect as cross-origin). Used to decide whether a redirect crosses trust
+// boundaries -- see the Authorization/X-Device-Serial-stripping logic in
+// runGet() and runGetWolf() below.
+std::string urlOrigin(const std::string& url) {
+  const size_t schemeEnd = url.find("://");
+  if (schemeEnd == std::string::npos) return url;
+  const size_t pathStart = url.find_first_of("/?#", schemeEnd + 3);
+  return pathStart == std::string::npos ? url : url.substr(0, pathStart);
+}
+
+// Disables WiFi modem-sleep power-save for the duration of an HTTP operation,
+// restoring the default on scope exit regardless of which return path is taken.
+// OtaUpdater.cpp already does this for firmware downloads ("For better timing and
+// connectivity, we disable power saving for WiFi"); OPDS feed/book fetches never
+// did, despite being able to run just as long for a large category. Modem sleep
+// periodically powers the radio down between DTIM beacon intervals, which can drop
+// or stall packets mid-transfer -- more likely to be hit the longer a transfer
+// takes, so small feeds mostly get away with it while a 200+ book category
+// consistently doesn't. Matches a real device report: a 3-book category fetched
+// fine while a 200+ book category on the same server/network failed every time
+// with a bare ESP_ERR_HTTP_CONNECT (errno=0, i.e. failed before a socket-level
+// error was even set -- consistent with the radio being asleep at connect time).
+struct WifiPowerSaveGuard {
+  WifiPowerSaveGuard() { esp_wifi_set_ps(WIFI_PS_NONE); }
+  ~WifiPowerSaveGuard() { esp_wifi_set_ps(WIFI_PS_MIN_MODEM); }
+};
+
+#if defined(FREEINK_NET_WOLFSSL)
+HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std::string& username,
+                                         const std::string& password, Sink& sink) {
+  setLastFailure(HttpDownloader::FailStage::NONE, 0);
+  WifiPowerSaveGuard psGuard;
+
+  std::string url = startUrl;
+  const std::string startOrigin = urlOrigin(startUrl);
+  // Unlike runGet(), each hop here builds a fresh SecureHttpClient, so
+  // Authorization isn't "carried over" by a reused handle -- but nothing
+  // stopped it from being unconditionally re-added on every hop regardless of
+  // which host that hop's url now pointed at. Latches permanently once any hop
+  // lands off the original origin, same rule as runGet()'s stripping logic.
+  bool crossOriginSeen = false;
+
+  for (int hop = 0; hop <= MAX_REDIRECTS; ++hop) {
+    freeink::SecureHttpClient http;
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    http.setInsecure();
+    if (!http.begin(url)) {
+      LOG_ERR("HTTP", "wolfSSL bad URL: %s", url.c_str());
+      setLastFailure(HttpDownloader::FailStage::OPEN, 0);
+      return HttpDownloader::HTTP_ERROR;
+    }
+    // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
+    // append a second User-Agent header, which strict servers reject (aiohttp
+    // answers 400 "Duplicate 'User-Agent' header found").
+    http.setUserAgent("CrossPoint-ESP32-" CROSSPOINT_VERSION);
+    // Only these are ever read back from a response here, and keeping the rest
+    // is not free: a news article page answers with a dozen large Set-Cookie /
+    // CSP / Report-To headers, each stored as two std::strings on the ~49KB that
+    // is left once Wi-Fi and a TLS session are up. Growing that vector past what
+    // remained is what aborted a full-text fetch on device.
+    http.setResponseHeaderFilter([](const std::string& name) {
+      return name == "location" || name == "content-type" || name == "retry-after" ||
+             name == "www-authenticate";
+    });
+    if (!crossOriginSeen && !username.empty() && !password.empty()) {
+      const std::string credentials = username + ":" + password;
+      const String encoded = base64::encode(credentials.c_str());
+      http.addHeader("Authorization", std::string("Basic ") + encoded.c_str());
+    }
+
+    LOG_DBG("HTTP", "wolfSSL GET: %s (free %u, largest %u)", url.c_str(), ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
+    const int status = http.GET(
+        [&http, &sink](const uint8_t* data, size_t len) {
+          if (http.getStatus() != 200) return true;
+          if (sink.total == 0 && http.hasContentLength()) sink.total = http.getContentLength();
+          if (!sink.write(data, len)) return false;
+          sink.downloaded += len;
+          if (sink.progress && sink.total > 0) sink.progress(sink.downloaded, sink.total);
+          return true;
+        },
+        [&sink]() { return sink.cancelFlag && *sink.cancelFlag; });
+
+    if (http.aborted()) return HttpDownloader::ABORTED;
+    if (status < 0) {
+      LOG_ERR("HTTP", "wolfSSL request failed: %s", url.c_str());
+      setLastFailure(HttpDownloader::FailStage::OPEN, status);
+      return HttpDownloader::HTTP_ERROR;
+    }
+    if (isRedirect(status)) {
+      const std::string location = http.getHeader("location");
+      if (location.empty() || !freeink::SecureHttpClient::resolveUrl(url, location, url)) {
+        LOG_ERR("HTTP", "wolfSSL bad redirect: %d", status);
+        setLastFailure(HttpDownloader::FailStage::REDIRECT, status);
+        return HttpDownloader::HTTP_ERROR;
+      }
+      if (urlOrigin(url) != startOrigin) crossOriginSeen = true;
+      continue;
+    }
+    if (status != 200) {
+      LOG_ERR("HTTP", "wolfSSL unexpected status: %d", status);
+      setLastFailure(HttpDownloader::FailStage::STATUS, status);
+      return HttpDownloader::HTTP_ERROR;
+    }
+    if (http.callbackAborted()) return HttpDownloader::FILE_ERROR;
+    if (!http.responseComplete()) {
+      LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
+      setLastFailure(HttpDownloader::FailStage::INCOMPLETE,
+                     static_cast<int>(std::min<size_t>(sink.downloaded, INT32_MAX)));
+      return HttpDownloader::HTTP_ERROR;
+    }
+    return HttpDownloader::OK;
+  }
+  LOG_ERR("HTTP", "too many redirects");
+  setLastFailure(HttpDownloader::FailStage::REDIRECT, MAX_REDIRECTS);
+  return HttpDownloader::HTTP_ERROR;
+}
+#endif
+
 // Streams a GET body through sink.write in READ_CHUNK pieces. Uses the manual
 // open/fetch_headers/read path rather than esp_http_client_perform(): perform()
 // pushes the whole body through an event callback and reports a chunked body
 // that ends early as ESP_ERR_HTTP_INCOMPLETE_DATA, whereas the read loop streams
 // large/slow files and surfaces a short read directly.
+//
+// Only ever verifies against the default crt_bundle -- a prior version of this
+// function fell back to a single pinned root (Let's Encrypt's newer "ISRG Root YE"
+// hierarchy, not yet in ESP-IDF's embedded bundle) when the default bundle couldn't
+// resolve a chain. That fix was cryptographically correct but dangerous in practice:
+// a real device log showed completing that fallback handshake drove free heap from
+// a ~57KB baseline down to just 5.4KB, and the device froze shortly after -- verifying
+// against a single non-bundled root apparently forces mbedTLS to process the entire
+// certificate chain the server sends (4 certificates), which is far more memory-hungry
+// than the default bundle's fast lookup-and-reject path, and this device doesn't have
+// the headroom to safely absorb that. Removed rather than risk another freeze; hosts
+// whose certificate chain the default bundle can't resolve will fail cleanly with
+// ESP_ERR_HTTP_CONNECT instead, same as unmodified upstream crosspoint-reader.
+// Response headers are only reachable through the event stream --
+// esp_http_client_get_header() reads back a REQUEST header, not the server's reply
+// (see its own doc comment in esp_http_client.h). Fires once per header line;
+// header_key is compared case-insensitively because the field name is not
+// case-sensitive and GitHub's is "ETag" while a CDN in front of it may differ.
+esp_err_t captureResponseEtag(esp_http_client_event_t* evt) {
+  if (evt->event_id != HTTP_EVENT_ON_HEADER || !evt->user_data) return ESP_OK;
+  if (!evt->header_key || !evt->header_value) return ESP_OK;
+  if (strcasecmp(evt->header_key, "ETag") != 0) return ESP_OK;
+  // Last one wins: a redirect hop reopens the client and replays its own headers,
+  // so the final response's ETag is the one still standing when runGet returns.
+  static_cast<HttpDownloader::ConditionalGet*>(evt->user_data)->etag = evt->header_value;
+  return ESP_OK;
+}
+
 HttpDownloader::DownloadError runGet(const std::string& url, const std::string& username, const std::string& password,
-                                     Sink& sink) {
+                                     Sink& sink, HttpDownloader::ConditionalGet* conditional = nullptr) {
+  setLastFailure(HttpDownloader::FailStage::NONE, 0);
+  WifiPowerSaveGuard psGuard;
+
+  // Reserve the read buffer before opening the connection, not after. An active TLS
+  // session holds its own sizable internal buffers (mbedTLS's handshake/record buffers)
+  // for as long as the connection stays open; confirmed on a real device that even with
+  // a healthy free-heap reading right before connecting, a completed TLS handshake left
+  // too little *contiguous* heap for this one small allocation afterward. Grabbing this
+  // buffer first -- before the handshake's own larger allocations can fragment the
+  // heap -- avoids losing the race for a small block after a big one has already carved
+  // up the free space.
+  auto buf = makeUniqueNoThrow<char[]>(READ_CHUNK);
+  if (!buf) {
+    LOG_ERR("HTTP", "OOM: %u byte read buffer (free heap: %u bytes)", (unsigned)READ_CHUNK, ESP.getFreeHeap());
+    setLastFailure(HttpDownloader::FailStage::BUFFER_OOM, static_cast<int>(ESP.getFreeHeap()));
+    return HttpDownloader::HTTP_ERROR;
+  }
+
   esp_http_client_config_t config = {};
   config.url = url.c_str();
   config.buffer_size = HTTP_RX_BUF;
@@ -58,14 +278,22 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   // only because Arduino's ssl_client drives mbedtls directly.
   config.crt_bundle_attach = esp_crt_bundle_attach;
   config.keep_alive_enable = true;
+  if (conditional) {
+    config.event_handler = captureResponseEtag;
+    config.user_data = conditional;
+  }
 
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (!client) {
     LOG_ERR("HTTP", "client init failed");
+    setLastFailure(HttpDownloader::FailStage::CLIENT_INIT, 0);
     return HttpDownloader::HTTP_ERROR;
   }
 
   esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
+  if (conditional && !conditional->ifNoneMatch.empty()) {
+    esp_http_client_set_header(client, "If-None-Match", conditional->ifNoneMatch.c_str());
+  }
   if (!username.empty() && !password.empty()) {
     // Preemptive Basic auth, like the prior addHeader; don't wait for a 401.
     const std::string credentials = username + ":" + password;
@@ -78,17 +306,68 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   // both redirect.
   esp_err_t err = esp_http_client_open(client, 0);
   if (err != ESP_OK) {
-    LOG_ERR("HTTP", "open failed: %s", esp_err_to_name(err));
+    // ESP_ERR_HTTP_CONNECT alone doesn't say whether this was heap pressure, DNS
+    // failure, TCP-level rejection/timeout, or a TLS handshake problem, so also
+    // surface the underlying socket errno -- ETIMEDOUT/ECONNREFUSED/EHOSTUNREACH/etc.
+    // point at the network path itself; an mbedTLS-range negative value points at the
+    // TLS handshake instead (see logTlsError).
+    LOG_ERR("HTTP", "open failed: %s (errno=%d, free heap: %u bytes)", esp_err_to_name(err), getHttpClientErrno(client),
+            ESP.getFreeHeap());
+    logTlsError(client);
+    setLastFailure(HttpDownloader::FailStage::OPEN, static_cast<int>(err));
     esp_http_client_cleanup(client);
     return HttpDownloader::HTTP_ERROR;
   }
   int64_t contentLength = esp_http_client_fetch_headers(client);
   int status = esp_http_client_get_status_code(client);
-  for (int hop = 0; isRedirect(status) && hop < 5; ++hop) {
+  for (int hop = 0; isRedirect(status) && hop < MAX_REDIRECTS; ++hop) {
+    // Close before following. The redirect response carries a body of its own
+    // (GitHub's API answers a renamed repository with 301 + a 215-byte JSON
+    // payload), and keep_alive_enable means the socket is reused -- so reopening
+    // without consuming that body left it queued in front of the next response.
+    // The header parser then read the leftovers instead of the status line,
+    // fetch_headers() failed, and the status code was never populated: the caller
+    // saw FailStage::STATUS with a nonsensical detail of -1.
+    //
+    // That path had simply never run before. Nothing this firmware talks to
+    // redirected on the check endpoint until the GitHub repository was renamed,
+    // at which point every device on a build predating the new URL began failing
+    // its update check outright, reporting "http 5:-1".
+    //
+    // Closing rather than draining is deliberate: it costs a fresh handshake on a
+    // redirect (rare, and unavoidable anyway when the host changes, as it does on
+    // the release CDN hop), and in exchange the next response is parsed on a
+    // connection that cannot be carrying anything stale -- correct regardless of
+    // whether a body was present, chunked, or truncated.
+    LOG_DBG("HTTP", "following redirect %d (status %d)", hop + 1, status);
+    esp_http_client_close(client);
     if (esp_http_client_set_redirection(client) != ESP_OK) break;
+
+    // esp_http_client_set_redirection() only refuses an HTTPS-to-HTTP downgrade;
+    // it does not refuse a same-scheme redirect to a different host. The
+    // Authorization header (Basic-auth callers) stays on this reused client
+    // handle across the hop, so a compromised or malicious server could
+    // otherwise redirect to attacker infrastructure and receive it. Strips once
+    // the origin changes; it does not come back even if a later hop redirects
+    // back to the original origin.
+    {
+      constexpr size_t kUrlBufLen = 512;
+      auto urlBuf = makeUniqueNoThrow<char[]>(kUrlBufLen);
+      const bool sameOrigin = urlBuf && esp_http_client_get_url(client, urlBuf.get(), kUrlBufLen) == ESP_OK &&
+                              urlOrigin(urlBuf.get()) == urlOrigin(url);
+      if (!sameOrigin) {
+        LOG_DBG("HTTP", "redirect changed origin -- dropping Authorization header");
+        esp_http_client_delete_header(client, "Authorization");
+      }
+    }
+
+    esp_http_client_close(client);
     err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
-      LOG_ERR("HTTP", "redirect open failed: %s", esp_err_to_name(err));
+      LOG_ERR("HTTP", "redirect open failed: %s (errno=%d, free heap: %u bytes)", esp_err_to_name(err),
+              getHttpClientErrno(client), ESP.getFreeHeap());
+      logTlsError(client);
+      setLastFailure(HttpDownloader::FailStage::REDIRECT, static_cast<int>(err));
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }
@@ -96,22 +375,32 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     status = esp_http_client_get_status_code(client);
   }
 
+  // 304 is a success, not a failure: the caller asked "has this changed?" and got a
+  // definitive no. There is no body to read, so return before the read loop and let
+  // the caller fall back to whatever it cached alongside the ETag.
+  if (conditional && status == 304) {
+    conditional->notModified = true;
+    LOG_DBG("HTTP", "304 Not Modified (cached copy still current)");
+    esp_http_client_cleanup(client);
+    return HttpDownloader::OK;
+  }
+
   if (status != 200) {
     LOG_ERR("HTTP", "unexpected status: %d", status);
+    setLastFailure(HttpDownloader::FailStage::STATUS, status);
     esp_http_client_cleanup(client);
     return HttpDownloader::HTTP_ERROR;
   }
+
+  // Visibility into how much heap an established TLS session actually leaves behind --
+  // added after a real device connected successfully but then failed the (now
+  // pre-reserved, see above) read buffer allocation, implying the active session's own
+  // buffers eat deeply into what looked like healthy free heap right before connecting.
+  LOG_INF("HTTP", "connected, free heap: %u bytes", ESP.getFreeHeap());
 
   // fetch_headers returns 0 for a chunked response (no Content-Length); leave
   // total at 0 so progress stays silent and the size check is skipped.
   sink.total = contentLength > 0 ? static_cast<size_t>(contentLength) : 0;
-
-  auto buf = makeUniqueNoThrow<char[]>(READ_CHUNK);
-  if (!buf) {
-    LOG_ERR("HTTP", "OOM: %u byte read buffer", (unsigned)READ_CHUNK);
-    esp_http_client_cleanup(client);
-    return HttpDownloader::HTTP_ERROR;
-  }
 
   while (true) {
     if (sink.cancelFlag && *sink.cancelFlag) {
@@ -121,6 +410,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     const int read = esp_http_client_read(client, buf.get(), READ_CHUNK);
     if (read < 0) {
       LOG_ERR("HTTP", "read error after %zu bytes", sink.downloaded);
+      setLastFailure(HttpDownloader::FailStage::READ, static_cast<int>(std::min<size_t>(sink.downloaded, INT32_MAX)));
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }
@@ -137,18 +427,35 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   esp_http_client_cleanup(client);
   if (!complete) {
     LOG_ERR("HTTP", "incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
+    setLastFailure(HttpDownloader::FailStage::INCOMPLETE,
+                   static_cast<int>(std::min<size_t>(sink.downloaded, INT32_MAX)));
     return HttpDownloader::HTTP_ERROR;
   }
   return HttpDownloader::OK;
 }
+
+// All HTTP(S) fetches go through wolfSSL when it is the active TLS stack: it
+// speaks TLS 1.3 and reads large bodies from servers where the esp_http_client/
+// mbedTLS path fails to connect or stalls mid-stream. Plain-http URLs still use a
+// WiFiClient inside runGetWolf, so this is safe for non-TLS targets too.
+HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
+                                           const std::string& password, Sink& sink) {
+#if defined(FREEINK_NET_WOLFSSL)
+  return runGetWolf(url, username, password, sink);
+#else
+  return runGet(url, username, password, sink);
+#endif
+}
 }  // namespace
+
+HttpDownloader::LastFailure HttpDownloader::getLastFailure() { return gLastFailure; }
 
 bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
                               const std::string& password) {
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   Sink sink;
   sink.write = [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; };
-  return runGet(url, username, password, sink) == OK;
+  return runGetSecure(url, username, password, sink) == OK;
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
@@ -160,7 +467,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, c
     outContent.append(reinterpret_cast<const char*>(data), len);
     return true;
   };
-  return runGet(url, username, password, sink) == OK;
+  return runGetSecure(url, username, password, sink) == OK;
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
@@ -168,7 +475,37 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   Sink sink;
   sink.write = onData;
+  return runGetSecure(url, username, password, sink) == OK;
+}
+
+bool HttpDownloader::fetchUrlVerified(const std::string& url, const DataCallback& onData, const std::string& username,
+                                      const std::string& password) {
+  // "Verified" means TLS too, not just certificate-chain checking once connected --
+  // reject plaintext up front rather than relying on every caller to only ever pass
+  // an https:// URL. esp_http_client_set_redirection() already refuses an
+  // HTTPS-to-HTTP downgrade mid-request, so this closes the one gap it doesn't
+  // cover: a caller-supplied URL that starts as http:// in the first place.
+  // Case-insensitive: esp_http_client itself parses the scheme that way.
+  constexpr char kHttpsScheme[] = "https://";
+  if (url.size() < sizeof(kHttpsScheme) - 1 || strncasecmp(url.c_str(), kHttpsScheme, sizeof(kHttpsScheme) - 1) != 0) {
+    LOG_ERR("HTTP", "Refusing unverified fetch of non-HTTPS URL");
+    setLastFailure(HttpDownloader::FailStage::OPEN, 0);
+    return false;
+  }
+  LOG_DBG("HTTP", "Fetching (verified): %s", url.c_str());
+  Sink sink;
+  sink.write = onData;
   return runGet(url, username, password, sink) == OK;
+}
+
+bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, ConditionalGet& conditional,
+                              const std::string& username, const std::string& password) {
+  LOG_DBG("HTTP", "Fetching (conditional): %s", url.c_str());
+  conditional.notModified = false;
+  conditional.etag.clear();
+  Sink sink;
+  sink.write = onData;
+  return runGet(url, username, password, sink, &conditional) == OK;
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
@@ -190,7 +527,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   sink.cancelFlag = cancelFlag;
   sink.write = [&file](const uint8_t* data, size_t len) { return file.write(data, len) == len; };
 
-  const DownloadError result = runGet(url, username, password, sink);
+  const DownloadError result = runGetSecure(url, username, password, sink);
   // Close before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
   // otherwise close only after the remove.
   file.close();

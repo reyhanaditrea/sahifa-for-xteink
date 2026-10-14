@@ -1,33 +1,50 @@
 #pragma once
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
 #include <cstdint>
 #include <string>
 
-class CrossPointState {
-  // Static instance
-  static CrossPointState instance;
+class CrossPointState : public PersistableStore<CrossPointState> {
+  // Private constructor for singleton (see PersistableStore.h)
+  CrossPointState() = default;
+  ~CrossPointState() = default;
+
+  friend class PersistableStore<CrossPointState>;
 
  public:
   static constexpr uint8_t SLEEP_RECENT_COUNT = 16;
 
   std::string openEpubPath;
-  uint16_t recentSleepImages[SLEEP_RECENT_COUNT] = {};  // circular buffer of recent wallpaper indices
-  uint8_t recentSleepPos = 0;                           // next write slot
-  uint8_t recentSleepFill = 0;                          // valid entries (0..SLEEP_RECENT_COUNT)
+  // Digest (hex app_elf_sha256) of the last OTA-rollback-invalidated image the user
+  // explicitly acknowledged via OtaRollbackRecoveryActivity's "continue anyway" --
+  // empty if never acknowledged. Keyed to image identity, not partition label, so a
+  // brand new rollback event (different image) is never silently treated as
+  // already-acknowledged. See OtaRollbackRecoveryPlan.h.
+  std::string acknowledgedOtaRollbackDigestHex;
+  uint16_t recentSleepImages[SLEEP_RECENT_COUNT] = {};
+  uint8_t recentSleepPos = 0;
+  uint8_t recentSleepFill = 0;
+  uint16_t recentOverlaySleepImages[SLEEP_RECENT_COUNT] = {};
+  uint8_t recentOverlaySleepPos = 0;
+  uint8_t recentOverlaySleepFill = 0;
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
+  // Image the viewer was showing when the device went to sleep, reopened on wake.
+  // Kept apart from openEpubPath: that one is the book the sleep screen draws its
+  // cover and stats from, and looking at an image must not replace it.
+  std::string lastSleepImagePath;
   bool showBootScreen = true;
 
-  // Returns true if idx was shown within the last checkCount picks.
-  // Walks backwards from the most recently written slot.
+  static const char* getFilePath() { return "/.crosspoint/state.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
+
   bool isRecentSleep(uint16_t idx, uint8_t checkCount) const;
+  bool isRecentOverlaySleep(uint16_t idx, uint8_t checkCount) const;
 
   void pushRecentSleep(uint16_t idx);
-  ~CrossPointState() = default;
-
-  // Get singleton instance
-  static CrossPointState& getInstance() { return instance; }
-
-  bool saveToFile() const;
+  void pushRecentOverlaySleep(uint16_t idx);
 
   bool loadFromFile();
 
@@ -35,5 +52,4 @@ class CrossPointState {
   bool loadFromBinaryFile();
 };
 
-// Helper macro to access settings
 #define APP_STATE CrossPointState::getInstance()

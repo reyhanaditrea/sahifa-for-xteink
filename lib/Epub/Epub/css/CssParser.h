@@ -32,8 +32,16 @@
  */
 class CssParser {
  public:
-  // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 6;
+  // Bump when CSS cache format or rules change; section caches are invalidated when this changes.
+  // v8: text-align start/end now compile to the logical CssTextAlign::Start/End values instead of
+  // being statically folded to Left/Right at parse time -- caches built under v7 hold the wrong
+  // (physical) values for those declarations.
+  // v9: rules with no supported properties are no longer stored (upstream #2604), so cached rule
+  // sets built under v8 contain entries the parser would no longer produce.
+  // v10: page-break-before / break-before, -sahifa-page-fill and text-align-last: justify
+  // parsed (defined bits 18-20) --
+  // v9 caches dropped those declarations, and rules holding nothing else were not stored.
+  static constexpr uint8_t CSS_CACHE_VERSION = 10;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

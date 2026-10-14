@@ -35,7 +35,7 @@ void ClockSyncActivity::onExit() {
   if (shouldTearDownWifiOnExit && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
+    restartOnExit();
   }
 }
 
@@ -64,7 +64,11 @@ void ClockSyncActivity::runSync() {
     return;
   }
 
-  const bool ok = halClock.syncFromNTP();
+  // Without an RTC there is nothing to write the time into, but the system
+  // clock still needs setting -- it is what dates every screen that shows a
+  // date, and on this hardware it does not survive a reboot. Reporting a
+  // failure there was wrong: the sync that matters had succeeded.
+  const bool ok = halClock.isAvailable() ? halClock.syncFromNTP() : HalClock::quickSyncSystemTime();
   if (!ok) {
     state = FAILED;
     requestUpdate();
@@ -93,7 +97,9 @@ void ClockSyncActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  int x = 0;
+  int y = 0;
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back) || mappedInput.wasScreenTapped(x, y)) {
     finish();
   }
 }
@@ -116,7 +122,11 @@ void ClockSyncActivity::render(RenderLock&&) {
     case SUCCESS: {
       renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_CLOCK_SYNC_OK), true, EpdFontFamily::BOLD);
       if (syncedTime[0] != '\0') {
-        char line[32];
+        // Sized for the label in any language: STR_CURRENT_TIME is UTF-8 (e.g. Arabic
+        // "الوقت الحالي:" is 24 bytes for 13 codepoints, Russian is 26 bytes versus 13 in
+        // English) -- a tight buffer truncates mid-multibyte-sequence. Plus a separator
+        // and up to "08:56 PM".
+        char line[64];
         snprintf(line, sizeof(line), "%s %s", tr(STR_CURRENT_TIME), syncedTime);
         renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, line);
       }

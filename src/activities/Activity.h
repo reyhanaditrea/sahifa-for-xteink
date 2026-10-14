@@ -41,9 +41,29 @@ class Activity {
   // Request an immediate render and block until it completes.
   virtual void requestUpdateAndWait();
 
+  // Returns (and clears) buttons newly pressed at any point during the most recent
+  // requestUpdateAndWait() call -- see ActivityManager::consumePressesDuringLastWait()'s own
+  // comment. For activities (e.g. games) that need to stay responsive across a blocking
+  // render wait; check in addition to normal wasPressed()/onPress() handling, not instead of.
+  uint8_t consumePressesDuringLastWait() { return activityManager.consumePressesDuringLastWait(); }
+
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
+  // Class name for diagnostics only (e.g. SleepDiagLog, when preventAutoSleep() is
+  // true) -- a literal per override, not RTTI, so it stays meaningful after mangling.
+  virtual const char* activityDebugName() const { return "Activity"; }
   virtual bool isReaderActivity() const { return false; }
+  // A file to reopen when the device wakes, for screens that are not readers but
+  // should still come back after a sleep (the image viewer). Empty = wake to Home.
+  virtual std::string wakeResumePath() const { return {}; }
+  // True for the reading surfaces night mode inverts (EPUB/TXT/XTC). Resolved
+  // per render by ActivityManager, so menus, overlays, and every other screen
+  // keep normal polarity without managing the display flag themselves.
+  virtual bool appliesNightMode() const { return false; }
+  // Returns true when the activity schedules its own forced refresh.
+  virtual bool handleForcedRefresh() { return false; }
+  virtual bool isHomeActivity() const { return false; }
+  virtual bool handleHomeGesture() { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 
   // Start a new activity without destroying the current one
