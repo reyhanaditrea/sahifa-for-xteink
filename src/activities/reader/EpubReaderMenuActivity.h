@@ -117,7 +117,7 @@ class EpubReaderMenuActivity final : public Activity {
   void finishWithAction(int action, bool cancelled);
   void handleListConfirm();
   // Opens the CHAPTERS drill-down. The Quran's TOC interleaves surahs and juz;
-  // its surah rows have no anchor and its juz rows do, so each list keeps one kind.
+  // its juz rows are titled "الجزء ...", so each list keeps one kind.
   void openTocList(bool juz);
   // A juz row's span, e.g. "الفاتحة ١ - البقرة ١٤١".
   std::string juzSpanLabel(int juz) const;

@@ -38,6 +38,7 @@
 #include "MappedInputManager.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
+#include "QuranBook.h"
 #include "ReaderActivity.h"
 #include "ReaderPomodoro.h"
 #include "ReaderUtils.h"
@@ -2476,7 +2477,21 @@ void EpubReaderActivity::renderStatusBar() const {
   } else if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
     title = tr(STR_UNNAMED);
     if (epub) {
-      const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+      int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+      // A Quran file holds each surah opening mid-page after the one before;
+      // name the surah this page has reached by its banner's anchor.
+      const bool quran = tocIndex != -1 && section && epub->getPath() == QuranBook::PATH;
+      for (int i = tocIndex + 1; quran && i < epub->getTocItemsCount(); i++) {
+        const auto item = epub->getTocItem(i);
+        if (item.spineIndex != currentSpineIndex) break;
+        // Surah banners only; a juz row ("الجزء ...") can share a banner's anchor.
+        if (item.anchor.rfind("toc_id_", 0) != 0 ||
+            item.title.rfind("\xd8\xa7\xd9\x84\xd8\xac\xd8\xb2\xd8\xa1", 0) == 0)
+          continue;
+        const auto page = section->findAnchor(item.anchor);
+        if (!page || *page > section->currentPage) break;
+        tocIndex = i;
+      }
       if (tocIndex != -1) {
         const auto tocItem = epub->getTocItem(tocIndex);
         title = stripLeadingSurahWord(stripLeadingArabicIndicIndex(tocItem.title));
