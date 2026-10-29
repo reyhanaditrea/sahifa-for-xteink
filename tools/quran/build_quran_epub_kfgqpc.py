@@ -134,7 +134,7 @@ def surah_banner_marker(surah: int, ayah_count: int, revelation_order: int) -> s
 STRIP_CHARS = "⁠​"
 
 # Stands in for the source's Mushaf pagebreak spans between extract_surah_text
-# and build_surah_html, which turns each page into a page-break-before
+# and build_surah_body, which turns each page into a page-break-before
 # paragraph so the reader's pages follow the Madinah Mushaf's 604.
 PAGE_MARK = "\x00"
 
@@ -185,7 +185,7 @@ def extract_surah_text(div: ET.Element) -> str:
     return text
 
 
-def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bismillah: str = "") -> str:
+def build_surah_body(surah: int, ayah_text: str, ayah_count: int, bismillah: str = "") -> str:
     # Header: a single row styled after the Madinah Mushaf's own surah-heading
     # banner -- rule lines above/below, ayah-count label (right), the surah's
     # calligraphic name (center, baked from surah-name-v4.ttf), revelation-order
@@ -196,7 +196,10 @@ def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bis
     # header exemption instead of a new special case.
     revelation_order = REVELATION_ORDER_FOR_SURAH[surah]
     banner = surah_banner_marker(surah, ayah_count, revelation_order)
-    header = f'<h1 class="block_2" dir="rtl" id="toc_id_{surah}">{banner}</h1>'
+    # A surah opening a Mushaf page starts a reader page; one opening mid-page
+    # shares its file (see group_surahs) and its page with the surah before.
+    opens_page = ayah_text.lstrip().startswith(PAGE_MARK)
+    header = f'<h1 class="block_2{" page" if opens_page else ""}" dir="rtl" id="toc_id_{surah}">{banner}</h1>'
     # The Bismillah gets its OWN centered paragraph (.block_ is text-align:center
     # by default), matching the source's own separate <table class="bismillah-table">
     # -- NOT concatenated into the ayah_text paragraph below, where it would flow
@@ -210,9 +213,8 @@ def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bis
     # where the printed page's do: .mline justifies even a single-line block,
     # and a line too wide for the screen wraps once and the next one starts
     # fresh. A line opening a Mushaf page also starts a reader page (.page) --
-    # except the surah's first, which would lose its banner to the page before.
-    # Each surah is its own spine item, so a surah opening mid-page starts a
-    # reader page all the same. .mushaf spreads a finished page's lines down
+    # except the surah's first, which would lose its banner to the page before
+    # (the banner carries it instead). .mushaf spreads a finished page's lines down
     # the screen, as the printed page always runs its full 15 lines.
     line_starts = {tuple(start) for start in MUSHAF_LINES[str(surah)]}
     paras = []  # [classes, id, tokens, (ayah, word) of the first token]
@@ -251,7 +253,23 @@ def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bis
     for cls, para_id, tokens, _ in paras:
         id_attr = f' id="{para_id}"' if para_id else ""
         text_html += f'<p class="{cls}"{id_attr} dir="rtl">{" ".join(tokens)}</p>'
-    body = f'{bismillah_line}{text_html}<p class="block_1" dir="rtl"> </p>'
+    return f"{header}{bismillah_line}{text_html}"
+
+
+def group_surahs(opens_page: list[bool]) -> list[list[int]]:
+    """Surahs per spine item: a surah opening mid-page joins the item before,
+    so every item ends where a printed page does -- the reader can't share a
+    screen across items, and its last page is spread like any other."""
+    groups: list[list[int]] = []
+    for n, fresh in enumerate(opens_page, start=1):
+        if fresh or not groups:
+            groups.append([n])
+        else:
+            groups[-1].append(n)
+    return groups
+
+
+def build_group_html(name: str, bodies: str) -> str:
     return (
         "<?xml version='1.0' encoding='utf-8'?>\n"
         '<html xmlns="http://www.w3.org/1999/xhtml" lang="ar" xml:lang="ar">\n'
@@ -261,7 +279,7 @@ def build_surah_html(surah: int, name: str, ayah_text: str, ayah_count: int, bis
         '  <link rel="stylesheet" type="text/css" href="../stylesheet.css"/>\n'
         "</head>\n"
         '  <body class="calibre">\n'
-        f"{header}{body}\n"
+        f"{bodies}\n"
         "\t</body>\n"
         "</html>"
     )
@@ -349,13 +367,13 @@ TITLEPAGE_XHTML = """<?xml version='1.0' encoding='utf-8'?>
 """
 
 
-def build_content_opf(surah_names: list[str]) -> str:
+def build_content_opf(groups: list[list[int]]) -> str:
     manifest_items = [
         '    <item id="cover" href="images/cover.png" media-type="image/png"/>',
         '    <item id="titlepage" href="titlepage.xhtml" media-type="application/xhtml+xml"/>',
     ]
     spine_items = ['    <itemref idref="titlepage"/>']
-    for n in range(1, SURAH_COUNT + 1):
+    for n in (group[0] for group in groups):
         manifest_items.append(f'    <item id="surah{n}" href="text/surah-{n:03d}.html" media-type="application/xhtml+xml"/>')
         spine_items.append(f'    <itemref idref="surah{n}"/>')
     manifest_items.append('    <item id="css" href="stylesheet.css" media-type="text/css"/>')
@@ -378,7 +396,8 @@ def build_content_opf(surah_names: list[str]) -> str:
     )
 
 
-def build_toc_ncx(surah_names: list[str]) -> str:
+def build_toc_ncx(surah_names: list[str], groups: list[list[int]]) -> str:
+    file_of = {n: f"text/surah-{group[0]:03d}.html" for group in groups for n in group}
     nav_points = []
     for n, name in enumerate(surah_names, start=1):
         # surah_names carries the source's own "سورة <name>" title verbatim (see main()
@@ -388,7 +407,9 @@ def build_toc_ncx(surah_names: list[str]) -> str:
         # trap for RTL text. Show the bare name directly, e.g. "44 - الدخان" not
         # "44 - سورة الدخان".
         bare_name = name[len("سورة "):] if name.startswith("سورة ") else name
-        entries = [(f"{arabic_digits(str(n))} - {bare_name}", f"num_{n}", f"text/surah-{n:03d}.html")]
+        # A surah sharing a file is anchored on its banner.
+        src = file_of[n] if file_of[n].endswith(f"{n:03d}.html") else f"{file_of[n]}#toc_id_{n}"
+        entries = [(f"{arabic_digits(str(n))} - {bare_name}", f"num_{n}", src)]
         # Juz entries sit in reading order among the surahs. One starting at
         # ayah 1 goes AFTER its surah (anchored on the banner): the reader names
         # the current chapter after a file's FIRST TOC entry, which must stay
@@ -396,7 +417,7 @@ def build_toc_ncx(surah_names: list[str]) -> str:
         for juz, (juz_surah, juz_ayah) in enumerate(JUZ_STARTS, start=1):
             if juz_surah == n:
                 anchor = f"toc_id_{n}" if juz_ayah == 1 else f"juz_{juz}"
-                entries.append((f"الجزء {arabic_digits(str(juz))}", f"juz_{juz}", f"text/surah-{n:03d}.html#{anchor}"))
+                entries.append((f"الجزء {arabic_digits(str(juz))}", f"juz_{juz}", f"{file_of[n]}#{anchor}"))
         for label, nav_id, src in entries:
             nav_points.append(
                 f'    <navPoint id="{nav_id}" playOrder="{len(nav_points) + 1}" class="chapter">\n'
@@ -433,6 +454,8 @@ def main() -> int:
     (WORK / "META-INF").mkdir()
 
     surah_names: list[str] = []
+    bodies: list[str] = []
+    opens_page: list[bool] = []
     for n in range(1, SURAH_COUNT + 1):
         src = SOURCE_DIR / f"chapter-{n}.xhtml"
         if not src.exists():
@@ -456,20 +479,27 @@ def main() -> int:
             bismillah_text = ayah_text.split(AYAH_MARKER.format(arabic_digits("1")))[0].replace(PAGE_MARK, "").strip()
         bismillah = bismillah_text if "bismillah-table" in raw else ""
 
-        (WORK / "text" / f"surah-{n:03d}.html").write_text(
-            build_surah_html(n, name, ayah_text, ayah_count, bismillah), encoding="utf-8", newline="\n"
+        bodies.append(build_surah_body(n, ayah_text, ayah_count, bismillah))
+        opens_page.append(ayah_text.lstrip().startswith(PAGE_MARK))
+
+    groups = group_surahs(opens_page)
+    for group in groups:
+        (WORK / "text" / f"surah-{group[0]:03d}.html").write_text(
+            build_group_html(surah_names[group[0] - 1], "".join(bodies[n - 1] for n in group)),
+            encoding="utf-8",
+            newline="\n",
         )
 
     (WORK / "stylesheet.css").write_text(STYLESHEET_CSS, encoding="utf-8", newline="\n")
     (WORK / "titlepage.xhtml").write_text(TITLEPAGE_XHTML, encoding="utf-8", newline="\n")
-    (WORK / "content.opf").write_text(build_content_opf(surah_names), encoding="utf-8", newline="\n")
-    (WORK / "toc.ncx").write_text(build_toc_ncx(surah_names), encoding="utf-8", newline="\n")
+    (WORK / "content.opf").write_text(build_content_opf(groups), encoding="utf-8", newline="\n")
+    (WORK / "toc.ncx").write_text(build_toc_ncx(surah_names, groups), encoding="utf-8", newline="\n")
     (WORK / "META-INF" / "container.xml").write_text(CONTAINER_XML, encoding="utf-8", newline="\n")
     (WORK / "images" / "cover.png").write_bytes(COVER.read_bytes())
     (WORK / "mimetype").write_text("application/epub+zip", encoding="utf-8", newline="\n")
 
     names = ["mimetype", "META-INF/container.xml", "content.opf", "toc.ncx", "titlepage.xhtml", "stylesheet.css",
-             "images/cover.png"] + [f"text/surah-{n:03d}.html" for n in range(1, SURAH_COUNT + 1)]
+             "images/cover.png"] + [f"text/surah-{group[0]:03d}.html" for group in groups]
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     # EPUB spec: "mimetype" first and stored uncompressed. Fixed date_time for

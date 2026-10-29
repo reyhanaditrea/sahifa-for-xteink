@@ -318,9 +318,11 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
 
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page. Not on a printed
-  // Mushaf line: a juz opens mid-page, and breaking there strands the page's
-  // first half on a screen of its own.
-  if (!pendingMushafLine && std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
+  // Mushaf line, nor anywhere under the Mushaf layout: a juz or surah opens
+  // mid-page, and breaking there strands the page's first half on a screen of
+  // its own. The Mushaf's own .page breaks place it.
+  if (!pendingMushafLine && !mushafLayout &&
+      std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
     if (!breakPage()) return;
   }
 
@@ -2146,6 +2148,8 @@ bool ChapterHtmlSlimParser::finishParse() {
       pendingAnchorId.clear();
     }
     setCurrentPageVisibleOffset(visibleTextOffset);
+    // A Mushaf file ends where a printed page does, so its last page is as full.
+    if (fillCurrentPage) fillPage();
     completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
     completedPageCount++;
     currentPage.reset();

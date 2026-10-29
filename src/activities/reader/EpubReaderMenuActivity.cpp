@@ -649,11 +649,12 @@ void EpubReaderMenuActivity::openTocList(const bool juz) {
     const int current = epub->getTocIndexForSpineIndex(currentSpineIndex);
     for (int i = 0; i < epub->getTocItemsCount(); i++) {
       const auto item = epub->getTocItem(i);
-      if (juzList && item.anchor.empty()) {
+      const bool juzRow = item.title.rfind("\xd8\xa7\xd9\x84\xd8\xac\xd8\xb2\xd8\xa1", 0) == 0;  // "الجزء"
+      if (juzList && !juzRow) {
         const auto dash = item.title.find(" - ");  // "١ - الفاتحة"
         surahArabicNames.push_back(dash == std::string::npos ? item.title : item.title.substr(dash + 3));
       }
-      if (quran && item.anchor.empty() == juz) continue;
+      if (quran && juzRow != juz) continue;
       // Open on the current surah/chapter, or on the last juz starting in or before it.
       // ponytail: per surah, not per page -- a juz starting later in this surah is picked early.
       if (juz ? item.spineIndex >= 0 && item.spineIndex <= currentSpineIndex : i == current) {
