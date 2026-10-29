@@ -931,9 +931,10 @@ bool parseSurahBannerMarker(const char* text, uint32_t& nameGlyphCp, std::string
 // full-bleed header like the Mushaf's own, not a content-sized box (unlike the
 // medallion/cartouche/Bismillah markers above, which size to their own tight
 // content). This is the ONLY thing that must match between the measure and
-// render branches below (per this file's own "must match" convention) --
-// vertical layout (row height, label stacking) is render-only, since
-// getArabicTextWidth never needs it.
+// render branches below (per this file's own "must match" convention). The
+// row's height must match too: getSurahBannerHeight reserves it in layout.
+int surahBannerPad(const int calligraphyAscent) { return calligraphyAscent / 6; }
+
 int surahBannerWidth(const int screenWidth) {
   return screenWidth - GfxRenderer::VIEWABLE_MARGIN_LEFT - GfxRenderer::VIEWABLE_MARGIN_RIGHT;
 }
@@ -1243,6 +1244,21 @@ void GfxRenderer::drawTextInWidth(const int fontId, const int x, const int y, co
   }
 
   drawText(fontId, x, y, text, black, style);
+}
+
+int GfxRenderer::getSurahBannerHeight(const char* text, const EpdFontFamily::Style style) const {
+  uint32_t nameGlyphCp = 0;
+  std::string rightLabel, leftLabel;
+  if (!text || !parseSurahBannerMarker(text, nameGlyphCp, rightLabel, leftLabel)) return 0;
+  const auto bannerFontIt = fontMap.find(surahBannerFontId_);
+  if (bannerFontIt == fontMap.end()) return 0;
+  const EpdGlyph* nameGlyph = bannerFontIt->second.getGlyph(nameGlyphCp, style);
+  const EpdGlyph* ornamentGlyph = bannerFontIt->second.getGlyph(SURAH_BANNER_ORNAMENT_CP, style);
+  if (!nameGlyph || !ornamentGlyph) return 0;
+  // Same geometry as drawArabicText's surah-banner branch.
+  const int ascent = std::max(nameGlyph->top, ornamentGlyph->top);
+  const int descent = std::max({nameGlyph->height - nameGlyph->top, ornamentGlyph->height - ornamentGlyph->top, 0});
+  return ascent + descent + 2 * surahBannerPad(ascent) + 1;
 }
 
 void GfxRenderer::drawArabicText(const int fontId, const int x, const int y, const char* text, const bool black,
@@ -1564,9 +1580,13 @@ void GfxRenderer::drawArabicText(const int fontId, const int x, const int y, con
       const int calligraphyDescent =
           std::max({nameGlyph->height - nameGlyph->top, ornamentGlyph->height - ornamentGlyph->top, 0});
       const int labelAscender = getFontAscenderSize(surahBannerLabelFontId_);
-      const int pad = calligraphyAscent / 4;
-      const int top = yPos - calligraphyAscent - pad;
-      const int bottom = yPos + calligraphyDescent + pad;
+      const int pad = surahBannerPad(calligraphyAscent);
+      // The row hangs from its line's top (y), not the text baseline: the layout
+      // reserves exactly this height for it (getSurahBannerHeight), so the rules
+      // stay inside the banner's own line instead of reaching into the one above.
+      const int bannerBase = y + pad + calligraphyAscent;
+      const int top = bannerBase - calligraphyAscent - pad;
+      const int bottom = bannerBase + calligraphyDescent + pad;
       constexpr int kLineWidth = 1;
       drawLine(x, top, x + width, top, kLineWidth, true);
       drawLine(x, bottom, x + width, bottom, kLineWidth, true);
@@ -1574,8 +1594,8 @@ void GfxRenderer::drawArabicText(const int fontId, const int x, const int y, con
       // Label word's top aligns with the calligraphy's own top; digit's
       // bottom aligns with the calligraphy's own bottom (digits are assumed
       // to have ~zero descent, true for every built-in Arabic-Indic digit set).
-      const int wordY = (yPos - calligraphyAscent) + labelAscender;
-      const int digitY = yPos + calligraphyDescent;
+      const int wordY = (bannerBase - calligraphyAscent) + labelAscender;
+      const int digitY = bannerBase + calligraphyDescent;
       // Inset from the rule lines' own full-bleed edges so the labels don't sit
       // flush against the physical screen edge -- rough approximation of the
       // reading column's own margin (not directly available here; the real
@@ -1616,13 +1636,13 @@ void GfxRenderer::drawArabicText(const int fontId, const int x, const int y, con
       drawStackedLabel(leftLabel, /*flushRight=*/false);
 
       // Calligraphy pair: name glyph then the shared ornament, centered in the
-      // full row width, sharing the same baseline (yPos) as the labels.
+      // full row width, sharing the same baseline (bannerBase) as the labels.
       const int calligraphyWidth = fp4::toPixel(nameGlyph->advanceX) + fp4::toPixel(ornamentGlyph->advanceX);
       int cursorX = x + (width - calligraphyWidth) / 2;
-      renderCharImpl<TextRotation::None>(*this, renderMode, bannerFont, nameGlyphCp, cursorX, yPos, black, style);
+      renderCharImpl<TextRotation::None>(*this, renderMode, bannerFont, nameGlyphCp, cursorX, bannerBase, black, style);
       cursorX += fp4::toPixel(nameGlyph->advanceX);
-      renderCharImpl<TextRotation::None>(*this, renderMode, bannerFont, SURAH_BANNER_ORNAMENT_CP, cursorX, yPos, black,
-                                         style);
+      renderCharImpl<TextRotation::None>(*this, renderMode, bannerFont, SURAH_BANNER_ORNAMENT_CP, cursorX, bannerBase,
+                                         black, style);
       return;
     }
   }
