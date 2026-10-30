@@ -800,7 +800,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
 
   std::vector<size_t> lineBreakIndices;
   // A justified Mushaf line (text-align-last: justify; one block per printed line)
-  // stays one line if it fits with its word gaps squeezed to half a space: print
+  // stays one line if it fits with its word gaps squeezed to an eighth of a space: print
   // sets some lines tighter than this font's natural spacing, and wrapping one of
   // them leaves its last word alone on a line of its own.
   if (blockStyle.justifyLast && blockStyle.alignment == CssTextAlign::Justify) {
@@ -812,7 +812,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
                                                          wordStyles[j - 1])
                                    : renderer.getSpaceAdvance(fontId, lastCodepoint(words[j - 1]),
                                                               firstCodepoint(words[j]), wordStyles[j - 1]) /
-                                         2;
+                                         8;
     }
     if (squeezed <= pageWidth) lineBreakIndices.push_back(words.size());
   }

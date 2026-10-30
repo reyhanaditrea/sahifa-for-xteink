@@ -2184,7 +2184,9 @@ int ChapterHtmlSlimParser::computeLineHeight(const TextBlock& line) const {
     hasArabic = ScriptDetector::containsArabic(line.wordText(i));
   }
   const int arabicLineHeight = hasArabic ? renderer.getLineHeight(renderer.getResolvedArabicFontId(fontId)) : 0;
-  return effectiveLineHeight(latinLineHeight, arabicLineHeight, hasArabic, lineCompression);
+  const int height = effectiveLineHeight(latinLineHeight, arabicLineHeight, hasArabic, lineCompression);
+  // A surah banner draws a row taller than a text line; reserve all of it.
+  return line.wordCount() == 1 ? std::max(height, renderer.getSurahBannerHeight(line.wordText(0))) : height;
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleOffset) {
@@ -2297,7 +2299,9 @@ void ChapterHtmlSlimParser::makePages() {
   // Extra paragraph spacing if enabled (default behavior). Not after a block
   // that justifies its last line: that is one line of a set page (the Quran's
   // Mushaf lines), and a gap after each would push the page off the screen.
-  if (extraParagraphSpacing && !blockStyle.justifyLast) {
+  // Nor anywhere under the Mushaf layout, whose banner and Bismillah rows sit
+  // in the printed page's line grid too.
+  if (extraParagraphSpacing && !blockStyle.justifyLast && !mushafLayout) {
     currentPageNextY += lineHeight / 2;
   }
 }
