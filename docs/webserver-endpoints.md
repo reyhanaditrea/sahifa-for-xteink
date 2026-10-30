@@ -7,7 +7,7 @@ while the reader is in File Transfer mode.
 - WebSocket upload server: port 81
 - WebDAV: port 80, handled by the same HTTP server
 
-Examples use `crosspoint.local`. If mDNS does not resolve on your network, use
+Examples use `sahifah.local`. If mDNS does not resolve on your network, use
 the IP address shown on the device screen.
 
 ## HTTP Pages
@@ -25,7 +25,7 @@ the IP address shown on the device screen.
 ### `GET /api/status`
 
 ```bash
-curl http://crosspoint.local/api/status
+curl http://sahifah.local/api/status
 ```
 
 Response:
@@ -59,7 +59,7 @@ Response:
 Lists files and folders under a directory.
 
 ```bash
-curl "http://crosspoint.local/api/files?path=/Books"
+curl "http://sahifah.local/api/files?path=/Books"
 ```
 
 Query parameters:
@@ -85,7 +85,7 @@ enabled. `System Volume Information` and `XTCache` are always hidden/protected.
 Downloads a file from the SD card.
 
 ```bash
-curl -OJ "http://crosspoint.local/download?path=/Books/MyBook.epub"
+curl -OJ "http://sahifah.local/download?path=/Books/MyBook.epub"
 ```
 
 Query parameters:
@@ -103,7 +103,7 @@ downloaded. EPUB files are served as `application/epub+zip`; other files use
 Uploads a file with HTTP multipart form data.
 
 ```bash
-curl -X POST -F "file=@mybook.epub" "http://crosspoint.local/upload?path=/Books"
+curl -X POST -F "file=@mybook.epub" "http://sahifah.local/upload?path=/Books"
 ```
 
 Query parameters:
@@ -129,7 +129,7 @@ Notes:
 Creates a folder.
 
 ```bash
-curl -X POST -d "name=NewFolder&path=/" http://crosspoint.local/mkdir
+curl -X POST -d "name=NewFolder&path=/" http://sahifah.local/mkdir
 ```
 
 Form parameters:
@@ -144,7 +144,7 @@ Form parameters:
 Renames a file.
 
 ```bash
-curl -X POST -d "path=/Books/old.epub&name=new.epub" http://crosspoint.local/rename
+curl -X POST -d "path=/Books/old.epub&name=new.epub" http://sahifah.local/rename
 ```
 
 Form parameters:
@@ -162,7 +162,7 @@ cleared before the rename.
 Moves a file into an existing folder.
 
 ```bash
-curl -X POST -d "path=/Books/mybook.epub&dest=/Read" http://crosspoint.local/move
+curl -X POST -d "path=/Books/mybook.epub&dest=/Read" http://sahifah.local/move
 ```
 
 Form parameters:
@@ -180,8 +180,8 @@ cleared before the move.
 Deletes one or more files or empty folders.
 
 ```bash
-curl -X POST -d "path=/Books/mybook.epub" http://crosspoint.local/delete
-curl -X POST -d 'paths=["/Books/old.epub","/OldFolder"]' http://crosspoint.local/delete
+curl -X POST -d "path=/Books/mybook.epub" http://sahifah.local/delete
+curl -X POST -d 'paths=["/Books/old.epub","/OldFolder"]' http://sahifah.local/delete
 ```
 
 Form parameters:
@@ -202,7 +202,7 @@ Returns a streamed JSON array of editable settings. Each item contains common
 fields plus type-specific fields.
 
 ```bash
-curl http://crosspoint.local/api/settings
+curl http://sahifah.local/api/settings
 ```
 
 Example item:
@@ -243,7 +243,7 @@ Applies a partial settings update from a JSON object.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"fontSize":2,"showHiddenFiles":1}' \
-  http://crosspoint.local/api/settings
+  http://sahifah.local/api/settings
 ```
 
 Successful response:
@@ -259,7 +259,7 @@ Applied 2 setting(s)
 Lists installed SD-card font families.
 
 ```bash
-curl http://crosspoint.local/api/fonts
+curl http://sahifah.local/api/fonts
 ```
 
 Response:
@@ -287,7 +287,7 @@ Uploads one `.cpfont` file into a family folder.
 curl -X POST \
   -F "family=Literata" \
   -F "file=@Literata_12.cpfont" \
-  http://crosspoint.local/api/fonts/upload
+  http://sahifah.local/api/fonts/upload
 ```
 
 The handler validates the family name, `.cpfont` filename, and `CPFONT` magic
@@ -307,7 +307,7 @@ Deletes an installed font family.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"family":"Literata"}' \
-  http://crosspoint.local/api/fonts/delete
+  http://sahifah.local/api/fonts/delete
 ```
 
 Successful response:
@@ -323,7 +323,7 @@ Successful response:
 Lists saved Wi-Fi networks. Passwords are never returned.
 
 ```bash
-curl http://crosspoint.local/api/wifi
+curl http://sahifah.local/api/wifi
 ```
 
 Response:
@@ -349,7 +349,7 @@ preserved.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"ssid":"HomeWiFi","password":"secret"}' \
-  http://crosspoint.local/api/wifi
+  http://sahifah.local/api/wifi
 ```
 
 ### `POST /api/wifi/delete`
@@ -360,7 +360,7 @@ Deletes a saved Wi-Fi network by index.
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"index":0}' \
-  http://crosspoint.local/api/wifi/delete
+  http://sahifah.local/api/wifi/delete
 ```
 
 ## WebSocket Upload
@@ -372,7 +372,7 @@ The WebSocket path is used for fast binary uploads from the file manager.
 Connection:
 
 ```text
-ws://crosspoint.local:81/
+ws://sahifah.local:81/
 ```
 
 Protocol:
@@ -430,12 +430,12 @@ Notes:
 ### Station Mode (STA)
 
 - Device joins an existing 2.4 GHz Wi-Fi network.
-- `crosspoint.local` is advertised with mDNS when available.
+- `sahifah.local` is advertised with mDNS when available.
 - `/api/status` returns `"mode": "STA"` and RSSI in dBm.
 
 ### Access Point Mode (AP)
 
-- Device creates an open hotspot named `CrossPoint-Reader`.
+- Device creates an open hotspot named `Sahifah-Reader`.
 - The device shows a Wi-Fi QR code and URL QR code.
 - The fallback IP is typically `192.168.4.1`.
 - `/api/status` returns `"mode": "AP"` and `"rssi": 0`.
